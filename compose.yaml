@@ -8,19 +8,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      example:
-        condition: service_healthy
   redis:
     image: redis:7.4-alpine
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 15
-  example:
-    build: ./example
-    healthcheck:
-      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 1).close()"]
       interval: 2s
       timeout: 2s
       retries: 15

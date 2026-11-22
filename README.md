@@ -6,17 +6,11 @@ The [initial capability epic](https://github.com/chrisbennight/tyk-plus-plugins/
 
 ## Run locally
 
-The bootstrap runs Tyk, Redis, and a sample MCP server with one `echo` tool. The gateway listens on loopback and accepts local calls without authentication. Cedar authorization, drift review, and Code Mode are tracked in the epic.
-
-With Docker Compose and Python 3 installed, run these commands in the same shell.
+The bootstrap runs Tyk Gateway and Redis. It listens on `127.0.0.1:8080`. MCP upstreams and governance plug-ins will be added as the epic progresses.
 
 ```sh
 export TYK_GW_SECRET="$(openssl rand -hex 32)"
 docker compose up --build -d
-python3 scripts/smoke.py
-docker compose down -v
 ```
 
-Connect a Streamable HTTP MCP client to `http://127.0.0.1:8080/mcp/` while the stack is running. The proxy definitions live in [gateway/apps](gateway/apps).
-
-Tyk loads the classic definition and its `-mcp.json` companion together. The smoke test also checks that Tyk rejects a call outside the companion file’s tool allowlist. See [Tyk’s file-based MCP example](https://github.com/TykTechnologies/tyk/tree/v5.16.0/ci/tests/metrics/apps).
+Stop the stack with `docker compose down`.

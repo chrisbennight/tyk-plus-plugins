@@ -8,9 +8,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Exercise the MCP gateway
+      - name: Start the gateway
         run: |
           export TYK_GW_SECRET="$(openssl rand -hex 32)"
           trap 'docker compose down -v' EXIT
           docker compose up --build -d
-          python3 scripts/smoke.py
+          docker compose exec -T redis wget -q -O - --tries=15 http://gateway:9696/hello

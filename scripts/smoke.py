@@ -35,7 +35,7 @@ while True:
             "clientInfo": {"name": "bootstrap-smoke", "version": "1"},
         }, 1)
         break
-    except URLError:
+    except (URLError, ConnectionResetError, TimeoutError):
         if time.monotonic() >= deadline:
             raise
         time.sleep(1)

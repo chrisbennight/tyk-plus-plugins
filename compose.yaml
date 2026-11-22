@@ -1,0 +1,17 @@
+services:
+  gateway:
+    build: ./gateway
+    environment:
+      TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+  redis:
+    image: redis:7.4-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15

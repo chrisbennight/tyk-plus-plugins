@@ -34,7 +34,7 @@ type snapshot struct {
 	tools    map[string]map[string]tool
 }
 
-func compile(rules, inventory []byte, version string) (*snapshot, error) {
+func compile(rules, inventory, checks []byte, version string) (*snapshot, error) {
 	var schemaDoc schema.Schema
 	if err := schemaDoc.UnmarshalCedar(inputSchema); err != nil {
 		return nil, err
@@ -64,7 +64,13 @@ func compile(rules, inventory []byte, version string) (*snapshot, error) {
 	if err := json.Unmarshal(inventory, &s.tools); err != nil {
 		return nil, err
 	}
-	for _, tools := range s.tools {
+	if s.tools == nil {
+		return nil, fmt.Errorf("tool inventory must be an object")
+	}
+	for proxy, tools := range s.tools {
+		if proxy == "" || tools == nil {
+			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
+		}
 		for name, t := range tools {
 			if name == "" || t.ReadOnly == nil {
 				return nil, fmt.Errorf("tool %q needs a reviewed readOnly classification", name)
@@ -76,6 +82,34 @@ func compile(rules, inventory []byte, version string) (*snapshot, error) {
 					return nil, fmt.Errorf("unsupported argument type %q", kind)
 				}
 			}
+		}
+	}
+	var cases []struct {
+		Caller    caller          `json:"caller"`
+		Proxy     string          `json:"proxy"`
+		Upstream  string          `json:"upstream"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+		Expect    string          `json:"expect"`
+	}
+	if err := json.Unmarshal(checks, &cases); err != nil {
+		return nil, err
+	}
+	if len(cases) == 0 {
+		return nil, fmt.Errorf("at least one activation check is required")
+	}
+	for i, c := range cases {
+		if c.Caller.Issuer == "" || c.Caller.Subject == "" || c.Proxy == "" || c.Tool == "" || c.Upstream == "" {
+			return nil, fmt.Errorf("incomplete activation check %d", i)
+		}
+		switch c.Expect {
+		case "permitted", "policy_denied", "unknown_tool":
+		default:
+			return nil, fmt.Errorf("invalid expected outcome in activation check %d", i)
+		}
+		reason, _ := s.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
+		if reason != c.Expect {
+			return nil, fmt.Errorf("activation check %d expected %s, got %s", i, c.Expect, reason)
 		}
 	}
 	return s, nil
@@ -95,12 +129,13 @@ func current() *snapshot {
 	dir := "/opt/tyk-gateway/cedar"
 	rules, e1 := os.ReadFile(filepath.Join(dir, "rules.cedar"))
 	tools, e2 := os.ReadFile(filepath.Join(dir, "tools.json"))
-	if e1 != nil || e2 != nil {
+	checks, e3 := os.ReadFile(filepath.Join(dir, "checks.json"))
+	if e1 != nil || e2 != nil || e3 != nil {
 		return active.snapshot
 	}
-	version := fmt.Sprintf("%x.%x", sha256.Sum256(rules), sha256.Sum256(tools))
+	version := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%x%x%x", sha256.Sum256(rules), sha256.Sum256(tools), sha256.Sum256(checks)))))
 	if version != active.version {
-		next, err := compile(rules, tools, version)
+		next, err := compile(rules, tools, checks, version)
 		if err == nil {
 			active.snapshot = next
 		} else {

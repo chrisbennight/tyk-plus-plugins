@@ -1,0 +1,9 @@
+[
+  {
+    "caller": {"issuer": "local", "subject": "support", "roles": ["support"]},
+    "proxy": "governed",
+    "upstream": "http://upstream.invalid/mcp",
+    "tool": "unreviewed",
+    "expect": "unknown_tool"
+  }
+]

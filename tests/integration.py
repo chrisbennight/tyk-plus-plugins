@@ -87,7 +87,15 @@ inventory = {"lookup": {"readOnly": True}, "change": {"readOnly": False, "argume
 replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
 replace(rules, "invalid")
 call(operator, "change", {}, False)
+checks = [{"caller": {"issuer": "integration", "subject": "support", "roles": ["support"]},
+           "proxy": "governed", "upstream": "http://probe:8000/mcp", "tool": "lookup", "expect": "permitted"}]
+replace(Path("/policy/checks.json"), json.dumps(checks))
 replace(rules, initial)
+call(support, "lookup", {}, True)
+replace(rules, "forbid(principal, action, resource);")
+call(support, "lookup", {}, True)
+replace(rules, initial)
+replace(Path("/policy/tools.json"), "null")
 call(support, "lookup", {}, True)
 for hint in ({}, {"readOnlyHint": True}):
     inventory["change"]["upstreamAnnotations"] = hint
@@ -104,6 +112,16 @@ permit (principal, action, resource) when {
 };
 """)
 call(support, "change", {}, False)
+
+replace(rules, initial + """
+forbid (principal, action, resource) when {
+  resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint
+};
+""")
+call(operator, "change", {}, False)
+inventory["change"]["upstreamAnnotations"] = {}
+replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+call(operator, "change", {}, True)
 
 restriction = """
 @id("restricted-count")

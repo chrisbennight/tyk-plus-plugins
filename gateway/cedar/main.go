@@ -7,7 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/cedar-policy/cedar-go"
@@ -111,9 +111,9 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 		attrs["upstreamAnnotations"] = cedar.NewRecord(nil)
 		entities[resource] = cedar.Entity{UID: resource, Attributes: cedar.NewRecord(attrs)}
 		baseline, baselineIDs := s.evaluate(entities, req)
-		if baseline != "permitted" {
-			return baseline, baselineIDs
-		}
+		ids = append(ids, baselineIDs...)
+		slices.Sort(ids)
+		return baseline, slices.Compact(ids)
 	}
 	return outcome, ids
 }
@@ -134,7 +134,7 @@ func (s *snapshot) evaluate(entities cedar.EntityMap, req cedar.Request) (string
 			ids = append(ids, string(failure.PolicyID))
 		}
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	return outcome, ids
 }
 

@@ -13,4 +13,10 @@ jobs:
           export TYK_GW_SECRET="$(openssl rand -hex 32)"
           trap 'docker compose down -v' EXIT
           docker compose up --build -d
-          docker compose exec -T redis wget -q -O - --tries=15 http://gateway:9696/hello
+          for attempt in {1..30}; do
+            if docker compose exec -T redis wget -q -T 2 -O - http://gateway:9696/hello; then
+              exit 0
+            fi
+            sleep 1
+          done
+          exit 1

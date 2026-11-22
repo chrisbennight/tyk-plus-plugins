@@ -103,12 +103,18 @@ for hint in ({}, {"readOnlyHint": True}):
     assert call(support, "new-tool", {"count": "wrong"}, False) == hidden
 call(operator, "change", {"count": 2}, True)
 call(operator, "new-tool", {}, False)
+replace(Path("/policy/tools.json"), '{"governed":{"change":{"readOnly":false,"readOnly":true}}}')
+call(support, "change", {}, False)
+call(support, "lookup", {}, True)
+replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
 
 replace(rules, initial + """
 permit (principal, action, resource) when {
-  resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint
+  context.numbers.contains({name: "count", value: 5}) ||
+  (resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint)
 };
 """)
+call(support, "change", {"count": 5}, True)
 call(support, "change", {}, False)
 
 replace(rules, initial + """

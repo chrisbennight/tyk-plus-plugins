@@ -14,6 +14,7 @@ import (
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
 	"github.com/cedar-policy/cedar-go/x/exp/schema"
 	"github.com/cedar-policy/cedar-go/x/exp/schema/validate"
+	jsonv2 "github.com/go-json-experiment/json"
 )
 
 //go:embed schema.cedarschema
@@ -64,7 +65,7 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 			return nil, fmt.Errorf("duplicate policy ID %s", id)
 		}
 	}
-	if err := json.Unmarshal(inventory, &s.tools); err != nil {
+	if err := jsonv2.Unmarshal(inventory, &s.tools); err != nil {
 		return nil, err
 	}
 	if s.tools == nil {
@@ -99,7 +100,7 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 		ReviewedReadOnly *bool           `json:"reviewedReadOnly"`
 		Expect           string          `json:"expect"`
 	}
-	if err := json.Unmarshal(checks, &cases); err != nil {
+	if err := jsonv2.Unmarshal(checks, &cases); err != nil {
 		return nil, err
 	}
 	if len(cases) == 0 {
@@ -116,6 +117,9 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 		}
 		candidate := s
 		if c.ReviewedReadOnly != nil {
+			if len(c.Arguments) != 0 {
+				return nil, fmt.Errorf("argument check %d requires a real inventory entry", i)
+			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
 			candidate = &snapshot{policies: s.policies, tools: map[string]map[string]tool{
 				c.Proxy: {c.Tool: {ReadOnly: c.ReviewedReadOnly}},

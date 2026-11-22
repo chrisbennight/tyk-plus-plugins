@@ -1,12 +1,13 @@
 """Exercise the local Compose gateway as a stateless Streamable HTTP client."""
 
 import json
-import os
+import subprocess
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-url = f"http://127.0.0.1:{int(os.environ.get('GATEWAY_PORT', 8080))}/mcp/"
+published = subprocess.check_output(["docker", "compose", "port", "gateway", "8080"], text=True).strip()
+url = f"http://{published}/mcp/"
 protocol = "2025-11-25"
 
 
@@ -46,4 +47,10 @@ tools = send("tools/list", {}, 2)["tools"]
 assert any(tool["name"] == "echo" for tool in tools), tools
 result = send("tools/call", {"name": "echo", "arguments": {"message": "bootstrap-ok"}}, 3)
 assert not result.get("isError") and {"type": "text", "text": "bootstrap-ok"} in result["content"], result
-print("Passed MCP initialization, tool discovery, and echo through Tyk.")
+try:
+    send("tools/call", {"name": "unlisted", "arguments": {}}, 4)
+except HTTPError as error:
+    assert error.code == 403 and json.load(error)["error"]["code"] == -32002
+else:
+    raise AssertionError("Tyk allowed an unlisted tool")
+print("Passed MCP initialization, discovery, echo, and gateway denial of an unlisted tool.")

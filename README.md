@@ -18,3 +18,5 @@ docker compose down -v
 ```
 
 Connect a Streamable HTTP MCP client to `http://127.0.0.1:8080/mcp/` while the stack is running. The proxy definitions live in [gateway/apps](gateway/apps).
+
+Tyk loads the classic definition and its `-mcp.json` companion together. The smoke test also checks that Tyk rejects a call outside the companion file’s tool allowlist. See [Tyk’s file-based MCP example](https://github.com/TykTechnologies/tyk/tree/v5.16.0/ci/tests/metrics/apps).

@@ -14,8 +14,9 @@ received = []
 
 class Upstream(BaseHTTPRequestHandler):
     def do_POST(self):
+        received.append(None)
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        received.append((body["params"], self.headers.get("Authorization")))
+        received[-1] = (body["params"], self.headers.get("Authorization"))
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -87,9 +88,6 @@ inventory = {"lookup": {"readOnly": True}, "change": {"readOnly": False, "argume
 replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
 replace(rules, "invalid")
 call(operator, "change", {}, False)
-checks = [{"caller": {"issuer": "integration", "subject": "support", "roles": ["support"]},
-           "proxy": "governed", "upstream": "http://probe:8000/mcp", "tool": "lookup", "expect": "permitted"}]
-replace(Path("/policy/checks.json"), json.dumps(checks))
 replace(rules, initial)
 call(support, "lookup", {}, True)
 replace(rules, "forbid(principal, action, resource);")
@@ -98,7 +96,7 @@ replace(rules, initial)
 replace(Path("/policy/tools.json"), "null")
 call(support, "lookup", {}, True)
 for hint in ({}, {"readOnlyHint": True}):
-    inventory["change"]["upstreamAnnotations"] = hint
+    inventory["change"]["definition"] = {"name": "change", "annotations": hint}
     replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
     hidden = call(support, "change", {}, False)
     assert call(support, "change", {"count": "wrong"}, False) == hidden
@@ -119,7 +117,7 @@ forbid (principal, action, resource) when {
 };
 """)
 call(operator, "change", {}, False)
-inventory["change"]["upstreamAnnotations"] = {}
+inventory["change"]["definition"]["annotations"] = {}
 replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
 call(operator, "change", {}, True)
 

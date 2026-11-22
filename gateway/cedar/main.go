@@ -84,8 +84,8 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 	principal := cedar.NewEntityUID("Caller", cedar.String(principalID))
 	resource := cedar.NewEntityUID("Tool", cedar.String(toolID))
 	annotations := cedar.RecordMap{}
-	if t.Upstream.ReadOnlyHint != nil {
-		annotations["readOnlyHint"] = cedar.Boolean(*t.Upstream.ReadOnlyHint)
+	if t.Definition != nil && t.Definition.Annotations.ReadOnlyHint != nil {
+		annotations["readOnlyHint"] = cedar.Boolean(*t.Definition.Annotations.ReadOnlyHint)
 	}
 	callerFacts := cedar.RecordMap{
 		"issuer": cedar.String(who.Issuer), "subject": cedar.String(who.Subject),
@@ -104,13 +104,16 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 	}
 	req := cedar.Request{Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"), Resource: resource, Context: facts}
 	outcome, ids := s.evaluate(entities, req)
-	if outcome == "permitted" && t.Upstream.ReadOnlyHint != nil {
+	if outcome == "permitted" && t.Definition != nil && t.Definition.Annotations.ReadOnlyHint != nil {
 		// An upstream hint may narrow access. Permission must be justified
 		// by trusted facts even if the upstream supplies no annotations.
 		attrs := entities[resource].Attributes.Map()
 		attrs["upstreamAnnotations"] = cedar.NewRecord(nil)
 		entities[resource] = cedar.Entity{UID: resource, Attributes: cedar.NewRecord(attrs)}
 		baseline, baselineIDs := s.evaluate(entities, req)
+		if baseline != "permitted" {
+			return baseline, baselineIDs
+		}
 		ids = append(ids, baselineIDs...)
 		slices.Sort(ids)
 		return baseline, slices.Compact(ids)
@@ -130,6 +133,9 @@ func (s *snapshot) evaluate(entities cedar.EntityMap, req cedar.Request) (string
 	}
 	for _, failure := range diag.Errors {
 		if s.policies.Get(failure.PolicyID).Effect() == cedar.Forbid {
+			if outcome == "permitted" {
+				ids = nil
+			}
 			outcome = "forbid_error"
 			ids = append(ids, string(failure.PolicyID))
 		}
@@ -162,9 +168,11 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			Arguments json.RawMessage `json:"arguments"`
 		} `json:"params"`
 	}
-	body, readErr := io.ReadAll(r.Body)
+	// Match the MCP ingress limit in the pinned Tyk gateway.
+	const maxBody = 1 << 20
+	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	parseErr := jsonv2.Unmarshal(body, &call)
+	validBody := readErr == nil && len(body) <= maxBody && jsonv2.Unmarshal(body, &call) == nil
 	var rules []string
 	version, reason := "", "unavailable"
 	if state != nil {
@@ -172,7 +180,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if state != nil && oas != nil && oas.GetTykExtension() != nil && who.Issuer != "" && who.Subject != "" {
 		reason = "invalid_call"
-		if readErr == nil && parseErr == nil && call.Method == "tools/call" && call.Params.Name == name {
+		if validBody && call.Method == "tools/call" && call.Params.Name == name {
 			reason, rules = state.decide(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
 		}
 	}

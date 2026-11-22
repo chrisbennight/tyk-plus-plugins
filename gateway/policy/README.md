@@ -15,15 +15,15 @@ Add reviewed tools to [tools.json](tools.json), keyed by proxy ID and exact upst
   "governed": {
     "lookup": {"readOnly": true, "risk": "low"},
     "update": {"readOnly": false, "arguments": {"count": "long"},
-               "upstreamAnnotations": {"readOnlyHint": true}}
+               "definition": {"name": "update", "annotations": {"readOnlyHint": true}}}
   }
 }
 ```
 
-The operator sets `readOnly` and `risk`. Copy an upstream’s declared `readOnlyHint` into `upstreamAnnotations` when that fact matters to a rule. It can restrict an otherwise permitted call. The supplied [rules](rules.cedar) permit support to invoke reviewed read-only tools and operators to invoke reviewed tools.
+The operator sets `readOnly` and `risk`. For rules that use upstream annotations, copy the upstream’s tool object from `tools/list` into `definition` at onboarding and replace it when reviewing a change. Cedar receives its declared `readOnlyHint` in `resource.upstreamAnnotations`. It can restrict an otherwise permitted call. The supplied [rules](rules.cedar) permit support to invoke reviewed read-only tools and operators to invoke reviewed tools.
 
 Cedar sees the caller as `principal`, the tool as `resource`, and the MCP method as `action`. For selected top-level arguments, use `context.strings`, `context.numbers`, and `context.flags` for `string`, `long`, and `boolean` values. For example, `context.numbers.contains({name: "count", value: 2})` matches a submitted integer. See the [policy schema](../cedar/schema.cedarschema).
 
-[Activation checks](checks.json) specify the caller, proxy, upstream URL, tool, optional arguments, and expected decision for a candidate configuration. Use `permitted`, `policy_denied`, or `unknown_tool`. The empty inventory ships with an expected denial. Add representative permit and deny cases for your reviewed tools. Each check evaluates locally before activation.
+[Activation checks](checks.json) specify the caller, proxy, upstream URL, tool, optional arguments, and expected decision for a candidate configuration. Use `permitted` or `policy_denied`. The shipped checks use hypothetical tool classifications to exercise both outcomes while the inventory is empty. Omit `reviewedReadOnly` to check a real inventory entry. Add representative permit and deny cases for your reviewed tools. Each check evaluates locally before activation.
 
 CI builds the gateway and checks policy behavior through the MCP endpoint. To deploy a tested change, rebuild the image or mount your policy directory at `/opt/tyk-gateway/cedar` and replace a file by atomic rename. Use an image rollout for coordinated changes to multiple files. The next tool call validates changed configuration. A rejected change preserves the running process’s last valid configuration. With no valid configuration, tool calls are denied. Gateway logs record the decision, caller, tool, policy version, and determining rule IDs.

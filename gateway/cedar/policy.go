@@ -20,11 +20,14 @@ import (
 var inputSchema []byte
 
 type tool struct {
-	ReadOnly *bool  `json:"readOnly"`
-	Risk     string `json:"risk"`
-	Upstream struct {
-		ReadOnlyHint *bool `json:"readOnlyHint"`
-	} `json:"upstreamAnnotations"`
+	ReadOnly   *bool  `json:"readOnly"`
+	Risk       string `json:"risk"`
+	Definition *struct {
+		Name        string `json:"name"`
+		Annotations struct {
+			ReadOnlyHint *bool `json:"readOnlyHint"`
+		} `json:"annotations"`
+	} `json:"definition"`
 	Arguments map[string]string `json:"arguments"`
 }
 
@@ -75,6 +78,9 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 			if name == "" || t.ReadOnly == nil {
 				return nil, fmt.Errorf("tool %q needs a reviewed readOnly classification", name)
 			}
+			if t.Definition != nil && t.Definition.Name != name {
+				return nil, fmt.Errorf("upstream definition name differs from reviewed tool %q", name)
+			}
 			for _, kind := range t.Arguments {
 				switch kind {
 				case "string", "long", "boolean":
@@ -85,12 +91,13 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 		}
 	}
 	var cases []struct {
-		Caller    caller          `json:"caller"`
-		Proxy     string          `json:"proxy"`
-		Upstream  string          `json:"upstream"`
-		Tool      string          `json:"tool"`
-		Arguments json.RawMessage `json:"arguments"`
-		Expect    string          `json:"expect"`
+		Caller           caller          `json:"caller"`
+		Proxy            string          `json:"proxy"`
+		Upstream         string          `json:"upstream"`
+		Tool             string          `json:"tool"`
+		Arguments        json.RawMessage `json:"arguments"`
+		ReviewedReadOnly *bool           `json:"reviewedReadOnly"`
+		Expect           string          `json:"expect"`
 	}
 	if err := json.Unmarshal(checks, &cases); err != nil {
 		return nil, err
@@ -103,11 +110,18 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 			return nil, fmt.Errorf("incomplete activation check %d", i)
 		}
 		switch c.Expect {
-		case "permitted", "policy_denied", "unknown_tool":
+		case "permitted", "policy_denied":
 		default:
 			return nil, fmt.Errorf("invalid expected outcome in activation check %d", i)
 		}
-		reason, _ := s.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
+		candidate := s
+		if c.ReviewedReadOnly != nil {
+			// A hypothetical reviewed tool exercises the policies without publishing a tool.
+			candidate = &snapshot{policies: s.policies, tools: map[string]map[string]tool{
+				c.Proxy: {c.Tool: {ReadOnly: c.ReviewedReadOnly}},
+			}}
+		}
+		reason, _ := candidate.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
 		if reason != c.Expect {
 			return nil, fmt.Errorf("activation check %d expected %s, got %s", i, c.Expect, reason)
 		}

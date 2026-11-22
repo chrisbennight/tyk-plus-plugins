@@ -1,0 +1,13 @@
+{
+  "openapi": "3.0.3",
+  "info": {"title": "Governed MCP", "version": "1.0"},
+  "paths": {},
+  "components": {"securitySchemes": {"key": {"type": "apiKey", "in": "header", "name": "Authorization"}}},
+  "security": [{"key": []}],
+  "x-tyk-api-gateway": {
+    "info": {"id": "governed", "orgId": "default", "name": "Governed MCP", "state": {"active": true}},
+    "server": {"listenPath": {"value": "/mcp/", "strip": true}, "authentication": {"enabled": true, "stripAuthorizationData": true, "securitySchemes": {"key": {"enabled": true}}}},
+    "upstream": {"url": "env://MCP_UPSTREAM_URL"},
+    "middleware": {"global": {"pluginConfig": {"driver": "goplugin"}, "postAuthenticationPlugins": [{"enabled": true, "functionName": "Authorize", "path": "/opt/tyk-gateway/middleware/cedar.so"}]}}
+  }
+}

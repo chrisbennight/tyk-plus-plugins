@@ -111,3 +111,19 @@ The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that de
 Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.
 
 Gateway logs record each decision with the caller, tool, reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.
+
+## Measuring performance
+
+`cedar-policy bench` measures how long a policy set takes to compile, which the gateway does on every change, and how long it takes to decide one tool call. Run it on demand. It does not start a gateway or change the store.
+
+```sh
+cedar-policy bench -synthetic
+cedar-policy bench -synthetic -rules 5000 -tools 100 -seed 7 -format json
+cedar-policy bench -store /path/to/store
+```
+
+`-synthetic` generates a deployment from `-seed`, so the same seed and sizes give the same set and request mix. Proxies carry reviewed tools with a mix of facts, tags, argument types, and upstream annotations. Callers hold skewed sets of roles, groups, and scopes. Rules are drawn from varied shapes: role and group grants, grants for one tool, fact, tag, and argument matches, grants to one subject, exceptions, and forbids. `-proxies`, `-tools`, `-rules`, `-callers`, and `-requests` set the sizes.
+
+`-store` measures the store's active set. Its requests use the set's reviewed tools. Generated callers and argument values favor the string and integer values the set's rules mention, so requests can match the rules.
+
+In both modes, popular callers and tools are requested more often, and requests are chosen so that the share set by `-permit-ratio` is permitted when the set allows it. The report gives the median, 99th percentile, and maximum time for compiling and for each decision, the count of each outcome, the memory the compiled set holds, the memory each decision allocates, and the process's peak resident memory, along with the seed, the set's fingerprint, and the Go and cedar-go versions. A synthetic set's fingerprint changes whenever its content does, so compare results that share one. `-format json` prints the same report as JSON for tracking over time. Timings depend on the machine, so compare results from the same machine. CI runs the synthetic benchmark and prints the results; it does not yet fail on any threshold.

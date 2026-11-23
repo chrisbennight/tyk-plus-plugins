@@ -30,6 +30,16 @@ func stringsSet(items []string) cedar.Set {
 	return cedar.NewSet(values...)
 }
 
+type scalarFacts map[string][]cedar.Value
+
+func (f scalarFacts) add(kind, name string, value cedar.Value) {
+	f[kind] = append(f[kind], cedar.NewRecord(cedar.RecordMap{"name": cedar.String(name), "value": value}))
+}
+
+func (f scalarFacts) fields() cedar.RecordMap {
+	return cedar.RecordMap{"strings": cedar.NewSet(f["string"]...), "numbers": cedar.NewSet(f["long"]...), "flags": cedar.NewSet(f["boolean"]...)}
+}
+
 func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Record, error) {
 	var args map[string]json.RawMessage
 	if len(raw) > 0 {
@@ -37,7 +47,7 @@ func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Recor
 			return cedar.Record{}, err
 		}
 	}
-	sets := map[string][]cedar.Value{}
+	sets := scalarFacts{}
 	for name, kind := range selected {
 		data, exists := args[name]
 		if !exists {
@@ -64,9 +74,9 @@ func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Recor
 			}
 			v = cedar.Long(*n)
 		}
-		sets[kind] = append(sets[kind], cedar.NewRecord(cedar.RecordMap{"name": cedar.String(name), "value": v}))
+		sets.add(kind, name, v)
 	}
-	return cedar.NewRecord(cedar.RecordMap{"strings": cedar.NewSet(sets["string"]...), "numbers": cedar.NewSet(sets["long"]...), "flags": cedar.NewSet(sets["boolean"]...)}), nil
+	return cedar.NewRecord(sets.fields()), nil
 }
 
 func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.RawMessage) (string, []string) {
@@ -87,9 +97,9 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 	toolID, _ := json.Marshal([2]string{proxy, name})
 	principal := cedar.NewEntityUID("Caller", cedar.String(principalID))
 	resource := cedar.NewEntityUID("Tool", cedar.String(toolID))
-	annotations := cedar.RecordMap{}
-	if t.Definition != nil && t.Definition.Annotations.ReadOnlyHint != nil {
-		annotations["readOnlyHint"] = cedar.Boolean(*t.Definition.Annotations.ReadOnlyHint)
+	annotations := scalarFacts(nil).fields()
+	if t.Definition != nil {
+		annotations = t.Definition.facts
 	}
 	callerFacts := cedar.RecordMap{
 		"issuer": cedar.String(who.Issuer), "subject": cedar.String(who.Subject),
@@ -108,11 +118,11 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 	}
 	req := cedar.Request{Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"), Resource: resource, Context: facts}
 	outcome, ids := s.evaluate(entities, req)
-	if outcome == "permitted" && t.Definition != nil && t.Definition.Annotations.ReadOnlyHint != nil {
+	if outcome == "permitted" && t.Definition != nil && len(t.Definition.Annotations) > 0 {
 		// An upstream hint may narrow access. Permission must be justified
 		// by trusted facts even if the upstream supplies no annotations.
 		attrs := entities[resource].Attributes.Map()
-		attrs["upstreamAnnotations"] = cedar.NewRecord(nil)
+		attrs["upstreamAnnotations"] = cedar.NewRecord(scalarFacts(nil).fields())
 		entities[resource] = cedar.Entity{UID: resource, Attributes: cedar.NewRecord(attrs)}
 		baseline, baselineIDs := s.evaluate(entities, req)
 		if baseline != "permitted" {

@@ -8,6 +8,6 @@
     "info": {"id": "governed", "orgId": "default", "name": "Governed MCP", "state": {"active": true}},
     "server": {"listenPath": {"value": "/mcp/", "strip": true}, "authentication": {"enabled": true, "stripAuthorizationData": true, "securitySchemes": {"key": {"enabled": true}}}},
     "upstream": {"url": "env://MCP_UPSTREAM_URL"},
-    "middleware": {"global": {"pluginConfig": {"driver": "goplugin"}, "postAuthenticationPlugins": [{"enabled": true, "functionName": "Authorize", "path": "/opt/tyk-gateway/middleware/cedar.so"}]}}
+    "middleware": {"global": {"pluginConfig": {"driver": "goplugin"}, "postAuthenticationPlugins": [{"enabled": true, "functionName": "Authorize", "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"}]}}
   }
 }

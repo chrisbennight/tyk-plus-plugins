@@ -6,7 +6,7 @@ The [initial capability epic](https://github.com/chrisbennight/tyk-plus-plugins/
 
 ## Run locally
 
-Tyk and Redis run under Docker Compose. Set `MCP_UPSTREAM_URL` to your upstream’s MCP endpoint and configure the [Cedar authorization policy](gateway/policy/README.md). Connect MCP clients to `http://127.0.0.1:8080/mcp/` with their Tyk key.
+Tyk and Redis run under Docker Compose. The [MCP policy decision point plug-in](plugins/mcp-pdp/) evaluates tool calls using Cedar. Set `MCP_UPSTREAM_URL` to your upstream’s MCP endpoint and configure the [Cedar authorization policy](gateway/policy/README.md). Connect MCP clients to `http://127.0.0.1:8080/mcp/` with their Tyk key.
 
 ```sh
 export TYK_GW_SECRET="$(openssl rand -hex 32)"

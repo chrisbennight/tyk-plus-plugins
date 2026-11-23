@@ -22,15 +22,45 @@ var inputSchema []byte
 
 // The native upstream definition may include MCP fields outside the Cedar schema.
 type toolDefinition struct {
-	Name        string `json:"name"`
-	Annotations struct {
-		ReadOnlyHint *bool `json:"readOnlyHint"`
-	} `json:"annotations"`
+	Name        string                     `json:"name"`
+	Annotations map[string]json.RawMessage `json:"annotations"`
+	facts       cedar.RecordMap
 }
 
 func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	type wire toolDefinition
-	return jsonv2.Unmarshal(data, (*wire)(d))
+	if err := jsonv2.Unmarshal(data, (*wire)(d)); err != nil {
+		return err
+	}
+	values := scalarFacts{}
+	for name, raw := range d.Annotations {
+		switch raw[0] {
+		case '"':
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			values.add("string", name, cedar.String(value))
+		case 't', 'f':
+			values.add("boolean", name, cedar.Boolean(raw[0] == 't'))
+		default:
+			var value int64
+			if raw[0] != 'n' && json.Unmarshal(raw, &value) == nil {
+				values.add("long", name, cedar.Long(value))
+			}
+		}
+	}
+	d.facts = values.fields()
+	if raw, ok := d.Annotations["readOnlyHint"]; ok {
+		var hint *bool
+		if err := json.Unmarshal(raw, &hint); err != nil {
+			return err
+		}
+		if hint != nil {
+			d.facts["readOnlyHint"] = cedar.Boolean(*hint)
+		}
+	}
+	return nil
 }
 
 type tool struct {

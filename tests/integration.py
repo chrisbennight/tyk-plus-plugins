@@ -99,7 +99,7 @@ permit (principal, action, resource) when {
   (resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint)
 };
 forbid (principal, action, resource) when {
-  resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint &&
+  resource.upstreamAnnotations.flags.contains({name: "vendor.batchSafe", value: false}) &&
   context.numbers.contains({name: "count", value: 2})
 };
 """
@@ -114,6 +114,8 @@ inventory["change"] = {"readOnly": False, "arguments": {"count": "long"}}
 publish_inventory(inventory)
 call(operator, "change", {"count": 2}, "updated")
 denied = call(support, "change", {"count": 3})
+# Include a custom upstream annotation in the copied definition.
+catalog["change"]["annotations"]["vendor.batchSafe"] = False
 inventory["change"]["definition"] = catalog["change"]
 publish_inventory(inventory)
 call(guest, "change", {"count": 3})

@@ -1,4 +1,4 @@
-module github.com/chrisbennight/tyk-plus-plugins/cedar
+module github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp
 
 go 1.26.5
 

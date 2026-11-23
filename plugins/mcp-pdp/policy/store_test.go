@@ -127,12 +127,14 @@ func TestPromoteRepairsADamagedSet(t *testing.T) {
 func TestPromoteWritesReadableFilesUnderARestrictiveUmask(t *testing.T) {
 	previous := syscall.Umask(0o077)
 	defer syscall.Umask(previous)
-	store := t.TempDir()
+	// The store does not exist yet, as when converting an older layout.
+	store := filepath.Join(t.TempDir(), "store")
 	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
+		store,
 		filepath.Join(store, setsDir),
 		filepath.Join(store, setsDir, set),
 		filepath.Join(store, setsDir, set, "rules.cedar"),
@@ -146,5 +148,25 @@ func TestPromoteWritesReadableFilesUnderARestrictiveUmask(t *testing.T) {
 		if info.Mode().Perm()&0o044 != 0o044 {
 			t.Fatalf("%s is not readable by other users: %v", path, info.Mode())
 		}
+	}
+}
+
+func TestPromoteRepairsADamagedManifestAndKeepsTheFirstLabel(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "first", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(store, setsDir, set, manifestFile)
+	if err := os.WriteFile(manifest, []byte(`{"format": 1, "label": "first", "files": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Promote(store, source, "second", epoch); err != nil {
+		t.Fatal(err)
+	}
+	_, repaired, err := LoadSet(store, set)
+	if err != nil || repaired.Label != "first" {
+		t.Fatalf("repaired set: %+v, %v", repaired, err)
 	}
 }

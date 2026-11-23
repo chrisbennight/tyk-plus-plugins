@@ -86,41 +86,60 @@ func ReadPointer(root string) (Pointer, error) {
 	return p, nil
 }
 
-// LoadSet verifies that a set's files match its manifest and fingerprint, then
-// validates it. A mismatch returns a NotReadyError; a validation failure
-// returns the validation error.
-func LoadSet(root, set string) (*Snapshot, Manifest, error) {
-	var manifest Manifest
+// readSet returns a set's manifest and files after verifying that the files
+// match the manifest and the set name. It is the single definition of an
+// intact set, used both by gateways loading a set and by publishers deciding
+// whether an existing set can be reused. A mismatch returns a NotReadyError.
+func readSet(root, set string) (Manifest, map[string][]byte, error) {
 	if !fingerprintPattern.MatchString(set) {
-		return nil, manifest, fmt.Errorf("invalid set name %q", set)
+		return Manifest{}, nil, fmt.Errorf("invalid set name %q", set)
 	}
 	dir := filepath.Join(root, setsDir, set)
-	data, err := os.ReadFile(filepath.Join(dir, manifestFile))
+	manifest, err := readManifest(dir)
 	if err != nil {
-		return nil, manifest, &NotReadyError{Reason: err.Error()}
-	}
-	if err := jsonv2.Unmarshal(data, &manifest, jsonv2.RejectUnknownMembers(true)); err != nil {
-		return nil, manifest, &NotReadyError{Reason: "unreadable manifest: " + err.Error()}
+		return manifest, nil, &NotReadyError{Reason: err.Error()}
 	}
 	// An unexpected format, including a manifest still missing its fields, is
 	// retried rather than cached as a rejection.
 	if manifest.Format != FormatVersion {
-		return nil, manifest, &NotReadyError{Reason: fmt.Sprintf("unsupported policy set format %d", manifest.Format)}
+		return manifest, nil, &NotReadyError{Reason: fmt.Sprintf("unsupported policy set format %d", manifest.Format)}
 	}
 	contents := make(map[string][]byte, len(Files))
 	for _, name := range Files {
 		if contents[name], err = os.ReadFile(filepath.Join(dir, name)); err != nil {
-			return nil, manifest, &NotReadyError{Reason: err.Error()}
+			return manifest, nil, &NotReadyError{Reason: err.Error()}
 		}
 	}
 	hashes := hashFiles(contents)
 	for _, name := range Files {
 		if manifest.Files[name] != hashes[name] {
-			return nil, manifest, &NotReadyError{Reason: name + " does not match the manifest"}
+			return manifest, nil, &NotReadyError{Reason: name + " does not match the manifest"}
 		}
 	}
 	if Fingerprint(hashes) != set {
-		return nil, manifest, &NotReadyError{Reason: "content does not match the set name"}
+		return manifest, nil, &NotReadyError{Reason: "content does not match the set name"}
+	}
+	return manifest, contents, nil
+}
+
+func readManifest(dir string) (Manifest, error) {
+	var manifest Manifest
+	data, err := os.ReadFile(filepath.Join(dir, manifestFile))
+	if err != nil {
+		return manifest, err
+	}
+	if err := jsonv2.Unmarshal(data, &manifest, jsonv2.RejectUnknownMembers(true)); err != nil {
+		return manifest, fmt.Errorf("unreadable manifest: %w", err)
+	}
+	return manifest, nil
+}
+
+// LoadSet verifies a set with readSet, then validates it. A validation failure
+// returns the validation error.
+func LoadSet(root, set string) (*Snapshot, Manifest, error) {
+	manifest, contents, err := readSet(root, set)
+	if err != nil {
+		return nil, manifest, err
 	}
 	snapshot, err := Compile(contents["rules.cedar"], contents["tools.json"], contents["checks.json"], set)
 	if err != nil {
@@ -204,22 +223,28 @@ func lockStore(root string) (func(), error) {
 
 // writeSet stores a set by renaming a completed temporary directory into
 // place, so readers never see a partial set. An intact set with the same
-// fingerprint already holds the same content; a damaged one is replaced.
-// Permissions are set explicitly so a gateway running as another user can
-// read the set regardless of the publisher's umask, and every file and
-// directory is synced so a crash cannot leave a published set incomplete.
+// fingerprint is reused. A damaged one is replaced, keeping the label it was
+// first published with. Directories get explicit permissions so a gateway
+// running as another user can read the store whatever the publisher's umask,
+// and the sets directory is synced on every path so a reused or new set
+// survives a crash before the pointer names it.
 func writeSet(root, set string, manifest Manifest, contents map[string][]byte) error {
 	sets := filepath.Join(root, setsDir)
 	if err := os.MkdirAll(sets, 0o755); err != nil {
 		return err
 	}
-	if err := os.Chmod(sets, 0o755); err != nil {
-		return err
+	for _, dir := range []string{root, sets} {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			return err
+		}
 	}
 	final := filepath.Join(sets, set)
+	if _, _, err := readSet(root, set); err == nil {
+		return syncDir(sets)
+	}
 	if _, err := os.Stat(final); err == nil {
-		if setIntact(final, manifest.Files) {
-			return nil
+		if previous, err := readManifest(final); err == nil {
+			manifest.Label = previous.Label
 		}
 		damaged := filepath.Join(sets, fmt.Sprintf(".damaged-%s-%d", set, time.Now().UnixNano()))
 		if err := os.Rename(final, damaged); err != nil {
@@ -251,30 +276,12 @@ func writeSet(root, set string, manifest Manifest, contents map[string][]byte) e
 		return err
 	}
 	if err := os.Rename(staging, final); err != nil {
-		if setIntact(final, manifest.Files) {
-			return nil
+		// A concurrent publisher may have stored the same set first.
+		if _, _, readErr := readSet(root, set); readErr != nil {
+			return err
 		}
-		return err
 	}
 	return syncDir(sets)
-}
-
-// setIntact reports whether dir holds a manifest and files matching hashes.
-func setIntact(dir string, hashes map[string]string) bool {
-	if _, err := os.Stat(filepath.Join(dir, manifestFile)); err != nil {
-		return false
-	}
-	for _, name := range Files {
-		data, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			return false
-		}
-		sum := sha256.Sum256(data)
-		if hex.EncodeToString(sum[:]) != hashes[name] {
-			return false
-		}
-	}
-	return true
 }
 
 func writeFileSynced(path string, data []byte) error {

@@ -14,7 +14,11 @@ services:
   upstream:
     build:
       context: ./tests
-      target: upstream
+      # `upstream` speaks both protocol versions; `upstream-legacy` only the older one.
+      target: ${UPSTREAM_TARGET:-upstream}
+    environment:
+      UPSTREAM_STREAM: ${UPSTREAM_STREAM:-}
+      UPSTREAM_SESSIONS: ${UPSTREAM_SESSIONS:-}
   issuer:
     build:
       context: ./tests
@@ -25,6 +29,7 @@ services:
       target: probe
     environment:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?}
+      UPSTREAM_SUPPORTS_NEWER: ${UPSTREAM_SUPPORTS_NEWER:-true}
     volumes:
       - policy:/policy
       - status:/status:ro

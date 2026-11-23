@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,7 +27,10 @@ func main() {
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+		// UPSTREAM_STREAM selects streamed replies and UPSTREAM_SESSIONS the
+		// older protocol's sessions, so the gateway is tested against each kind
+		// of upstream. A server that keeps sessions accepts only the older protocol.
+		&mcp.StreamableHTTPOptions{Stateless: os.Getenv("UPSTREAM_SESSIONS") == "", JSONResponse: os.Getenv("UPSTREAM_STREAM") == ""})
 	var requests atomic.Uint64
 	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)

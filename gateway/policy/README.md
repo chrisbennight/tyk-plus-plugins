@@ -13,7 +13,7 @@ A caller presents one of two credentials. The gateway tries the key first, then 
 | A person signed in through your identity provider | `Authorization: Bearer <token>` | The token's claims |
 | A service account | `X-API-Key: <key>` | Metadata on the Tyk key |
 
-The first credential Tyk accepts identifies the caller. A request with a valid key is identified by that key even if it also carries a token. When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes both credential headers before forwarding the request.
+The first credential Tyk accepts identifies the caller. A request with a valid key is identified by that key even if it also carries a token. When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes both credential headers before forwarding the request. When moving a client from a key to a token, remove its key header: if Tyk rejects the key before accepting the token, the request reaches the gateway's checks without its body, so a tool call is denied and other requests fail at the upstream.
 
 Cedar decides which tools every caller may use. Do not give Tyk keys or policies per-tool MCP access rights, because tool access is controlled through Cedar alone.
 
@@ -124,7 +124,7 @@ The image ships a store whose active set is the empty policy in this directory. 
 
 ### Upgrading key callers
 
-Earlier builds read keys from the `Authorization` header. Keys now go in `X-API-Key`, and `Authorization` carries tokens only. Update clients that use keys before upgrading; a key sent in `Authorization` is refused.
+Earlier builds read keys from the `Authorization` header. Keys now go in `X-API-Key`, and `Authorization` carries tokens only. Update clients that use keys before upgrading; a key sent in `Authorization` is refused. Every request now needs an identifiable caller, including `initialize` and `tools/list`, so give every key `cedar` metadata with an issuer and subject before upgrading.
 
 ### Upgrading from the three-file layout
 

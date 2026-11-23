@@ -341,7 +341,7 @@ refused("Bearer not-a-token")
 # method, not only tool calls.
 refused(token(app_roles=["support"], exp=None))
 status, response = rpc(token(app_roles=["support"], exp=None), "tools/list", {})
-assert status == 403, (status, response)
+assert status == 403 and response["id"] == 1, (status, response)
 # With a valid key and a valid token, the key is tried first and identifies the
 # caller. Neither credential reaches the upstream, which rejects any it sees.
 # The token's guest role would permit this change, so a denial shows that the

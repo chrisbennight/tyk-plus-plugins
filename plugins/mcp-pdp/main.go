@@ -20,19 +20,6 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	// The context also holds the raw credential, so only claims are read from it.
 	data, _ := r.Context().Value(ctx.ContextData).(map[string]any)
 	who, method, callerErr := identity.Resolve(data, metadata, claimNames)
-	// Every request needs an identifiable caller, not only tool calls, so a
-	// credential the plug-in rejects cannot reach any other MCP method.
-	if callerErr != nil {
-		slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
-		refuse(w, nil, "Caller not identified")
-		return
-	}
-	if ctx.GetMCPMethod(r) != "tools/call" {
-		return
-	}
-	name := ctx.GetMCPPrimitiveName(r)
-	oas := ctx.GetOASDefinition(r)
-	state := current()
 	var call struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -46,6 +33,24 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	validBody := readErr == nil && len(body) <= maxBody && jsonv2.Unmarshal(body, &call) == nil
+	// Every request needs an identifiable caller, not only tool calls, so a
+	// credential the plug-in rejects cannot reach any other MCP method. Tool
+	// calls are refused below, through the logged decision.
+	if callerErr != nil && ctx.GetMCPMethod(r) != "tools/call" {
+		var envelope struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.Unmarshal(body, &envelope)
+		slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
+		refuse(w, envelope.ID, "Caller not identified")
+		return
+	}
+	if ctx.GetMCPMethod(r) != "tools/call" {
+		return
+	}
+	name := ctx.GetMCPPrimitiveName(r)
+	oas := ctx.GetOASDefinition(r)
+	state := current()
 	var rules []string
 	version, label, reason := "", "", "unavailable"
 	if state != nil {
@@ -53,6 +58,8 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case state == nil:
+	case callerErr != nil:
+		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
 	default:

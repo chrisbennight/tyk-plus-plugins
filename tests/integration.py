@@ -113,14 +113,14 @@ call(operator, "change", {"count": 3})
 inventory["change"] = {"readOnly": False, "arguments": {"count": "long"}}
 publish_inventory(inventory)
 call(operator, "change", {"count": 2}, "updated")
-call(support, "change", {"count": 3})
+denied = call(support, "change", {"count": 3})
 inventory["change"]["definition"] = catalog["change"]
 publish_inventory(inventory)
 call(guest, "change", {"count": 3})
 call(operator, "change", {"count": 2})
 call(operator, "change", {"count": 3}, "updated")
 hidden = call(support, "change", {"count": "wrong"})
-assert call(support, "unknown", {"count": "wrong"}) == hidden
+assert call(support, "unknown", {"count": "wrong"}) == hidden == denied
 
 # Retargeting requires a fresh review. A rejected inventory or policy edit keeps
 # the working decisions. A forbid that errors during execution blocks dispatch.
@@ -135,6 +135,15 @@ replace(rules, "forbid(principal, action, resource);")
 call(guest, "lookup", {"count": 3}, "found")
 replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
 call(operator, "change", {"count": 2})
+# The operator can delegate a reviewed mutation to the same guest denied above.
+replace(rules, """
+permit (principal, action, resource) when {
+  (principal.roles.contains("support") && resource.reviewed.readOnly) ||
+  (principal.roles.contains("guest") && resource.name == "change" &&
+   context.numbers.contains({name: "count", value: 3}))
+};
+""")
+call(guest, "change", {"count": 3}, "updated")
 replace(rules, initial + """
 forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };

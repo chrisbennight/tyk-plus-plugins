@@ -107,18 +107,39 @@ assert status == 200, listing
 catalog = {tool["name"]: tool for tool in listing["result"]["tools"]}
 assert catalog["change"]["annotations"]["readOnlyHint"] is True
 
-# The shipped policy grants nothing, even for a reviewed tool.
-rules = Path("/policy/rules.cedar")
+# The gateway ships with no rules, tools, or activation checks.
+rules, tools, checks = (Path("/policy") / name for name in ("rules.cedar", "tools.json", "checks.json"))
 assert rules.read_text().strip() == "", "the gateway must ship without rules"
+assert json.loads(tools.read_text()) == {} and json.loads(checks.read_text()) == []
+call(operator, "lookup", {})
+
+# A denial alone cannot show that an empty file was accepted, because an
+# unavailable evaluator also denies. Each empty file is swapped in while a
+# permitting configuration is active instead: a rejected file would leave that
+# configuration in force. The first permit relies on the shipped empty checks.
 inventory = {"lookup": {"facts": {"readOnly": True}, "definition": catalog["lookup"],
                         "arguments": {"count": "long"}}}
 publish_inventory(inventory)
-call(operator, "lookup", {})
-
-replace(Path("/policy/checks.json"), json.dumps(EXAMPLE_CHECKS))
 initial = EXAMPLE_RULES
-replace(rules, "invalid")
+replace(rules, initial)
+call(support, "lookup", {}, "found")
+replace(rules, "")
 call(operator, "lookup", {})
+replace(rules, initial)
+call(operator, "lookup", {}, "found")
+replace(tools, "{}")
+call(operator, "lookup", {})
+publish_inventory(inventory)
+call(operator, "lookup", {}, "found")
+# A null tool entry is rejected rather than treated as a reviewed tool.
+publish_inventory(dict(inventory, change=None))
+call(operator, "change", {"count": 2})
+
+# A rejected candidate keeps the last good configuration.
+publish_inventory(inventory)
+replace(checks, json.dumps(EXAMPLE_CHECKS))
+replace(rules, "invalid")
+call(operator, "lookup", {}, "found")
 replace(rules, initial)
 call(support, "lookup", {}, "found")
 

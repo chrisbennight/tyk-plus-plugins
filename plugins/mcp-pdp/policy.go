@@ -114,8 +114,8 @@ func (t *tool) prepare(name string) error {
 }
 
 type inventory struct {
-	Upstream string          `json:"upstream"`
-	Tools    map[string]tool `json:"tools"`
+	Upstream string           `json:"upstream"`
+	Tools    map[string]*tool `json:"tools"`
 }
 
 type snapshot struct {
@@ -162,13 +162,12 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
 		}
 		for name, t := range inv.Tools {
-			if name == "" {
-				return nil, fmt.Errorf("invalid tool name for proxy %q", proxy)
+			if name == "" || t == nil {
+				return nil, fmt.Errorf("tool %q for proxy %q must be a named object", name, proxy)
 			}
 			if err := t.prepare(name); err != nil {
 				return nil, err
 			}
-			inv.Tools[name] = t
 		}
 	}
 	// Activation checks are optional. An operator adds them to test a candidate's
@@ -201,7 +200,7 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
 			candidate = &snapshot{policies: s.policies, tools: map[string]inventory{
-				c.Proxy: {Upstream: c.Upstream, Tools: map[string]tool{c.Tool: *h}},
+				c.Proxy: {Upstream: c.Upstream, Tools: map[string]*tool{c.Tool: h}},
 			}}
 		}
 		reason, _ := candidate.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)

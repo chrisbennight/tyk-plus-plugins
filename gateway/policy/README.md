@@ -72,4 +72,6 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 ## Deploying changes
 
+The policy directory must contain `rules.cedar`, `tools.json`, and `checks.json`. A missing file makes the configuration unreadable. When you have no rules, tools, or checks, use an empty `rules.cedar`, `{}`, and `[]` respectively.
+
 CI builds the gateway and checks policy behavior through the MCP endpoint. To deploy a tested change, rebuild the image or mount your policy directory at `/opt/tyk-gateway/cedar` and replace a file by atomic rename. Use an image rollout for coordinated changes to multiple files. The next tool call validates changed configuration. A rejected change preserves the running process’s last valid configuration. With no valid configuration, tool calls are denied. Gateway logs record the decision, caller, tool, reason, policy version, and determining rule IDs.

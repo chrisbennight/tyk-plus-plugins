@@ -23,11 +23,21 @@ const usage = `Usage:
       back to the set the active pointer records as previous.
   cedar-policy show -store DIR
       Print the active pointer.
+  cedar-policy bench (-store DIR | -synthetic) [options]
+      Measure how long the active set, or a generated one, takes to compile
+      and to decide tool calls. Run "cedar-policy bench -h" for options.
 `
 
 func main() {
 	if len(os.Args) < 2 {
 		fail(fmt.Errorf("a command is required"))
+	}
+	if os.Args[1] == "bench" {
+		if err := runBench(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "cedar-policy: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 	flags := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }

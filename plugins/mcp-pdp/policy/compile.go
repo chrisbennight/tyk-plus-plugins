@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/cedar-policy/cedar-go"
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
@@ -211,4 +212,27 @@ func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, er
 		}
 	}
 	return s, nil
+}
+
+// ToolRef identifies one reviewed tool and the argument types its rules may read.
+type ToolRef struct {
+	Proxy, Upstream, Name string
+	Arguments             map[string]string
+}
+
+// Tools lists the reviewed tools in a stable order.
+func (s *Snapshot) Tools() []ToolRef {
+	var refs []ToolRef
+	for proxy, inv := range s.tools {
+		for name, t := range inv.Tools {
+			refs = append(refs, ToolRef{Proxy: proxy, Upstream: inv.Upstream, Name: name, Arguments: t.Arguments})
+		}
+	}
+	slices.SortFunc(refs, func(a, b ToolRef) int {
+		if a.Proxy != b.Proxy {
+			return strings.Compare(a.Proxy, b.Proxy)
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	return refs
 }

@@ -25,7 +25,7 @@ var httpClient = &http.Client{Timeout: 10 * time.Second}
 // bearer credentials and keys in their own header; a caller may send both.
 type credential map[string]string
 
-func keyCred(key string) credential     { return credential{"X-API-Key": key} }
+func keyCred(key string) credential      { return credential{"X-API-Key": key} }
 func bearerCred(token string) credential { return credential{"Authorization": "Bearer " + token} }
 func (c credential) with(other credential) credential {
 	merged := credential{}

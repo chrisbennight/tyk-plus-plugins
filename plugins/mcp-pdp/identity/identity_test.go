@@ -47,6 +47,14 @@ func TestMalformedListClaimIsRejected(t *testing.T) {
 	if _, _, err := Resolve(context, nil, names); err == nil {
 		t.Fatal("accepted an object as roles")
 	}
+	context["jwt_claims_roles"] = nil
+	if _, _, err := Resolve(context, nil, names); err == nil {
+		t.Fatal("accepted null roles")
+	}
+	delete(context, "jwt_claims_roles")
+	if caller, _, err := Resolve(context, nil, names); err != nil || caller.Roles != nil {
+		t.Fatalf("an absent roles claim should mean no roles: %+v %v", caller, err)
+	}
 }
 
 func TestUnmappedClaimsAreIgnored(t *testing.T) {

@@ -57,7 +57,11 @@ func fromClaims(context map[string]any, names ClaimNames) (policy.Caller, error)
 		if field.claim == "" {
 			continue
 		}
-		if *field.into, err = list(context[claimPrefix+field.claim]); err != nil {
+		value, present := context[claimPrefix+field.claim]
+		if !present {
+			continue
+		}
+		if *field.into, err = list(value); err != nil {
 			return policy.Caller{}, fmt.Errorf("claim %q: %w", field.claim, err)
 		}
 	}
@@ -73,11 +77,10 @@ func text(context map[string]any, claim string) (string, error) {
 }
 
 // list accepts a JSON array of strings or a space-separated string, the two
-// shapes identity providers use for roles, groups, and scopes.
+// shapes identity providers use for roles, groups, and scopes. A claim that is
+// present with any other value, including null, is malformed.
 func list(value any) ([]string, error) {
 	switch v := value.(type) {
-	case nil:
-		return nil, nil
 	case string:
 		return strings.Fields(v), nil
 	case []any:

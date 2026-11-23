@@ -1,0 +1,20 @@
+services:
+  gateway:
+    environment:
+      MCP_UPSTREAM_URL: http://upstream:8000/mcp
+    volumes:
+      - policy:/opt/tyk-gateway/cedar:ro
+  upstream:
+    build:
+      context: ./tests
+      target: upstream
+  probe:
+    build:
+      context: ./tests
+      target: probe
+    environment:
+      TYK_GW_SECRET: ${TYK_GW_SECRET:?}
+    volumes:
+      - policy:/policy
+volumes:
+  policy:

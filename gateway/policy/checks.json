@@ -1,0 +1,12 @@
+[
+  {
+    "caller": {"issuer": "local", "subject": "support", "roles": ["support"]},
+    "proxy": "governed", "upstream": "http://upstream.invalid/mcp", "tool": "lookup",
+    "reviewedReadOnly": true, "expect": "permitted"
+  },
+  {
+    "caller": {"issuer": "local", "subject": "support", "roles": ["support"]},
+    "proxy": "governed", "upstream": "http://upstream.invalid/mcp", "tool": "update",
+    "reviewedReadOnly": false, "expect": "policy_denied"
+  }
+]

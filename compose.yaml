@@ -1,7 +1,11 @@
 services:
   gateway:
-    build: ./gateway
+    build:
+      context: ./gateway
+      additional_contexts:
+        mcp-pdp: ./plugins/mcp-pdp
     environment:
+      MCP_UPSTREAM_URL: ${MCP_UPSTREAM_URL:-http://upstream.invalid/mcp}
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"

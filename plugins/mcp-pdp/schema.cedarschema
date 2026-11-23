@@ -1,0 +1,10 @@
+entity Caller = { issuer: String, subject: String, roles: Set<String>, groups: Set<String>, scopes: Set<String> };
+entity Tool = { proxy: String, upstream: String, name: String, reviewed: {readOnly: Bool, risk: String}, upstreamAnnotations: {readOnlyHint?: Bool, strings: Set<{name: String, value: String}>, numbers: Set<{name: String, value: Long}>, flags: Set<{name: String, value: Bool}>} };
+action "tools/call" appliesTo {
+  principal: Caller, resource: Tool,
+  context: {
+    strings: Set<{name: String, value: String}>,
+    numbers: Set<{name: String, value: Long}>,
+    flags: Set<{name: String, value: Bool}>
+  }
+};

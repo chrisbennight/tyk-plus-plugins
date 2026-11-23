@@ -8,15 +8,11 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Start the gateway
+      - name: Verify Cedar authorization through Tyk
         run: |
           export TYK_GW_SECRET="$(openssl rand -hex 32)"
+          export COMPOSE_FILE=compose.yaml:tests/compose.yaml
           trap 'docker compose down -v' EXIT
-          docker compose up --build -d
-          for attempt in {1..30}; do
-            if docker compose exec -T redis wget -q -T 2 -O - http://gateway:9696/hello; then
-              exit 0
-            fi
-            sleep 1
-          done
-          exit 1
+          docker compose build
+          docker compose up -d gateway upstream
+          docker compose run --rm probe

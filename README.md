@@ -10,7 +10,10 @@ Tyk and Redis run under Docker Compose. The [MCP policy decision point plug-in](
 
 ```sh
 export TYK_GW_SECRET="$(openssl rand -hex 32)"
+export TYK_GW_NODESECRET="$(openssl rand -hex 32)"
 docker compose up --build -d
 ```
+
+Docker Compose refuses to start the gateway without both secrets. `TYK_GW_SECRET` authorizes Tyk's control API, which creates keys. `TYK_GW_NODESECRET` signs the notifications that gateways exchange through Redis, such as reload and key-change signals, so a client that can write to Redis cannot forge them. Every gateway that shares a Redis instance needs the same node secret. Supply both from your secret store rather than writing them into files, and keep Redis reachable only from the gateways.
 
 In the same shell, stop the stack with `docker compose down`.

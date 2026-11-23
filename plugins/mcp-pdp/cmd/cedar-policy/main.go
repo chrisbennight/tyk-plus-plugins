@@ -16,8 +16,9 @@ import (
 const usage = `Usage:
   cedar-policy promote -store DIR [-label TEXT] SOURCE_DIR
       Validate rules.cedar, tools.json, and checks.json in SOURCE_DIR, store
-      them as a set, and make that set active.
-  cedar-policy activate -store DIR [-label TEXT] SET
+      them as a set, and make that set active. A set keeps the label it was
+      first published with.
+  cedar-policy activate -store DIR SET
       Validate an existing set again and make it active, for example to roll
       back to the set the active pointer records as previous.
   cedar-policy show -store DIR
@@ -48,7 +49,7 @@ func main() {
 		fmt.Println(set)
 	case "activate":
 		requireArgs(flags, 1)
-		if err := policy.Activate(*store, flags.Arg(0), *label, time.Now()); err != nil {
+		if err := policy.Activate(*store, flags.Arg(0), time.Now()); err != nil {
 			fail(err)
 		}
 		fmt.Println(flags.Arg(0))
@@ -58,7 +59,14 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
-		data, _ := json.MarshalIndent(pointer, "", "  ")
+		_, manifest, err := policy.LoadSet(*store, pointer.Set)
+		if err != nil {
+			fail(err)
+		}
+		data, _ := json.MarshalIndent(struct {
+			policy.Pointer
+			Label string `json:"label,omitempty"`
+		}{pointer, manifest.Label}, "", "  ")
 		fmt.Println(string(data))
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))

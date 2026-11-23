@@ -38,10 +38,10 @@ type Manifest struct {
 	Files  map[string]string `json:"files"`
 }
 
-// Pointer names the active policy set and the set it replaced.
+// Pointer names the active policy set and the set it replaced. A set's label
+// lives in its manifest and is fixed when the set is first published.
 type Pointer struct {
 	Set        string `json:"set"`
-	Label      string `json:"label,omitempty"`
 	Previous   string `json:"previous,omitempty"`
 	PromotedAt string `json:"promotedAt,omitempty"`
 }
@@ -130,7 +130,8 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 
 // Promote validates the policy files in source, stores them as an immutable
 // set, and makes it active. A file that fails validation leaves the store's
-// active pointer unchanged.
+// active pointer unchanged. Publishing content that already exists keeps the
+// label it was first published with.
 func Promote(root, source, label string, now time.Time) (string, error) {
 	contents := make(map[string][]byte, len(Files))
 	for _, name := range Files {
@@ -148,12 +149,12 @@ func Promote(root, source, label string, now time.Time) (string, error) {
 	if err := writeSet(root, set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, contents); err != nil {
 		return "", err
 	}
-	return set, Activate(root, set, label, now)
+	return set, Activate(root, set, now)
 }
 
 // Activate makes an existing set active after validating it again, for example
 // to roll back to the set a pointer records as previous.
-func Activate(root, set, label string, now time.Time) error {
+func Activate(root, set string, now time.Time) error {
 	if _, _, err := LoadSet(root, set); err != nil {
 		return fmt.Errorf("policy set %s cannot be activated: %w", set, err)
 	}
@@ -163,7 +164,7 @@ func Activate(root, set, label string, now time.Time) error {
 		return err
 	}
 	defer unlock()
-	pointer := Pointer{Set: set, Label: label, PromotedAt: now.UTC().Format(time.RFC3339)}
+	pointer := Pointer{Set: set, PromotedAt: now.UTC().Format(time.RFC3339)}
 	// An unreadable pointer names no set to record as previous; replacing it is
 	// how an operator repairs a corrupted pointer.
 	if current, err := ReadPointer(root); err == nil {

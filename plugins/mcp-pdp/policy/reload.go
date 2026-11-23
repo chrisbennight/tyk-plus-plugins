@@ -69,6 +69,8 @@ func (r *Reloader) Load() {
 		return
 	}
 	if pointer.Set == r.evaluated {
+		// Recovery may have failed while the last good set was unavailable.
+		r.fallBack(pointer)
 		r.flush()
 		return
 	}
@@ -92,22 +94,17 @@ func (r *Reloader) Load() {
 	}
 }
 
-// fallBack restores a last good set after a restart, when the active pointer
-// names a set this process cannot enforce. It prefers the set this gateway
-// last reported enforcing, then the set the pointer recorded as previous.
+// fallBack restores this gateway's last good set after a restart, when the
+// active pointer names a set it cannot enforce. Only the set this gateway
+// itself last reported enforcing is eligible: an older set could restore
+// access a later set revoked. Without that report, calls stay denied.
 func (r *Reloader) fallBack(pointer Pointer) {
-	if r.Active.Load() != nil {
+	if r.Active.Load() != nil || r.recovered == "" || r.recovered == pointer.Set {
 		return
 	}
-	for _, set := range []string{r.recovered, pointer.Previous} {
-		if set == "" || set == pointer.Set {
-			continue
-		}
-		if snapshot, _, err := LoadSet(r.Root, set); err == nil {
-			r.Active.Store(snapshot)
-			slog.Warn("Cedar configuration restored the last good set", "set", set)
-			return
-		}
+	if snapshot, _, err := LoadSet(r.Root, r.recovered); err == nil {
+		r.Active.Store(snapshot)
+		slog.Warn("Cedar configuration restored this gateway's last enforced set", "set", r.recovered)
 	}
 }
 

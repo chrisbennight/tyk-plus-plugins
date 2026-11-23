@@ -36,14 +36,14 @@ func TestPromoteActivatesAValidSetAndRecordsThePrevious(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pointer.Set != second || pointer.Previous != first || pointer.Label != "open" {
+	if pointer.Set != second || pointer.Previous != first {
 		t.Fatalf("unexpected pointer %+v", pointer)
 	}
 	snapshot, manifest, err := LoadSet(store, second)
 	if err != nil || snapshot.Version != second || manifest.Label != "open" {
 		t.Fatalf("LoadSet = %v, %+v, %v", snapshot, manifest, err)
 	}
-	if err := Activate(store, first, "rollback", now); err != nil {
+	if err := Activate(store, first, now); err != nil {
 		t.Fatal(err)
 	}
 	if pointer, _ = ReadPointer(store); pointer.Set != first || pointer.Previous != second {
@@ -88,7 +88,7 @@ func TestLoadSetReportsATamperedSetAsNotReady(t *testing.T) {
 	if _, _, err := LoadSet(store, set); !errors.As(err, &notReady) {
 		t.Fatalf("tampered set: %v", err)
 	}
-	if err := Activate(store, set, "", time.Unix(0, 0)); err == nil {
+	if err := Activate(store, set, time.Unix(0, 0)); err == nil {
 		t.Fatal("a tampered set was activated")
 	}
 }

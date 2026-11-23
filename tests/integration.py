@@ -142,6 +142,13 @@ replace(rules, "invalid")
 call(operator, "lookup", {}, "found")
 replace(rules, initial)
 call(support, "lookup", {}, "found")
+# Null checks are not an empty list: alongside empty rules they are rejected.
+replace(checks, "null")
+replace(rules, "")
+call(operator, "lookup", {}, "found")
+replace(checks, json.dumps(EXAMPLE_CHECKS))
+replace(rules, initial)
+call(support, "lookup", {}, "found")
 
 # The guest permit applies across tools for count=3. An upstream hint alone cannot
 # grant the same guest access, and an operator still cannot call an unreviewed tool.

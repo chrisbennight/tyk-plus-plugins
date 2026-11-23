@@ -184,6 +184,9 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 	if err := jsonv2.Unmarshal(checks, &cases, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, err
 	}
+	if cases == nil {
+		return nil, fmt.Errorf("activation checks must be an array")
+	}
 	for i, c := range cases {
 		if c.Caller.Issuer == "" || c.Caller.Subject == "" || c.Proxy == "" || c.Tool == "" || c.Upstream == "" {
 			return nil, fmt.Errorf("incomplete activation check %d", i)

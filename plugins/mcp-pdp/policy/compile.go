@@ -1,16 +1,10 @@
-package main
+package policy
 
 import (
-	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"slices"
-	"sync/atomic"
-	"time"
 
 	"github.com/cedar-policy/cedar-go"
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
@@ -119,13 +113,17 @@ type inventory struct {
 	Tools    map[string]*tool `json:"tools"`
 }
 
-type snapshot struct {
-	version  string
+// Snapshot is a validated configuration ready to decide tool calls. Version
+// identifies the policy set it was built from, and Label is that set's
+// human-readable label.
+type Snapshot struct {
+	Version  string
+	Label    string
 	policies *cedar.PolicySet
 	tools    map[string]inventory
 }
 
-func compile(rules, inventoryData, checks []byte, version string) (*snapshot, error) {
+func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, error) {
 	var schemaDoc schema.Schema
 	if err := schemaDoc.UnmarshalCedar(inputSchema); err != nil {
 		return nil, err
@@ -139,7 +137,7 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 	if err != nil {
 		return nil, err
 	}
-	s := &snapshot{version: version, policies: cedar.NewPolicySet()}
+	s := &Snapshot{Version: version, policies: cedar.NewPolicySet()}
 	for i, p := range list {
 		id := cedar.PolicyID(p.Annotations()["id"])
 		if id == "" {
@@ -174,7 +172,7 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 	// Activation checks are optional. An operator adds them to test a candidate's
 	// decisions before it can replace the last good configuration.
 	var cases []struct {
-		Caller           caller          `json:"caller"`
+		Caller           Caller          `json:"caller"`
 		Proxy            string          `json:"proxy"`
 		Upstream         string          `json:"upstream"`
 		Tool             string          `json:"tool"`
@@ -203,87 +201,14 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 				return nil, fmt.Errorf("activation check %d: %w", i, err)
 			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
-			candidate = &snapshot{policies: s.policies, tools: map[string]inventory{
+			candidate = &Snapshot{policies: s.policies, tools: map[string]inventory{
 				c.Proxy: {Upstream: c.Upstream, Tools: map[string]*tool{c.Tool: h}},
 			}}
 		}
-		reason, _ := candidate.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
+		reason, _ := candidate.Decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
 		if reason != c.Expect {
 			return nil, fmt.Errorf("activation check %d expected %s, got %s", i, c.Expect, reason)
 		}
 	}
 	return s, nil
-}
-
-// active holds the configuration tool calls are decided against. Calls read it
-// without locking or touching the filesystem; only the refresh loop replaces it.
-var active atomic.Pointer[snapshot]
-
-// The default interval keeps a promoted change visible within seconds while
-// reading the configuration rarely.
-const defaultRefreshInterval = 5 * time.Second
-
-// current returns the active configuration without blocking.
-func current() *snapshot {
-	return active.Load()
-}
-
-// The gateway loads the plug-in before it serves traffic, so the first
-// configuration is loaded and the refresh loop started before any tool call.
-func init() {
-	interval := defaultRefreshInterval
-	if value := os.Getenv("CEDAR_REFRESH_INTERVAL"); value != "" {
-		parsed, err := time.ParseDuration(value)
-		if err != nil || parsed <= 0 {
-			slog.Error("Invalid CEDAR_REFRESH_INTERVAL; using the default", "value", value, "default", interval.String())
-		} else {
-			interval = parsed
-		}
-	}
-	var r reloader
-	r.load()
-	go func() {
-		for range time.Tick(interval) {
-			r.load()
-		}
-	}()
-}
-
-// reloader is owned by the refresh loop, so its state needs no lock.
-type reloader struct {
-	version string
-}
-
-// load validates a changed configuration and activates it only if it passes.
-// A rejected or unreadable configuration leaves the last good one active. A
-// panic during validation is contained here so the gateway keeps serving.
-func (r *reloader) load() {
-	defer func() {
-		if failure := recover(); failure != nil {
-			slog.Error("Cedar configuration refresh failed", "panic", fmt.Sprint(failure))
-		}
-	}()
-	dir := "/opt/tyk-gateway/cedar"
-	rules, e1 := os.ReadFile(filepath.Join(dir, "rules.cedar"))
-	tools, e2 := os.ReadFile(filepath.Join(dir, "tools.json"))
-	checks, e3 := os.ReadFile(filepath.Join(dir, "checks.json"))
-	if e1 != nil || e2 != nil || e3 != nil {
-		if r.version != "unreadable" {
-			slog.Warn("Cedar configuration unreadable", "rules", e1, "tools", e2, "checks", e3)
-			r.version = "unreadable"
-		}
-		return
-	}
-	version := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%x%x%x", sha256.Sum256(rules), sha256.Sum256(tools), sha256.Sum256(checks)))))
-	if version == r.version {
-		return
-	}
-	r.version = version
-	next, err := compile(rules, tools, checks, version)
-	if err != nil {
-		slog.Warn("Cedar configuration rejected", "candidate", version, "error", err.Error())
-		return
-	}
-	active.Store(next)
-	slog.Info("Cedar configuration activated", "version", version)
 }

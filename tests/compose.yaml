@@ -5,6 +5,7 @@ services:
       CEDAR_REFRESH_INTERVAL: 200ms
     volumes:
       - policy:/opt/tyk-gateway/cedar:ro
+      - status:/opt/tyk-gateway/cedar-status
   upstream:
     build:
       context: ./tests
@@ -17,5 +18,7 @@ services:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?}
     volumes:
       - policy:/policy
+      - status:/status:ro
 volumes:
   policy:
+  status:

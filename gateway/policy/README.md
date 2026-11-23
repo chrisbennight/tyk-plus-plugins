@@ -42,7 +42,7 @@ A fact or tag that a tool does not have contributes nothing to a rule. Write rul
 
 ## Rules
 
-Write Cedar rules in [rules.cedar](rules.cedar). Cedar sees the caller as `principal`, the tool as `resource`, and the MCP method as `action`. See the [policy schema](../../plugins/mcp-pdp/schema.cedarschema). A call needs a matching permit, an explicit forbid takes precedence, and a forbid that errors during evaluation blocks the call.
+Write Cedar rules in [rules.cedar](rules.cedar). Cedar sees the caller as `principal`, the tool as `resource`, and the MCP method as `action`. See the [policy schema](../../plugins/mcp-pdp/policy/schema.cedarschema). A call needs a matching permit, an explicit forbid takes precedence, and a forbid that errors during evaluation blocks the call.
 
 The following rules illustrate one convention, not a default. Callers with an `analyst` role may call tools you marked read-only, callers with an `admin` role may call any reviewed tool, and a forbid reserves every other tool for admins even if another rule broadly permits access.
 
@@ -72,6 +72,42 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 ## Deploying changes
 
-The policy directory must contain `rules.cedar`, `tools.json`, and `checks.json`. A missing file makes the configuration unreadable. When you have no rules, tools, or checks, use an empty `rules.cedar`, `{}`, and `[]` respectively.
+A policy set is the three files above, published together. They take effect as a whole or not at all, so a rule and the inventory it depends on never go live separately. When you have no rules, tools, or checks, use an empty `rules.cedar`, `{}`, and `[]` respectively.
 
-CI builds the gateway and checks policy behavior through the MCP endpoint. To deploy a tested change, rebuild the image or mount your policy directory at `/opt/tyk-gateway/cedar` and replace a file by atomic rename. Use an image rollout for coordinated changes to multiple files. The gateway checks the files every `CEDAR_REFRESH_INTERVAL`, a Go duration that defaults to `5s`, and validates a changed configuration in the background. A change takes effect after the next check finishes validating it, normally within about one interval, and tool calls never wait for the check or the validation. A rejected change preserves the running process’s last valid configuration. With no valid configuration, tool calls are denied. Gateway logs record the decision, caller, tool, reason, policy version, and determining rule IDs.
+### The policy store
+
+The gateway reads a policy store at `/opt/tyk-gateway/cedar`:
+
+- `sets/<fingerprint>/` holds each published set: its three files and a `manifest.json` listing their SHA-256 hashes. The fingerprint is derived from those hashes, so a set's name identifies its content. Sets are never modified after publication.
+- `active` is a small JSON file naming the set gateways should enforce, the set it replaced, and when it was promoted.
+
+The image ships a store whose active set is the empty policy in this directory. To manage policy at run time, mount your own store at `/opt/tyk-gateway/cedar`.
+
+### Upgrading from the three-file layout
+
+Earlier builds read `rules.cedar`, `tools.json`, and `checks.json` directly from `/opt/tyk-gateway/cedar`. If you mount a directory containing only those files there, convert it before upgrading: run `cedar-policy promote -store <new store> <old directory>` and mount the new store instead. A gateway that finds no `active` pointer denies every call and reports the pointer as unreadable.
+
+### Promoting and rolling back
+
+Use the `cedar-policy` command, which is included in the image at `/opt/tyk-gateway/bin/cedar-policy`. It validates with the same code the gateway runs, so a set it activates is one the gateway accepts.
+
+```sh
+cedar-policy promote -store /path/to/store -label "add billing tools" ./my-policy
+cedar-policy show -store /path/to/store
+cedar-policy activate -store /path/to/store <previous fingerprint>
+```
+
+`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set keeps the label it was first published with. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Every change to the store, publishing a set or switching `active`, happens under a lock on the store, so concurrent publishers cannot interleave and the recorded previous set is the one actually replaced. Each switch replaces `active` by atomic rename. Published files and directories take their permissions from the store directory, so set its permissions so the gateway's user can read it; `promote` creates a new store directory readable by all users. `activate` also repairs an unreadable `active` file.
+
+### What the gateway does
+
+The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that defaults to `5s`, and validates a newly named set in the background. A change takes effect after the next check finishes validating it, normally within about one interval, and tool calls never wait for the check or the validation.
+
+- A set whose files do not match its manifest is treated as not ready, for example while it is still being copied. The gateway keeps its current set and checks again.
+- A set that fails validation is rejected, and the gateway keeps enforcing its last good set.
+- `active` only moves to a set that passed validation, so after a restart the gateway enforces the same last good set. If `active` names a set the gateway rejects, for example after a manual edit, calls are denied and the status report shows the rejection. The gateway never falls back to an older set on its own, because an older set could grant access a later set revoked. Roll back with `cedar-policy activate`.
+- With no valid set, tool calls are denied.
+
+Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.
+
+Gateway logs record each decision with the caller, tool, reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.

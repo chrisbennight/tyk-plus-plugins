@@ -1,0 +1,198 @@
+package policy
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func writeSource(t *testing.T, rules, tools, checks string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, text := range map[string]string{"rules.cedar": rules, "tools.json": tools, "checks.json": checks} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func epoch() time.Time { return time.Unix(0, 0) }
+
+const permitAll = `permit (principal, action, resource);`
+
+func TestPromoteActivatesAValidSetAndRecordsThePrevious(t *testing.T) {
+	store := t.TempDir()
+	now := epoch
+	first, err := Promote(store, writeSource(t, "", "{}", "[]"), "empty", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "open", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer, err := ReadPointer(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pointer.Set != second || pointer.Previous != first {
+		t.Fatalf("unexpected pointer %+v", pointer)
+	}
+	snapshot, manifest, err := LoadSet(store, second)
+	if err != nil || snapshot.Version != second || manifest.Label != "open" {
+		t.Fatalf("LoadSet = %v, %+v, %v", snapshot, manifest, err)
+	}
+	if err := Activate(store, first, now); err != nil {
+		t.Fatal(err)
+	}
+	if pointer, _ = ReadPointer(store); pointer.Set != first || pointer.Previous != second {
+		t.Fatalf("rollback pointer %+v", pointer)
+	}
+}
+
+func TestPromoteRejectsAnInvalidSetWithoutMovingThePointer(t *testing.T) {
+	store := t.TempDir()
+	good, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string]string{
+		"rules":  writeSource(t, "invalid", "{}", "[]"),
+		"tools":  writeSource(t, "", `{"proxy": null}`, "[]"),
+		"checks": writeSource(t, "", "{}", "null"),
+	} {
+		if _, err := Promote(store, source, "", epoch); err == nil {
+			t.Fatalf("%s: invalid set was promoted", name)
+		}
+	}
+	if pointer, _ := ReadPointer(store); pointer.Set != good {
+		t.Fatalf("pointer moved to %s", pointer.Set)
+	}
+}
+
+func TestLoadSetReportsATamperedSetAsNotReady(t *testing.T) {
+	store := t.TempDir()
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules := filepath.Join(store, setsDir, set, "rules.cedar")
+	if err := os.Chmod(rules, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rules, []byte(permitAll), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var notReady *NotReadyError
+	if _, _, err := LoadSet(store, set); !errors.As(err, &notReady) {
+		t.Fatalf("tampered set: %v", err)
+	}
+	if err := Activate(store, set, epoch); err == nil {
+		t.Fatal("a tampered set was activated")
+	}
+}
+
+func TestReadPointerRejectsAnInvalidSetName(t *testing.T) {
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, pointerFile), []byte(`{"set": "../escape"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadPointer(store); err == nil {
+		t.Fatal("an invalid set name was accepted")
+	}
+}
+
+func TestPromoteRepairsADamagedSet(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store, setsDir, set, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := Promote(store, source, "", epoch); err != nil || again != set {
+		t.Fatalf("re-promotion = %s, %v", again, err)
+	}
+	if _, _, err := LoadSet(store, set); err != nil {
+		t.Fatalf("repaired set: %v", err)
+	}
+}
+
+func TestPromoteWritesReadableFilesUnderARestrictiveUmask(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	// The store does not exist yet, as when converting an older layout.
+	store := filepath.Join(t.TempDir(), "store")
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		store,
+		filepath.Join(store, setsDir),
+		filepath.Join(store, setsDir, set),
+		filepath.Join(store, setsDir, set, "rules.cedar"),
+		filepath.Join(store, setsDir, set, manifestFile),
+		filepath.Join(store, pointerFile),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o044 != 0o044 {
+			t.Fatalf("%s is not readable by other users: %v", path, info.Mode())
+		}
+	}
+}
+
+func TestPromoteRepairsADamagedManifestAndKeepsTheFirstLabel(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "first", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(store, setsDir, set, manifestFile)
+	if err := os.WriteFile(manifest, []byte(`{"format": 1, "label": "first", "files": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Promote(store, source, "second", epoch); err != nil {
+		t.Fatal(err)
+	}
+	_, repaired, err := LoadSet(store, set)
+	if err != nil || repaired.Label != "first" {
+		t.Fatalf("repaired set: %+v, %v", repaired, err)
+	}
+}
+
+func TestPublishedFilesInheritARestrictedStoreRoot(t *testing.T) {
+	store := t.TempDir()
+	if err := os.Chmod(store, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		store:                              0o750,
+		filepath.Join(store, setsDir):      0o750,
+		filepath.Join(store, setsDir, set): 0o750,
+		filepath.Join(store, setsDir, set, "rules.cedar"): 0o640,
+		filepath.Join(store, pointerFile):                 0o640,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s has mode %v, want %v", path, info.Mode().Perm(), want)
+		}
+	}
+}

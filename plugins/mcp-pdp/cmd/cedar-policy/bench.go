@@ -37,7 +37,7 @@ func runBench(args []string) error {
 		return fmt.Errorf("unknown format %q", *format)
 	case sizes.Proxies < 1 || sizes.ToolsPerProxy < 1 || sizes.Rules < 0 || sizes.Callers < 1 || sizes.Requests < 1:
 		return errors.New("sizes must be positive")
-	case sizes.PermitRatio < 0 || sizes.PermitRatio > 1:
+	case !(sizes.PermitRatio >= 0 && sizes.PermitRatio <= 1):
 		return errors.New("-permit-ratio must be between 0 and 1")
 	}
 
@@ -70,9 +70,13 @@ func runBench(args []string) error {
 	fmt.Printf("Set %s (%s, seed %d): %d rules, %d tools on %d proxies, %d bytes\n",
 		report.Version, report.Source, report.Seed, report.Set.Rules, report.Set.Tools, report.Set.Proxies, report.Set.Bytes)
 	fmt.Printf("Compile:   median %s, p99 %s, max %s over %d runs\n", d(report.Compile.Median), d(report.Compile.P99), d(report.Compile.Max), report.Compile.Count)
-	fmt.Printf("Decisions: median %s, p99 %s, max %s over %d calls from %d callers\n",
-		d(report.Decisions.Median), d(report.Decisions.P99), d(report.Decisions.Max), report.Decisions.Count, report.Set.Callers)
-	fmt.Printf("Outcomes:  %v (permitted share %.2f, target %.2f)\n", report.Decisions.Outcomes, report.Decisions.PermitRatio, sizes.PermitRatio)
+	if report.Decisions.Count == 0 {
+		fmt.Println("Decisions: none measured; the set has no reviewed tools")
+	} else {
+		fmt.Printf("Decisions: median %s, p99 %s, max %s over %d calls from %d callers\n",
+			d(report.Decisions.Median), d(report.Decisions.P99), d(report.Decisions.Max), report.Decisions.Count, report.Set.Callers)
+		fmt.Printf("Outcomes:  %v (permitted share %.2f, target %.2f)\n", report.Decisions.Outcomes, report.Decisions.PermitRatio, report.Decisions.TargetPermitRatio)
+	}
 	fmt.Printf("Memory:    set heap %d bytes, %d bytes allocated per decision, peak resident %d bytes\n",
 		report.Memory.SetHeapBytes, report.Memory.AllocBytesPerDecision, report.Memory.PeakRSSBytes)
 	fmt.Printf("Build:     %s, cedar-go %s, %s\n", report.Build.Go, report.Build.CedarGo, report.Build.Platform)

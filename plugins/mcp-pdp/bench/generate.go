@@ -165,7 +165,8 @@ func Synthetic(seed int64, sizes Sizes) (rules, tools []byte, vocab Vocabulary) 
 			return fmt.Sprintf(`permit (principal, action, resource) when { principal.scopes.contains(%q) && context.numbers.contains({name: "arg-1", value: %d}) };`, s.pick(vocab.scopes), s.rng.Intn(10))
 		},
 		func() string {
-			return fmt.Sprintf(`permit (principal, action, resource) when { principal.issuer == %q && principal.subject == %q };`, s.pick(vocab.issuers), s.pick(vocab.subjects))
+			i := s.index(len(vocab.subjects))
+			return fmt.Sprintf(`permit (principal, action, resource) when { principal.issuer == %q && principal.subject == %q };`, vocab.issuer(i), vocab.subjects[i])
 		},
 		func() string {
 			return fmt.Sprintf(`permit (principal, action, resource) when { resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint && principal.roles.contains(%q) };`, s.pick(vocab.roles))
@@ -174,18 +175,23 @@ func Synthetic(seed int64, sizes Sizes) (rules, tools []byte, vocab Vocabulary) 
 			return fmt.Sprintf(`permit (principal, action, resource) when { principal.roles.containsAny([%q, %q]) && resource.reviewed.numbers.contains({name: "tier", value: %d}) } unless { principal.groups.contains(%q) };`, s.pick(vocab.roles), s.pick(vocab.roles), 1+s.rng.Intn(5), s.pick(vocab.groups))
 		},
 		func() string {
+			return fmt.Sprintf(`forbid (principal, action, resource) when { resource.upstreamAnnotations.flags.contains({name: "vendor.batchSafe", value: false}) && context.numbers.contains({name: "arg-1", value: %d}) };`, s.rng.Intn(10))
+		},
+		func() string {
 			return fmt.Sprintf(`forbid (principal, action, resource) when { resource.reviewed.strings.contains({name: "risk", value: "high"}) && !principal.roles.contains(%q) };`, s.pick(vocab.roles))
 		},
 		func() string {
 			return fmt.Sprintf(`forbid (principal, action, resource) when { context.flags.contains({name: "arg-2", value: true}) && !principal.scopes.contains(%q) };`, s.pick(vocab.scopes))
 		},
 	}
+	// The last templates are forbids.
+	const forbids = 3
 	var b strings.Builder
 	for i := range sizes.Rules {
 		// Forbids are rarer than permits, as in most real policies.
-		t := s.rng.Intn(len(templates) - 2)
+		t := s.rng.Intn(len(templates) - forbids)
 		if s.rng.Intn(10) == 0 {
-			t = len(templates) - 2 + s.rng.Intn(2)
+			t = len(templates) - forbids + s.rng.Intn(forbids)
 		}
 		fmt.Fprintf(&b, "@id(\"rule-%d\")\n%s\n", i, templates[t]())
 	}
@@ -206,7 +212,7 @@ var (
 func Harvest(rules []byte, callers int) Vocabulary {
 	text := annotation.ReplaceAllString(string(rules), "")
 	var strs []string
-	seen := map[string]bool{"tools/call": true}
+	seen := map[string]bool{}
 	for _, m := range stringLiteral.FindAllStringSubmatch(text, -1) {
 		value := m[1]
 		if unquoted, err := strconv.Unquote(m[0]); err == nil {
@@ -244,11 +250,15 @@ func genericVocabulary(callers int) Vocabulary {
 	}
 }
 
+// issuer gives each subject one fixed issuer, so rules and callers agree on
+// which issuer a subject belongs to.
+func (v Vocabulary) issuer(subject int) string { return v.issuers[subject%len(v.issuers)] }
+
 func (v Vocabulary) callers(s *skewed, count int) []policy.Caller {
 	out := make([]policy.Caller, max(count, 1))
 	for i := range out {
 		out[i] = policy.Caller{
-			Issuer: s.pick(v.issuers), Subject: v.subjects[i%len(v.subjects)],
+			Issuer: v.issuer(i % len(v.subjects)), Subject: v.subjects[i%len(v.subjects)],
 			Roles: s.some(v.roles, 1, 3), Groups: s.some(v.groups, 0, 4), Scopes: s.some(v.scopes, 0, 3),
 		}
 	}

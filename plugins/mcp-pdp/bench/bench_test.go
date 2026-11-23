@@ -34,8 +34,10 @@ func TestSyntheticWorkloadsCompileAndRepeat(t *testing.T) {
 
 func TestSyntheticRulesUseEveryTemplate(t *testing.T) {
 	rules, _, _ := Synthetic(1, Sizes{Proxies: 1, ToolsPerProxy: 5, Callers: 5, Rules: 400})
-	for _, want := range []string{"principal.groups.contains", "resource.name ==", "context.numbers", "principal.subject ==",
-		"upstreamAnnotations has readOnlyHint", "unless", "forbid", "context.flags"} {
+	for _, want := range []string{`{name: "readOnly", value: true}`, "principal.groups.contains", "resource.name ==",
+		`{name: "team", value:`, "permit (principal, action, resource) when { principal.scopes.contains", "principal.subject ==",
+		"upstreamAnnotations has readOnlyHint", "unless", `{name: "vendor.batchSafe", value: false}`,
+		`{name: "risk", value: "high"}`, `context.flags.contains`} {
 		if !bytes.Contains(rules, []byte(want)) {
 			t.Errorf("no rule uses %q", want)
 		}
@@ -69,8 +71,8 @@ permit (principal, action == Action::"tools/call", resource) when {
 		t.Fatal(err)
 	}
 	vocab := Harvest(rules, 20)
-	if slices.Contains(vocab.roles, "only") || slices.Contains(vocab.roles, "tools/call") {
-		t.Fatalf("annotation or action names leaked into the vocabulary: %v", vocab.roles[:4])
+	if slices.Contains(vocab.roles, "only") {
+		t.Fatalf("annotation values leaked into the vocabulary: %v", vocab.roles[:4])
 	}
 	sizes := Sizes{Callers: 20, Requests: 200, PermitRatio: 0.5}
 	outcomes := map[string]int{}

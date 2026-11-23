@@ -21,4 +21,4 @@ jobs:
         run: |
           # The benchmark starts no gateway; Compose still requires its secrets to be set.
           export TYK_GW_SECRET=unused TYK_GW_NODESECRET=unused
-          docker compose run --rm --no-deps --entrypoint /opt/tyk-gateway/bin/cedar-policy gateway bench -synthetic
+          docker compose run --rm --no-deps --entrypoint /opt/tyk-gateway/bin/cedar-policy gateway bench -synthetic -rules 1000 -proxies 10 -tools 1000

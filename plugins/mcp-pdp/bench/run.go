@@ -64,6 +64,9 @@ type Report struct {
 		Durations
 		Outcomes    map[string]int `json:"outcomes"`
 		PermitRatio float64        `json:"permitRatio"`
+		// TargetPermitRatio is the share requested; sets that rarely permit
+		// or deny can fall short of it.
+		TargetPermitRatio float64 `json:"targetPermitRatio"`
 	} `json:"decisions"`
 	Memory struct {
 		// SetHeapBytes is the heap retained by the compiled set.
@@ -141,8 +144,12 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 	for _, t := range tools {
 		proxies[t.Proxy] = true
 	}
-	report.Set.Proxies, report.Set.Tools, report.Set.Callers = len(proxies), len(tools), max(sizes.Callers, 1)
 	requests := Requests(seed, snapshot, vocab, sizes)
+	report.Set.Proxies, report.Set.Tools = len(proxies), len(tools)
+	report.Decisions.TargetPermitRatio = sizes.PermitRatio
+	if len(requests) > 0 {
+		report.Set.Callers = max(sizes.Callers, 1)
+	}
 
 	// A short warm-up keeps one-time costs out of the measured decisions.
 	for _, r := range requests[:min(len(requests), 200)] {

@@ -43,24 +43,25 @@ func TestDecisionsDuringSetSwapsAreRaceFree(t *testing.T) {
 		t.Fatal("no set loaded")
 	}
 
-	stop := make(chan struct{})
-	var swaps atomic.Int64
+	// Deciders keep going until the reloader has published several new sets,
+	// so the run cannot pass on the initially loaded set alone.
+	const publications = 20
+	var published atomic.Int64
 	var swapper sync.WaitGroup
 	swapper.Add(1)
 	go func() {
 		defer swapper.Done()
-		for i := 0; ; i++ {
-			select {
-			case <-stop:
-				return
-			default:
-			}
-			if err := Activate(store, [2]string{permit, deny}[i%2], time.Now); err != nil {
+		for i := 0; published.Load() < publications; i++ {
+			target := [2]string{permit, deny}[i%2]
+			if err := Activate(store, target, time.Now); err != nil {
 				t.Error(err)
 				return
 			}
+			before := active.Load()
 			reloader.Load()
-			swaps.Add(1)
+			if after := active.Load(); after != before && after.Version == target {
+				published.Add(1)
+			}
 		}
 	}()
 
@@ -72,15 +73,14 @@ func TestDecisionsDuringSetSwapsAreRaceFree(t *testing.T) {
 		deciders.Add(1)
 		go func(seen map[string]int) {
 			defer deciders.Done()
-			for range 2000 {
+			for published.Load() < publications {
 				reason, _ := active.Load().Decide(caller, "p", "https://u.example/mcp", "t", []byte(`{"n": 1}`))
 				seen[reason]++
 			}
 		}(outcomes[g])
 	}
-	deciders.Wait()
-	close(stop)
 	swapper.Wait()
+	deciders.Wait()
 
 	total := map[string]int{}
 	for _, seen := range outcomes {
@@ -88,7 +88,8 @@ func TestDecisionsDuringSetSwapsAreRaceFree(t *testing.T) {
 			total[reason] += count
 		}
 	}
-	if swaps.Load() < 2 || total["permitted"]+total["policy_denied"] != 8*2000 {
-		t.Fatalf("swaps %d, outcomes %v", swaps.Load(), total)
+	// Both sets must have decided calls, and no decision may have any other outcome.
+	if total["permitted"] == 0 || total["policy_denied"] == 0 || len(total) != 2 {
+		t.Fatalf("outcomes across %d publications: %v", published.Load(), total)
 	}
 }

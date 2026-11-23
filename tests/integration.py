@@ -174,13 +174,15 @@ if os.environ.get("PROBE_PHASE") == "restarted":
         except (FileNotFoundError, json.JSONDecodeError):
             report = {}
         # The report from before the restart still names the last good set.
-        if report.get("active") == rejected_set and report.get("outcome") == "rejected" and not report.get("enforcing"):
+        if report.get("active") == rejected_set and report.get("outcome") == "rejected" and report.get("enforcing", None) == "":
             break
         assert time.monotonic() < deadline, f"restarted gateway did not report the rejection: {report}"
         time.sleep(0.2)
-    operator = key("operator")
-    for name in ("lookup", "change"):
-        call(operator, name, {})
+    # The last good set permits this guest call, so its refusal comes from the
+    # missing evaluator, not from a policy decision or a credential check.
+    guest = key("guest")
+    response = call(guest, "lookup", {})
+    assert response["error"]["message"] == "Tool call denied", response
     print("Verified that a gateway with no valid set refuses tool calls before dispatch.")
     raise SystemExit(0)
 

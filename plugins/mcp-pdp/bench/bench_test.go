@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -128,43 +129,66 @@ func TestSummarizePercentiles(t *testing.T) {
 }
 
 // A gateway validates a new set in the background while calls keep using the
-// current one. Decisions made while a large set compiles must not wait for it.
+// current one. While the reloader compiles a large candidate, decisions read
+// through the active pointer must not wait for it.
 func TestDecisionsDoNotWaitForValidation(t *testing.T) {
 	rules, tools, vocab := Synthetic(4, small)
-	current, err := policy.Compile(rules, tools, []byte("[]"), "current")
-	if err != nil {
+	bigRules, bigTools, _ := Synthetic(5, Sizes{Proxies: 10, ToolsPerProxy: 500, Callers: 10, Rules: 1000})
+	store := t.TempDir()
+	publish := func(label string, rules, tools []byte) string {
+		source := t.TempDir()
+		for name, data := range map[string][]byte{"rules.cedar": rules, "tools.json": tools, "checks.json": []byte("[]")} {
+			if err := os.WriteFile(filepath.Join(source, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		set, err := policy.Promote(store, source, label, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+	candidate := publish("candidate", bigRules, bigTools)
+	current := publish("current", rules, tools)
+	var active atomic.Pointer[policy.Snapshot]
+	reloader := policy.NewReloader(store, "", &active)
+	reloader.Load()
+	if active.Load() == nil || active.Load().Version != current {
+		t.Fatal("current set not loaded")
+	}
+	requests := Requests(4, active.Load(), vocab, small)
+	if err := policy.Activate(store, candidate, time.Now); err != nil {
 		t.Fatal(err)
 	}
-	requests := Requests(4, current, vocab, small)
-	large := Sizes{Proxies: 10, ToolsPerProxy: 500, Callers: 10, Rules: 1000}
-	bigRules, bigTools, _ := Synthetic(5, large)
 
-	done := make(chan time.Duration)
+	started, done := make(chan struct{}), make(chan time.Duration)
 	go func() {
-		start := time.Now()
-		if _, err := policy.Compile(bigRules, bigTools, []byte("[]"), "candidate"); err != nil {
-			t.Error(err)
-		}
-		done <- time.Since(start)
+		close(started)
+		begin := time.Now()
+		reloader.Load()
+		done <- time.Since(begin)
 	}()
-	var decided int
-	var slowest time.Duration
+	<-started
+	var samples []time.Duration
 	for compiling := true; compiling; {
 		select {
 		case compile := <-done:
 			compiling = false
-			if decided == 0 {
-				t.Fatalf("no decision completed during a %s compile", compile)
+			if active.Load().Version != candidate {
+				t.Fatal("the candidate was not activated")
 			}
-			if slowest > compile/4 {
-				t.Fatalf("slowest decision %s during a %s compile", slowest, compile)
+			if len(samples) == 0 {
+				t.Fatalf("no decision completed during a %s reload", compile)
+			}
+			// The median ignores a single scheduler or collector pause.
+			if median := summarize(samples).Median; time.Duration(median) > compile/20 {
+				t.Fatalf("median decision %s during a %s reload", time.Duration(median), compile)
 			}
 		default:
-			r := requests[decided%len(requests)]
-			start := time.Now()
-			current.Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
-			slowest = max(slowest, time.Since(start))
-			decided++
+			r := requests[len(samples)%len(requests)]
+			begin := time.Now()
+			active.Load().Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
+			samples = append(samples, time.Since(begin))
 		}
 	}
 }

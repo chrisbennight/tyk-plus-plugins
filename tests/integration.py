@@ -61,9 +61,17 @@ def key(role):
     return response["key"]
 
 
-def rpc(token, method, params):
+def rpc(credential, method, params):
+    # Tokens travel as bearer credentials and keys in their own header. A dict
+    # sends several credential headers at once.
+    if isinstance(credential, dict):
+        headers = credential
+    elif credential.startswith("Bearer "):
+        headers = {"Authorization": credential}
+    else:
+        headers = {"X-API-Key": credential}
     return post("http://gateway:8080/mcp/",
-                {"Authorization": token, "Accept": "application/json, text/event-stream",
+                {**headers, "Accept": "application/json, text/event-stream",
                  "MCP-Protocol-Version": "2025-11-25"},
                 {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
@@ -296,4 +304,51 @@ mismatched = dict(staged, **{"rules.cedar": "permit (principal, action, resource
 point_to(write_set(mismatched, manifest_files={name: digest(staged[name]) for name in FILES}), "not_ready")
 call(guest, "lookup", {}, "found")
 call(guest, "change", {})
+# Callers can present a token instead of a key. Its issuer and subject identify
+# the caller, and the claim the gateway is configured to read carries roles.
+ISSUER, AUDIENCE = "https://issuer.test", "governed-mcp"
+
+
+def token(key="published", **claims):
+    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "alice", "exp": int(time.time()) + 300, **claims}
+    claims = {name: value for name, value in claims.items() if value is not None}
+    request = Request(f"http://issuer:8000/token?key={key}", data=json.dumps(claims).encode())
+    with urlopen(request, timeout=5) as response:
+        return "Bearer " + response.read().decode()
+
+
+def refused(credential):
+    before = observed()["requests"]
+    status, response = rpc(credential, "tools/call", {"name": "lookup", "arguments": {}})
+    assert status in (401, 403) and observed()["requests"] == before, (status, response)
+
+
+call(token(app_roles=["support"]), "lookup", {}, "found")
+call(token(app_roles="support"), "lookup", {}, "found")
+call(token(app_roles=["support"]), "change", {})
+# Only the configured claim grants roles, and a malformed one is refused.
+call(token(roles=["support"]), "lookup", {})
+call(token(app_roles=[7]), "lookup", {})
+# Dropping a malformed claim would leave a valid role that permits this call.
+call(token(app_roles=["support"], groups=[7]), "lookup", {})
+# The gateway refuses tokens it cannot trust before the plug-in sees them.
+refused(token("unpublished", app_roles=["support"]))
+refused(token(app_roles=["support"], iss="https://other.test"))
+refused(token(app_roles=["support"], aud="other"))
+refused(token(app_roles=["support"], exp=int(time.time()) - 300))
+refused("Bearer not-a-token")
+# A token without an expiry would never lapse, so it is refused for every
+# method, not only tool calls.
+refused(token(app_roles=["support"], exp=None))
+status, response = rpc(token(app_roles=["support"], exp=None), "tools/list", {})
+assert status == 403 and response["id"] == 1, (status, response)
+# With a valid key and a valid token, the key is tried first and identifies the
+# caller. Neither credential reaches the upstream, which rejects any it sees.
+# The token's guest role would permit this change, so a denial shows that the
+# token adds nothing to the key's identity.
+call(token(app_roles=["guest"]), "change", {"count": 3}, "updated")
+both = {"X-API-Key": support, "Authorization": token(app_roles=["guest"])}
+call(both, "lookup", {}, "found")
+call(both, "change", {"count": 3})
+refused("not-a-key")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

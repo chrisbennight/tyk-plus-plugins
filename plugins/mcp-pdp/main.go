@@ -3,31 +3,40 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 
 	"github.com/TykTechnologies/tyk/ctx"
-	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/identity"
 	jsonv2 "github.com/go-json-experiment/json"
 )
 
 func Authorize(w http.ResponseWriter, r *http.Request) {
+	var metadata map[string]any
+	if session := ctx.GetSession(r); session != nil {
+		metadata = session.MetaData
+	}
+	// The context also holds the raw credential, so only claims are read from it.
+	data, _ := r.Context().Value(ctx.ContextData).(map[string]any)
+	who, method, callerErr := identity.Resolve(data, metadata, claimNames)
+	// Every request needs an identifiable caller, not only tool calls, so a
+	// credential the plug-in rejects cannot reach any other MCP method. Tool
+	// calls are refused below, through the logged decision. Other requests
+	// pass through without their bodies being read.
 	if ctx.GetMCPMethod(r) != "tools/call" {
+		if callerErr != nil {
+			var envelope struct {
+				ID json.RawMessage `json:"id"`
+			}
+			body, _ := readBody(r)
+			_ = json.Unmarshal(body, &envelope)
+			slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
+			refuse(w, envelope.ID, "Caller not identified")
+		}
 		return
 	}
-	name := ctx.GetMCPPrimitiveName(r)
-	var who policy.Caller
-	if session := ctx.GetSession(r); session != nil {
-		data, err := json.Marshal(session.MetaData["cedar"])
-		if err == nil {
-			if err = json.Unmarshal(data, &who); err != nil {
-				who = policy.Caller{}
-			}
-		}
-	}
-	oas := ctx.GetOASDefinition(r)
-	state := current()
 	var call struct {
 		ID     json.RawMessage `json:"id"`
 		Method string          `json:"method"`
@@ -36,11 +45,11 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			Arguments json.RawMessage `json:"arguments"`
 		} `json:"params"`
 	}
-	// Match the MCP ingress limit in the pinned Tyk gateway.
-	const maxBody = 1 << 20
-	body, readErr := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-	r.Body = io.NopCloser(bytes.NewReader(body))
-	validBody := readErr == nil && len(body) <= maxBody && jsonv2.Unmarshal(body, &call) == nil
+	body, readErr := readBody(r)
+	validBody := readErr == nil && jsonv2.Unmarshal(body, &call) == nil
+	name := ctx.GetMCPPrimitiveName(r)
+	oas := ctx.GetOASDefinition(r)
+	state := current()
 	var rules []string
 	version, label, reason := "", "", "unavailable"
 	if state != nil {
@@ -48,8 +57,8 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case state == nil:
-	case who.Issuer == "" || who.Subject == "":
-		reason = "invalid_caller_metadata"
+	case callerErr != nil:
+		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
 	default:
@@ -58,13 +67,29 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			reason, rules = state.Decide(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
 		}
 	}
-	slog.Info("Cedar authorization", "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules)
+	slog.Info("Cedar authorization", "identity", method, "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules)
 	if reason == "permitted" {
 		return
 	}
+	refuse(w, call.ID, "Tool call denied")
+}
+
+// readBody reads the request body up to the MCP ingress limit of the pinned
+// Tyk gateway and puts it back for the upstream.
+func readBody(r *http.Request) ([]byte, error) {
+	const maxBody = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err == nil && len(body) > maxBody {
+		err = errors.New("request body exceeds the MCP limit")
+	}
+	return body, err
+}
+
+func refuse(w http.ResponseWriter, id json.RawMessage, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": call.ID, "error": map[string]any{"code": -32002, "message": "Tool call denied"}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32002, "message": message}})
 }
 
 func main() {}

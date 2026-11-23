@@ -8,6 +8,13 @@ services:
       MCP_UPSTREAM_URL: ${MCP_UPSTREAM_URL:-http://upstream.invalid/mcp}
       CEDAR_REFRESH_INTERVAL: ${CEDAR_REFRESH_INTERVAL:-5s}
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
+      # Token callers: leave these unset to accept keys only.
+      MCP_TOKEN_JWKS_URL: ${MCP_TOKEN_JWKS_URL:-}
+      MCP_TOKEN_ISSUER: ${MCP_TOKEN_ISSUER:-}
+      MCP_TOKEN_AUDIENCE: ${MCP_TOKEN_AUDIENCE:-}
+      CEDAR_ROLES_CLAIM: ${CEDAR_ROLES_CLAIM-roles}
+      CEDAR_GROUPS_CLAIM: ${CEDAR_GROUPS_CLAIM-groups}
+      CEDAR_SCOPES_CLAIM: ${CEDAR_SCOPES_CLAIM-scope}
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
       TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
     ports:

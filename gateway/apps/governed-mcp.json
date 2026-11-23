@@ -1,13 +1,100 @@
 {
   "openapi": "3.0.3",
-  "info": {"title": "Governed MCP", "version": "1.0"},
+  "info": {
+    "title": "Governed MCP",
+    "version": "1.0"
+  },
   "paths": {},
-  "components": {"securitySchemes": {"key": {"type": "apiKey", "in": "header", "name": "Authorization"}}},
-  "security": [{"key": []}],
+  "components": {
+    "securitySchemes": {
+      "key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      },
+      "token": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "key": []
+    },
+    {
+      "token": []
+    }
+  ],
   "x-tyk-api-gateway": {
-    "info": {"id": "governed", "orgId": "default", "name": "Governed MCP", "state": {"active": true}},
-    "server": {"listenPath": {"value": "/mcp/", "strip": true}, "authentication": {"enabled": true, "stripAuthorizationData": true, "securitySchemes": {"key": {"enabled": true}}}},
-    "upstream": {"url": "env://MCP_UPSTREAM_URL"},
-    "middleware": {"global": {"pluginConfig": {"driver": "goplugin"}, "postAuthenticationPlugins": [{"enabled": true, "functionName": "Authorize", "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"}]}}
+    "info": {
+      "id": "governed",
+      "orgId": "default",
+      "name": "Governed MCP",
+      "state": {
+        "active": true
+      }
+    },
+    "server": {
+      "listenPath": {
+        "value": "/mcp/",
+        "strip": true
+      },
+      "authentication": {
+        "enabled": true,
+        "stripAuthorizationData": true,
+        "securitySchemes": {
+          "key": {
+            "enabled": true
+          },
+          "token": {
+            "enabled": true,
+            "header": {
+              "enabled": true,
+              "name": "Authorization"
+            },
+            "jwksURIs": [
+              {
+                "url": "env://MCP_TOKEN_JWKS_URL",
+                "cacheTimeout": "5m"
+              }
+            ],
+            "signingMethod": "rsa",
+            "identityBaseField": "sub",
+            "defaultPolicies": [
+              "governed-tokens"
+            ],
+            "allowedIssuers": [
+              "env://MCP_TOKEN_ISSUER"
+            ],
+            "allowedAudiences": [
+              "env://MCP_TOKEN_AUDIENCE"
+            ]
+          }
+        },
+        "securityProcessingMode": "compliant"
+      }
+    },
+    "upstream": {
+      "url": "env://MCP_UPSTREAM_URL"
+    },
+    "middleware": {
+      "global": {
+        "pluginConfig": {
+          "driver": "goplugin"
+        },
+        "contextVariables": {
+          "enabled": true
+        },
+        "postPlugins": [
+          {
+            "enabled": true,
+            "functionName": "Authorize",
+            "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+          }
+        ]
+      }
+    }
   }
 }

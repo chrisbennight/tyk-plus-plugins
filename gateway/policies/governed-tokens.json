@@ -1,0 +1,16 @@
+{
+  "id": "governed-tokens",
+  "name": "Token callers",
+  "org_id": "default",
+  "active": true,
+  "rate": 0,
+  "per": 0,
+  "quota_max": -1,
+  "access_rights": {
+    "governed": {
+      "api_id": "governed",
+      "api_name": "Governed MCP",
+      "versions": ["Default"]
+    }
+  }
+}

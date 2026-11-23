@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -220,20 +219,18 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 // without locking or touching the filesystem; only the refresh loop replaces it.
 var active atomic.Pointer[snapshot]
 
-var refresh sync.Once
-
 // The default interval keeps a promoted change visible within seconds while
 // reading the configuration rarely.
 const defaultRefreshInterval = 5 * time.Second
 
-// current returns the active configuration. The first call loads the
-// configuration and starts the refresh loop; later calls never block on it.
+// current returns the active configuration without blocking.
 func current() *snapshot {
-	refresh.Do(startRefresh)
 	return active.Load()
 }
 
-func startRefresh() {
+// The gateway loads the plug-in before it serves traffic, so the first
+// configuration is loaded and the refresh loop started before any tool call.
+func init() {
 	interval := defaultRefreshInterval
 	if value := os.Getenv("CEDAR_REFRESH_INTERVAL"); value != "" {
 		parsed, err := time.ParseDuration(value)

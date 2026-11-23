@@ -23,7 +23,7 @@ Tyk verifies the token's signature against your identity provider's published ke
 
 | Variable | Meaning |
 | --- | --- |
-| `MCP_TOKEN_JWKS_URL` | The identity provider's JSON Web Key Set URL. Tokens must be signed with RSA. |
+| `MCP_TOKEN_JWKS_URL` | The identity provider's JSON Web Key Set URL. Use `https://`: the gateway trusts whatever keys this URL returns, so the connection must be authenticated. Tokens must be signed with RSA. |
 | `MCP_TOKEN_ISSUER` | The exact `iss` value of accepted tokens. |
 | `MCP_TOKEN_AUDIENCE` | An `aud` value that accepted tokens must contain. |
 

@@ -162,6 +162,10 @@ func current() *snapshot {
 	tools, e2 := os.ReadFile(filepath.Join(dir, "tools.json"))
 	checks, e3 := os.ReadFile(filepath.Join(dir, "checks.json"))
 	if e1 != nil || e2 != nil || e3 != nil {
+		if active.version != "unreadable" {
+			slog.Warn("Cedar configuration unreadable", "rules", e1, "tools", e2, "checks", e3)
+			active.version = "unreadable"
+		}
 		return active.snapshot
 	}
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%x%x%x", sha256.Sum256(rules), sha256.Sum256(tools), sha256.Sum256(checks)))))

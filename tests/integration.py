@@ -136,17 +136,18 @@ call(guest, "lookup", {"count": 3}, "found")
 replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
 call(operator, "change", {"count": 2})
 # The operator can delegate a reviewed mutation to the same guest denied above.
-replace(rules, """
+delegated = """
 permit (principal, action, resource) when {
   (principal.roles.contains("support") && resource.reviewed.readOnly) ||
   (principal.roles.contains("guest") && resource.name == "change" &&
    context.numbers.contains({name: "count", value: 3}))
 };
-""")
+"""
+replace(rules, delegated)
 call(guest, "change", {"count": 3}, "updated")
-replace(rules, initial + """
+replace(rules, delegated + """
 forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };
 """)
-call(operator, "change", {"count": 3})
+call(guest, "change", {"count": 3})
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

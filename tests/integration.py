@@ -113,6 +113,10 @@ def point_to(set_id, expect):
     pointer = POLICY / ".active-next"
     pointer.write_text(json.dumps({"set": set_id}))
     pointer.replace(POLICY / "active")
+    return await_report(set_id, expect)
+
+
+def await_report(set_id, expect):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
         try:
@@ -167,7 +171,8 @@ assert sorted(path.name for path in (POLICY / "sets" / shipped).iterdir()) == so
 staged.update({name: (POLICY / "sets" / shipped / name).read_text() for name in FILES})
 assert staged["rules.cedar"].strip() == "", "the gateway must ship without rules"
 assert json.loads(staged["tools.json"]) == {} and json.loads(staged["checks.json"]) == [], staged
-point_to(shipped, "activated")
+# The shipped pointer is checked as shipped, without rewriting it.
+await_report(shipped, "activated")
 call(operator, "lookup", {})
 
 # A denial alone cannot show that an empty file was accepted, because an

@@ -15,7 +15,12 @@ func publishRaw(t *testing.T, store, rules, previous string) string {
 	contents := map[string][]byte{"rules.cedar": []byte(rules), "tools.json": []byte("{}"), "checks.json": []byte("[]")}
 	hashes := hashFiles(contents)
 	set := Fingerprint(hashes)
-	if err := writeSet(store, set, Manifest{Format: FormatVersion, Files: hashes}, contents); err != nil {
+	s, err := openStore(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.unlock()
+	if err := s.writeSet(set, Manifest{Format: FormatVersion, Files: hashes}, contents); err != nil {
 		t.Fatal(err)
 	}
 	pointTo(t, store, Pointer{Set: set, Previous: previous})
@@ -25,7 +30,7 @@ func publishRaw(t *testing.T, store, rules, previous string) string {
 func pointTo(t *testing.T, store string, pointer Pointer) {
 	t.Helper()
 	data, _ := json.Marshal(pointer)
-	if err := writeAtomically(filepath.Join(store, pointerFile), data); err != nil {
+	if err := writeAtomically(filepath.Join(store, pointerFile), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

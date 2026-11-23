@@ -110,7 +110,7 @@ func (r *Reloader) flush() {
 	}
 	data, err := json.MarshalIndent(r.report, "", "  ")
 	if err == nil {
-		err = writeAtomically(r.StatusFile, append(data, '\n'))
+		err = writeAtomically(r.StatusFile, append(data, '\n'), 0o644)
 	}
 	if err != nil {
 		slog.Error("Cedar status report not written", "path", r.StatusFile, "error", err.Error())

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -167,30 +168,70 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 	if _, err := Compile(contents["rules.cedar"], contents["tools.json"], contents["checks.json"], set); err != nil {
 		return "", fmt.Errorf("policy set rejected: %w", err)
 	}
-	if err := writeSet(root, set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, contents); err != nil {
+	store, err := openStore(root)
+	if err != nil {
 		return "", err
 	}
-	return set, Activate(root, set, now)
+	defer store.unlock()
+	if err := store.writeSet(set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, contents); err != nil {
+		return "", err
+	}
+	return set, store.activate(set, now)
 }
 
 // Activate makes an existing set active after validating it again, for example
 // to roll back to the set a pointer records as previous.
-// The promotion time is taken from now once the store lock is held, so it
-// orders switches the same way the previous field does.
 func Activate(root, set string, now func() time.Time) error {
-	if _, _, err := LoadSet(root, set); err != nil {
-		return fmt.Errorf("policy set %s cannot be activated: %w", set, err)
-	}
-	// Serialize publishers so the recorded previous set is the one replaced.
-	unlock, err := lockStore(root)
+	store, err := openStore(root)
 	if err != nil {
 		return err
 	}
-	defer unlock()
+	defer store.unlock()
+	return store.activate(set, now)
+}
+
+// store is a policy store held under its exclusive lock. Every change to a
+// store happens under that lock, so concurrent publishers cannot interleave.
+// The operator chooses the store root's permissions; everything published
+// inside inherits them, so neither a publisher's umask nor this code widens
+// or narrows who can read the policy. A new store root gets 0755.
+type store struct {
+	root     string
+	dirMode  os.FileMode
+	fileMode os.FileMode
+	unlock   func()
+}
+
+func openStore(root string) (*store, error) {
+	if _, err := os.Stat(root); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(root, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, err
+	}
+	s := &store{root: root, dirMode: info.Mode().Perm(), fileMode: info.Mode().Perm() &^ 0o111}
+	if s.unlock, err = lockStore(root, s.fileMode); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// activate validates a set and points active at it. The promotion time is
+// read under the lock, so it orders switches the same way previous does.
+func (s *store) activate(set string, now func() time.Time) error {
+	if _, _, err := LoadSet(s.root, set); err != nil {
+		return fmt.Errorf("policy set %s cannot be activated: %w", set, err)
+	}
 	pointer := Pointer{Set: set, PromotedAt: now().UTC().Format(time.RFC3339Nano)}
 	// An unreadable pointer names no set to record as previous; replacing it is
 	// how an operator repairs a corrupted pointer.
-	if current, err := ReadPointer(root); err == nil {
+	if current, err := ReadPointer(s.root); err == nil {
 		if current.Set == set {
 			pointer.Previous = current.Previous
 		} else {
@@ -201,13 +242,13 @@ func Activate(root, set string, now func() time.Time) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomically(filepath.Join(root, pointerFile), append(data, '\n'))
+	return writeAtomically(filepath.Join(s.root, pointerFile), append(data, '\n'), s.fileMode)
 }
 
 // lockStore takes an exclusive lock on the store, released when the returned
 // function is called or the process exits.
-func lockStore(root string) (func(), error) {
-	file, err := os.OpenFile(filepath.Join(root, ".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+func lockStore(root string, mode os.FileMode) (func(), error) {
+	file, err := os.OpenFile(filepath.Join(root, ".lock"), os.O_CREATE|os.O_RDWR, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -224,22 +265,20 @@ func lockStore(root string) (func(), error) {
 // writeSet stores a set by renaming a completed temporary directory into
 // place, so readers never see a partial set. An intact set with the same
 // fingerprint is reused. A damaged one is replaced, keeping the label it was
-// first published with. Directories get explicit permissions so a gateway
-// running as another user can read the store whatever the publisher's umask,
-// and the sets directory is synced on every path so a reused or new set
-// survives a crash before the pointer names it.
-func writeSet(root, set string, manifest Manifest, contents map[string][]byte) error {
-	sets := filepath.Join(root, setsDir)
-	if err := os.MkdirAll(sets, 0o755); err != nil {
+// first published with; because writeSet runs under the store lock, a set
+// another publisher is writing can never be mistaken for a damaged one. The
+// sets directory is synced on every path so a reused or new set survives a
+// crash before the pointer names it.
+func (s *store) writeSet(set string, manifest Manifest, contents map[string][]byte) error {
+	sets := filepath.Join(s.root, setsDir)
+	if err := os.MkdirAll(sets, s.dirMode); err != nil {
 		return err
 	}
-	for _, dir := range []string{root, sets} {
-		if err := os.Chmod(dir, 0o755); err != nil {
-			return err
-		}
+	if err := os.Chmod(sets, s.dirMode); err != nil {
+		return err
 	}
 	final := filepath.Join(sets, set)
-	if _, _, err := readSet(root, set); err == nil {
+	if _, _, err := readSet(s.root, set); err == nil {
 		return syncDir(sets)
 	}
 	if _, err := os.Stat(final); err == nil {
@@ -258,7 +297,7 @@ func writeSet(root, set string, manifest Manifest, contents map[string][]byte) e
 	}
 	defer os.RemoveAll(staging)
 	for _, name := range Files {
-		if err := writeFileSynced(filepath.Join(staging, name), contents[name]); err != nil {
+		if err := writeFileSynced(filepath.Join(staging, name), contents[name], s.fileMode); err != nil {
 			return err
 		}
 	}
@@ -266,26 +305,23 @@ func writeSet(root, set string, manifest Manifest, contents map[string][]byte) e
 	if err != nil {
 		return err
 	}
-	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n')); err != nil {
+	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n'), s.fileMode); err != nil {
 		return err
 	}
-	if err := os.Chmod(staging, 0o755); err != nil {
+	if err := os.Chmod(staging, s.dirMode); err != nil {
 		return err
 	}
 	if err := syncDir(staging); err != nil {
 		return err
 	}
 	if err := os.Rename(staging, final); err != nil {
-		// A concurrent publisher may have stored the same set first.
-		if _, _, readErr := readSet(root, set); readErr != nil {
-			return err
-		}
+		return err
 	}
 	return syncDir(sets)
 }
 
-func writeFileSynced(path string, data []byte) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+func writeFileSynced(path string, data []byte, mode os.FileMode) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 	if err != nil {
 		return err
 	}
@@ -293,7 +329,7 @@ func writeFileSynced(path string, data []byte) error {
 		file.Close()
 		return err
 	}
-	if err := file.Chmod(0o644); err != nil {
+	if err := file.Chmod(mode); err != nil {
 		file.Close()
 		return err
 	}
@@ -318,7 +354,7 @@ func syncDir(dir string) error {
 
 // writeAtomically replaces path by renaming a completed, synced file over it
 // and syncing its directory, so the replacement survives a crash.
-func writeAtomically(path string, data []byte) error {
+func writeAtomically(path string, data []byte, mode os.FileMode) error {
 	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-")
 	if err != nil {
 		return err
@@ -328,7 +364,7 @@ func writeAtomically(path string, data []byte) error {
 		file.Close()
 		return err
 	}
-	if err := file.Chmod(0o644); err != nil {
+	if err := file.Chmod(mode); err != nil {
 		file.Close()
 		return err
 	}

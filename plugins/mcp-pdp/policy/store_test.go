@@ -170,3 +170,29 @@ func TestPromoteRepairsADamagedManifestAndKeepsTheFirstLabel(t *testing.T) {
 		t.Fatalf("repaired set: %+v, %v", repaired, err)
 	}
 }
+
+func TestPublishedFilesInheritARestrictedStoreRoot(t *testing.T) {
+	store := t.TempDir()
+	if err := os.Chmod(store, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{
+		store:                              0o750,
+		filepath.Join(store, setsDir):      0o750,
+		filepath.Join(store, setsDir, set): 0o750,
+		filepath.Join(store, setsDir, set, "rules.cedar"): 0o640,
+		filepath.Join(store, pointerFile):                 0o640,
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != want {
+			t.Fatalf("%s has mode %v, want %v", path, info.Mode().Perm(), want)
+		}
+	}
+}

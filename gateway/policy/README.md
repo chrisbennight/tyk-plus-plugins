@@ -97,7 +97,7 @@ cedar-policy show -store /path/to/store
 cedar-policy activate -store /path/to/store <previous fingerprint>
 ```
 
-`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set keeps the label it was first published with. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Each switch replaces `active` by atomic rename while holding a lock on the store, so the recorded previous set is the one actually replaced. `activate` also repairs an unreadable `active` file.
+`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set keeps the label it was first published with. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Every change to the store, publishing a set or switching `active`, happens under a lock on the store, so concurrent publishers cannot interleave and the recorded previous set is the one actually replaced. Each switch replaces `active` by atomic rename. Published files and directories take their permissions from the store directory, so set its permissions so the gateway's user can read it; `promote` creates a new store directory readable by all users. `activate` also repairs an unreadable `active` file.
 
 ### What the gateway does
 

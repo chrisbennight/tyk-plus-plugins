@@ -42,14 +42,14 @@ func main() {
 	switch os.Args[1] {
 	case "promote":
 		requireArgs(flags, 1)
-		set, err := policy.Promote(*store, flags.Arg(0), *label, time.Now())
+		set, err := policy.Promote(*store, flags.Arg(0), *label, time.Now)
 		if err != nil {
 			fail(err)
 		}
 		fmt.Println(set)
 	case "activate":
 		requireArgs(flags, 1)
-		if err := policy.Activate(*store, flags.Arg(0), time.Now()); err != nil {
+		if err := policy.Activate(*store, flags.Arg(0), time.Now); err != nil {
 			fail(err)
 		}
 		fmt.Println(flags.Arg(0))

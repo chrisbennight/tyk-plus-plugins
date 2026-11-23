@@ -102,8 +102,10 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 	if err := jsonv2.Unmarshal(data, &manifest, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, manifest, &NotReadyError{Reason: "unreadable manifest: " + err.Error()}
 	}
+	// An unexpected format, including a manifest still missing its fields, is
+	// retried rather than cached as a rejection.
 	if manifest.Format != FormatVersion {
-		return nil, manifest, fmt.Errorf("unsupported policy set format %d", manifest.Format)
+		return nil, manifest, &NotReadyError{Reason: fmt.Sprintf("unsupported policy set format %d", manifest.Format)}
 	}
 	contents := make(map[string][]byte, len(Files))
 	for _, name := range Files {
@@ -132,7 +134,7 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 // set, and makes it active. A file that fails validation leaves the store's
 // active pointer unchanged. Publishing content that already exists keeps the
 // label it was first published with.
-func Promote(root, source, label string, now time.Time) (string, error) {
+func Promote(root, source, label string, now func() time.Time) (string, error) {
 	contents := make(map[string][]byte, len(Files))
 	for _, name := range Files {
 		data, err := os.ReadFile(filepath.Join(source, name))
@@ -154,7 +156,9 @@ func Promote(root, source, label string, now time.Time) (string, error) {
 
 // Activate makes an existing set active after validating it again, for example
 // to roll back to the set a pointer records as previous.
-func Activate(root, set string, now time.Time) error {
+// The promotion time is taken from now once the store lock is held, so it
+// orders switches the same way the previous field does.
+func Activate(root, set string, now func() time.Time) error {
 	if _, _, err := LoadSet(root, set); err != nil {
 		return fmt.Errorf("policy set %s cannot be activated: %w", set, err)
 	}
@@ -164,7 +168,7 @@ func Activate(root, set string, now time.Time) error {
 		return err
 	}
 	defer unlock()
-	pointer := Pointer{Set: set, PromotedAt: now.UTC().Format(time.RFC3339)}
+	pointer := Pointer{Set: set, PromotedAt: now().UTC().Format(time.RFC3339Nano)}
 	// An unreadable pointer names no set to record as previous; replacing it is
 	// how an operator repairs a corrupted pointer.
 	if current, err := ReadPointer(root); err == nil {

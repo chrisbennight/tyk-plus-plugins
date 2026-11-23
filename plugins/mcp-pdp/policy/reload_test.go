@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 // publishRaw stores a set without validating it and points active at it, as a
@@ -46,7 +45,7 @@ func readStatus(t *testing.T, path string) Status {
 
 func TestReloaderKeepsTheLastGoodSetWhenACandidateIsRejected(t *testing.T) {
 	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
-	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "good", time.Unix(0, 0))
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "good", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +64,7 @@ func TestReloaderKeepsTheLastGoodSetWhenACandidateIsRejected(t *testing.T) {
 
 func TestReloaderDeniesAfterARestartWhenTheActiveSetIsRejected(t *testing.T) {
 	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
-	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +86,7 @@ func TestReloaderDeniesAfterARestartWhenTheActiveSetIsRejected(t *testing.T) {
 
 func TestReloaderReportsARollbackFromAnIncompleteSet(t *testing.T) {
 	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
-	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +111,7 @@ func TestReloaderReportsARollbackFromAnIncompleteSet(t *testing.T) {
 func TestReloaderRetriesAFailedStatusWrite(t *testing.T) {
 	store := t.TempDir()
 	statusFile := filepath.Join(t.TempDir(), "missing", "status.json")
-	if _, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0)); err != nil {
+	if _, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", epoch); err != nil {
 		t.Fatal(err)
 	}
 	var active atomic.Pointer[Snapshot]
@@ -129,14 +128,14 @@ func TestReloaderRetriesAFailedStatusWrite(t *testing.T) {
 
 func TestActivateReplacesAnUnreadablePointer(t *testing.T) {
 	store := t.TempDir()
-	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", time.Unix(0, 0))
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(store, pointerFile), []byte("{broken"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Activate(store, set, time.Unix(0, 0)); err != nil {
+	if err := Activate(store, set, epoch); err != nil {
 		t.Fatal(err)
 	}
 	if pointer, err := ReadPointer(store); err != nil || pointer.Set != set || pointer.Previous != "" {

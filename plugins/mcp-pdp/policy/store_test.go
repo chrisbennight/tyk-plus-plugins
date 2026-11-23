@@ -19,11 +19,13 @@ func writeSource(t *testing.T, rules, tools, checks string) string {
 	return dir
 }
 
+func epoch() time.Time { return time.Unix(0, 0) }
+
 const permitAll = `permit (principal, action, resource);`
 
 func TestPromoteActivatesAValidSetAndRecordsThePrevious(t *testing.T) {
 	store := t.TempDir()
-	now := time.Unix(0, 0)
+	now := epoch
 	first, err := Promote(store, writeSource(t, "", "{}", "[]"), "empty", now)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +55,7 @@ func TestPromoteActivatesAValidSetAndRecordsThePrevious(t *testing.T) {
 
 func TestPromoteRejectsAnInvalidSetWithoutMovingThePointer(t *testing.T) {
 	store := t.TempDir()
-	good, err := Promote(store, writeSource(t, "", "{}", "[]"), "", time.Unix(0, 0))
+	good, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +64,7 @@ func TestPromoteRejectsAnInvalidSetWithoutMovingThePointer(t *testing.T) {
 		"tools":  writeSource(t, "", `{"proxy": null}`, "[]"),
 		"checks": writeSource(t, "", "{}", "null"),
 	} {
-		if _, err := Promote(store, source, "", time.Unix(0, 0)); err == nil {
+		if _, err := Promote(store, source, "", epoch); err == nil {
 			t.Fatalf("%s: invalid set was promoted", name)
 		}
 	}
@@ -73,7 +75,7 @@ func TestPromoteRejectsAnInvalidSetWithoutMovingThePointer(t *testing.T) {
 
 func TestLoadSetReportsATamperedSetAsNotReady(t *testing.T) {
 	store := t.TempDir()
-	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", time.Unix(0, 0))
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +90,7 @@ func TestLoadSetReportsATamperedSetAsNotReady(t *testing.T) {
 	if _, _, err := LoadSet(store, set); !errors.As(err, &notReady) {
 		t.Fatalf("tampered set: %v", err)
 	}
-	if err := Activate(store, set, time.Unix(0, 0)); err == nil {
+	if err := Activate(store, set, epoch); err == nil {
 		t.Fatal("a tampered set was activated")
 	}
 }

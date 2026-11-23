@@ -61,9 +61,11 @@ def key(role):
     return response["key"]
 
 
-def rpc(token, method, params):
+def rpc(credential, method, params):
+    # Tokens travel as bearer credentials and keys in their own header.
+    header = "Authorization" if credential.startswith("Bearer ") else "X-API-Key"
     return post("http://gateway:8080/mcp/",
-                {"Authorization": token, "Accept": "application/json, text/event-stream",
+                {header: credential, "Accept": "application/json, text/event-stream",
                  "MCP-Protocol-Version": "2025-11-25"},
                 {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
@@ -296,4 +298,35 @@ mismatched = dict(staged, **{"rules.cedar": "permit (principal, action, resource
 point_to(write_set(mismatched, manifest_files={name: digest(staged[name]) for name in FILES}), "not_ready")
 call(guest, "lookup", {}, "found")
 call(guest, "change", {})
+# Callers can present a token instead of a key. Its issuer and subject identify
+# the caller, and the claim the gateway is configured to read carries roles.
+ISSUER, AUDIENCE = "https://issuer.test", "governed-mcp"
+
+
+def token(key="published", **claims):
+    claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "alice", "exp": int(time.time()) + 300, **claims}
+    request = Request(f"http://issuer:8000/token?key={key}", data=json.dumps(claims).encode())
+    with urlopen(request, timeout=5) as response:
+        return "Bearer " + response.read().decode()
+
+
+def refused(credential):
+    before = observed()["requests"]
+    status, response = rpc(credential, "tools/call", {"name": "lookup", "arguments": {}})
+    assert status in (401, 403) and observed()["requests"] == before, (status, response)
+
+
+call(token(app_roles=["support"]), "lookup", {}, "found")
+call(token(app_roles="support"), "lookup", {}, "found")
+call(token(app_roles=["support"]), "change", {})
+# Only the configured claim grants roles, and a malformed one is refused.
+call(token(roles=["support"]), "lookup", {})
+call(token(app_roles=[7]), "lookup", {})
+# The gateway refuses tokens it cannot trust before the plug-in sees them.
+refused(token("unpublished", app_roles=["support"]))
+refused(token(app_roles=["support"], iss="https://other.test"))
+refused(token(app_roles=["support"], aud="other"))
+refused(token(app_roles=["support"], exp=int(time.time()) - 300))
+refused("Bearer not-a-token")
+refused("not-a-key")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

@@ -30,7 +30,7 @@ func main() {
 	var requests atomic.Uint64
 	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.Header.Get("Authorization") != "" {
+		if r.Header.Get("Authorization") != "" || r.Header.Get("X-API-Key") != "" {
 			http.Error(w, "unexpected caller credential", http.StatusBadRequest)
 			return
 		}

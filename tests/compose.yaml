@@ -3,6 +3,10 @@ services:
     environment:
       MCP_UPSTREAM_URL: http://upstream:8000/mcp
       CEDAR_REFRESH_INTERVAL: 200ms
+      MCP_TOKEN_JWKS_URL: http://issuer:8000/jwks
+      MCP_TOKEN_ISSUER: https://issuer.test
+      MCP_TOKEN_AUDIENCE: governed-mcp
+      CEDAR_ROLES_CLAIM: app_roles
     volumes:
       - policy:/opt/tyk-gateway/cedar:ro
       - status:/opt/tyk-gateway/cedar-status
@@ -10,6 +14,10 @@ services:
     build:
       context: ./tests
       target: upstream
+  issuer:
+    build:
+      context: ./tests
+      target: issuer
   probe:
     build:
       context: ./tests

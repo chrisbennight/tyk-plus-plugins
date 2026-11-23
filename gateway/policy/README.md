@@ -1,15 +1,54 @@
 # Authorize MCP tool calls
 
-Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates callers using its API keys and removes the key before forwarding requests.
+Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates each caller with either a token or a key, and removes the credential before forwarding requests.
 
 **The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call.** Access exists only after you add a tool to the inventory and write a rule that permits calling it. The plug-in has no built-in user types or rules.
 
 ## Callers
 
-Give each caller a Tyk key with access to `governed`. Set the following metadata on the key when provisioning it through Tyk’s control API. Use the verified issuer and subject from your identity source. Roles, groups, and scopes are arrays of strings whose names you choose.
+A caller presents one of two credentials. The gateway tries the key first, then the token.
+
+| Caller | Credential | Identity Cedar sees |
+| --- | --- | --- |
+| A person signed in through your identity provider | `Authorization: Bearer <token>` | The token's claims |
+| A service account | `X-API-Key: <key>` | Metadata on the Tyk key |
+
+When a request carries a valid token, its claims are the whole identity. Key metadata never adds to or replaces them.
+
+Cedar decides which tools every caller may use. Do not give Tyk keys or policies per-tool MCP access rights, because tool access is controlled through Cedar alone.
+
+### Tokens
+
+Tyk verifies the token's signature against your identity provider's published keys, then checks its issuer, audience, and expiry. Set these variables on the gateway:
+
+| Variable | Meaning |
+| --- | --- |
+| `MCP_TOKEN_JWKS_URL` | The identity provider's JSON Web Key Set URL. Tokens must be signed with RSA. |
+| `MCP_TOKEN_ISSUER` | The exact `iss` value of accepted tokens. |
+| `MCP_TOKEN_AUDIENCE` | An `aud` value that accepted tokens must contain. |
+
+Leave all three unset to accept keys only. The gateway then refuses every token.
+
+The caller's issuer and subject come from the `iss` and `sub` claims. A token without both is denied. Roles, groups, and scopes come from the claims named by these variables:
+
+| Variable | Default |
+| --- | --- |
+| `CEDAR_ROLES_CLAIM` | `roles` |
+| `CEDAR_GROUPS_CLAIM` | `groups` |
+| `CEDAR_SCOPES_CLAIM` | `scope` |
+
+Each claim may be a list of strings or one space-separated string. Set a variable to an empty value to ignore that claim. A claim of any other shape denies the call. Use top-level claim names; configure your identity provider to place nested values in a top-level claim.
+
+Every token caller receives access to `governed` through the Tyk policy in [`governed-tokens.json`](../policies/governed-tokens.json). That policy sets no rate limit or quota. Change it if you want Tyk to limit token callers.
+
+A token stays valid until it expires, even after the person is disabled in your identity provider. Issue short-lived tokens so that access ends soon after a person is removed.
+
+### Keys
+
+Give each service account a Tyk key with access to `governed`. Set the following metadata on the key when provisioning it through Tyk's control API. Roles, groups, and scopes are arrays of strings whose names you choose. Deleting the key revokes access immediately.
 
 ```json
-{"meta_data":{"cedar":{"issuer":"company","subject":"jane","roles":["analyst"]}}}
+{"meta_data":{"cedar":{"issuer":"company","subject":"indexer","roles":["analyst"]}}}
 ```
 
 ## Tools and reviewed facts
@@ -110,4 +149,4 @@ The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that de
 
 Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.
 
-Gateway logs record each decision with the caller, tool, reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.
+Gateway logs record each decision with the caller, whether a token or a key identified them, the tool, the reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.

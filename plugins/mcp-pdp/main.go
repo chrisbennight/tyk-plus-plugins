@@ -105,12 +105,9 @@ func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.Ra
 		"issuer": cedar.String(who.Issuer), "subject": cedar.String(who.Subject),
 		"roles": stringsSet(who.Roles), "groups": stringsSet(who.Groups), "scopes": stringsSet(who.Scopes),
 	}
-	reviewed := cedar.NewRecord(cedar.RecordMap{
-		"readOnly": cedar.Boolean(*t.ReadOnly), "risk": cedar.String(t.Risk),
-	})
 	toolFacts := cedar.RecordMap{
 		"proxy": cedar.String(proxy), "upstream": cedar.String(upstream), "name": cedar.String(name),
-		"reviewed": reviewed, "upstreamAnnotations": cedar.NewRecord(annotations),
+		"reviewed": t.reviewed, "upstreamAnnotations": cedar.NewRecord(annotations),
 	}
 	entities := cedar.EntityMap{
 		principal: {UID: principal, Attributes: cedar.NewRecord(callerFacts)},

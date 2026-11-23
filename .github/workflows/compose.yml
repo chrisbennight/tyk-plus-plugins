@@ -14,5 +14,5 @@ jobs:
           export COMPOSE_FILE=compose.yaml:tests/compose.yaml
           trap 'docker compose down -v' EXIT
           docker compose build
-          docker compose up -d gateway
-          docker compose run --rm --use-aliases probe
+          docker compose up -d gateway upstream
+          docker compose run --rm probe

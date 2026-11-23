@@ -2,29 +2,17 @@
 
 import json
 import os
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-received = []
+UPSTREAM = "http://upstream:8000/mcp"
 
 
-class Upstream(BaseHTTPRequestHandler):
-    def do_POST(self):
-        received.append(None)
-        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        received[-1] = (body["params"], self.headers.get("Authorization"))
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(json.dumps({"jsonrpc": "2.0", "id": body["id"],
-                                     "result": {"content": []}}).encode())
-
-    def log_message(self, *_):
-        pass
+def request_count():
+    with urlopen("http://upstream:8000/requests", timeout=5) as response:
+        return int(response.read())
 
 
 def post(url, headers, data):
@@ -47,25 +35,26 @@ def key(role):
     return response["key"]
 
 
-def call(token, name, arguments, allowed):
-    before = len(received)
-    status, response = post("http://gateway:8080/mcp/",
-        {"Authorization": token, "Accept": "application/json, text/event-stream",
-         "MCP-Protocol-Version": "2025-11-25"},
-        {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-         "params": {"name": name, "arguments": arguments}})
-    if allowed:
-        assert status == 200 and "result" in response, (status, response)
-        assert len(received) == before + 1
-        params, auth = received[-1]
-        assert params["name"] == name and params["arguments"] == arguments and auth is None
+def rpc(token, method, params):
+    return post("http://gateway:8080/mcp/",
+                {"Authorization": token, "Accept": "application/json, text/event-stream",
+                 "MCP-Protocol-Version": "2025-11-25"},
+                {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+
+
+def call(token, name, arguments, expected=None):
+    before = request_count()
+    status, response = rpc(token, "tools/call", {"name": name, "arguments": arguments})
+    if expected is None:
+        assert status == 403 and request_count() == before, (name, status, response)
     else:
-        assert status == 403 and len(received) == before, (status, response, len(received))
+        assert status == 200 and response["result"]["content"] == [{"type": "text", "text": expected}], response
+        assert request_count() == before + 1
     return response
 
 
-def publish_inventory(tools):
-    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": "http://probe:8000/mcp", "tools": tools}}))
+def publish_inventory(tools, upstream=UPSTREAM):
+    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
 
 
 def replace(path, text):
@@ -74,59 +63,80 @@ def replace(path, text):
     candidate.replace(path)
 
 
-server = HTTPServer(("", 8000), Upstream)
-threading.Thread(target=server.serve_forever, daemon=True).start()
 for attempt in range(30):
     try:
         with urlopen("http://gateway:9696/hello", timeout=2) as health:
-            if json.load(health)["status"] == "pass":
+            if json.load(health)["status"] == "pass" and request_count() >= 0:
                 break
     except (URLError, ConnectionError):
         pass
     time.sleep(1)
 
-support, operator = key("support"), key("operator")
+support, operator, guest = key("support"), key("operator"), key("guest")
+status, init = rpc(operator, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                                           "clientInfo": {"name": "integration", "version": "1"}})
+assert status == 200 and init["result"]["serverInfo"]["name"] == "test-upstream", init
+status, listing = rpc(operator, "tools/list", {})
+assert status == 200, listing
+catalog = {tool["name"]: tool for tool in listing["result"]["tools"]}
+assert catalog["change"]["annotations"]["readOnlyHint"] is True
+
 rules = Path("/policy/rules.cedar")
 initial = rules.read_text()
-inventory = {"lookup": {"readOnly": True},
-             "change": {"readOnly": False, "arguments": {"count": "long"}}}
+inventory = {"lookup": {"readOnly": True, "definition": catalog["lookup"], "arguments": {"count": "long"}}}
 publish_inventory(inventory)
-
-# Without a usable policy, the gateway must not dispatch even an operator's call.
 replace(rules, "invalid")
-call(operator, "change", {"count": 2}, False)
+call(operator, "lookup", {})
 replace(rules, initial)
-call(support, "lookup", {}, True)
-call(support, "change", {}, False)
-call(operator, "change", {"count": 2}, True)
+call(support, "lookup", {}, "found")
 
-# The operator's classification holds even when the upstream advertises read-only.
-inventory["change"]["definition"] = {"name": "change", "annotations": {"readOnlyHint": True}}
-publish_inventory(inventory)
-call(support, "change", {}, False)
-hidden = call(support, "change", {"count": "wrong"}, False)
-assert call(support, "unknown", {"count": "wrong"}, False) == hidden
+# The guest permit applies across tools for count=3. An upstream hint alone cannot
+# grant the same guest access, and an operator still cannot call an unreviewed tool.
+updated = initial + """
+permit (principal, action, resource) when {
+  context.numbers.contains({name: "count", value: 3}) ||
+  (resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint)
+};
+forbid (principal, action, resource) when {
+  resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint &&
+  context.numbers.contains({name: "count", value: 2})
+};
+"""
+replace(rules, updated)
+call(guest, "lookup", {"count": 3}, "found")
+call(guest, "lookup", {})
+call(operator, "change", {"count": 3})
 
-# A live policy change restricts the same operator call and keeps new mutations
-# operator-only even with a broad permit. A rejected edit preserves both decisions.
-replace(rules, initial + """
-permit (principal, action, resource);
-forbid (principal, action, resource)
-when { context.numbers.contains({name: "count", value: 2}) };
-""")
-inventory["new-tool"] = {"readOnly": False}
+# Onboard the real tool as state-changing. The reviewed classification wins,
+# and the upstream declaration can further restrict the operator's call.
+inventory["change"] = {"readOnly": False, "arguments": {"count": "long"}}
 publish_inventory(inventory)
-call(support, "new-tool", {}, False)
-call(operator, "new-tool", {}, True)
-call(operator, "change", {"count": 2}, False)
+call(operator, "change", {"count": 2}, "updated")
+call(support, "change", {"count": 3})
+inventory["change"]["definition"] = catalog["change"]
+publish_inventory(inventory)
+call(guest, "change", {"count": 3})
+call(operator, "change", {"count": 2})
+call(operator, "change", {"count": 3}, "updated")
+hidden = call(support, "change", {"count": "wrong"})
+assert call(support, "unknown", {"count": "wrong"}) == hidden
+
+# Retargeting requires a fresh review. A rejected inventory or policy edit keeps
+# the working decisions. A forbid that errors during execution blocks dispatch.
+publish_inventory(inventory, "http://replacement.invalid/mcp")
+call(operator, "lookup", {})
+publish_inventory(inventory)
+call(operator, "lookup", {}, "found")
+publish_inventory(dict(inventory, change={"readOnly": False, "argumants": {"count": "long"}}))
+call(operator, "change", {"count": 2})
+publish_inventory(inventory)
+replace(rules, "forbid(principal, action, resource);")
+call(guest, "lookup", {"count": 3}, "found")
 replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
-call(operator, "change", {"count": 2}, False)
-call(operator, "change", {"count": 3}, True)
-
-# A forbid that errors during evaluation must override the matching operator permit.
+call(operator, "change", {"count": 2})
 replace(rules, initial + """
 forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };
 """)
-call(operator, "change", {"count": 3}, False)
-print("Cedar decisions, live policy changes, and upstream dispatch verified.")
+call(operator, "change", {"count": 3})
+print("Verified Cedar access and upstream dispatch with a Go MCP server.")

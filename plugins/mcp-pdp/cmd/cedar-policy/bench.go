@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/bench"
-	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
 
 func runBench(args []string) error {
@@ -49,20 +48,13 @@ func runBench(args []string) error {
 		source = "synthetic"
 		files.Rules, files.Tools, vocab = bench.Synthetic(*seed, sizes)
 		files.Checks = []byte("[]")
-		version = fmt.Sprintf("synthetic-%d", *seed)
+		version = files.Fingerprint()
 	} else {
 		source = "store"
-		pointer, err := policy.ReadPointer(*store)
-		if err != nil {
+		var err error
+		if files, vocab, version, label, err = bench.FromStore(*store, sizes.Callers); err != nil {
 			return err
 		}
-		manifest, contents, err := policy.ReadSet(*store, pointer.Set)
-		if err != nil {
-			return err
-		}
-		files = bench.Files{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"]}
-		vocab = bench.Harvest(files.Rules, sizes.Callers)
-		version, label = pointer.Set, manifest.Label
 	}
 	report, err := bench.Run(files, version, vocab, *seed, sizes, *compileRuns)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -225,7 +226,7 @@ func (s *Snapshot) Tools() []ToolRef {
 	var refs []ToolRef
 	for proxy, inv := range s.tools {
 		for name, t := range inv.Tools {
-			refs = append(refs, ToolRef{Proxy: proxy, Upstream: inv.Upstream, Name: name, Arguments: t.Arguments})
+			refs = append(refs, ToolRef{Proxy: proxy, Upstream: inv.Upstream, Name: name, Arguments: maps.Clone(t.Arguments)})
 		}
 	}
 	slices.SortFunc(refs, func(a, b ToolRef) int {

@@ -1,6 +1,8 @@
 package bench
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"math"
 	"runtime"
 	"runtime/debug"
@@ -15,6 +17,31 @@ import (
 // Files are the three policy files a set consists of.
 type Files struct {
 	Rules, Tools, Checks []byte
+}
+
+// Fingerprint identifies the files as the store would name their set.
+func (f Files) Fingerprint() string {
+	hashes := map[string]string{}
+	for name, data := range map[string][]byte{"rules.cedar": f.Rules, "tools.json": f.Tools, "checks.json": f.Checks} {
+		sum := sha256.Sum256(data)
+		hashes[name] = hex.EncodeToString(sum[:])
+	}
+	return policy.Fingerprint(hashes)
+}
+
+// FromStore reads the active set of a policy store, with a vocabulary drawn
+// from its rules.
+func FromStore(root string, callers int) (files Files, vocab Vocabulary, version, label string, err error) {
+	pointer, err := policy.ReadPointer(root)
+	if err != nil {
+		return files, vocab, "", "", err
+	}
+	manifest, contents, err := policy.ReadSet(root, pointer.Set)
+	if err != nil {
+		return files, vocab, "", "", err
+	}
+	files = Files{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"]}
+	return files, Harvest(files.Rules, callers), pointer.Set, manifest.Label, nil
 }
 
 // Report is the result of one benchmark run. Durations are in nanoseconds.
@@ -105,6 +132,9 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 	if after := heap(); after > before {
 		report.Memory.SetHeapBytes = after - before
 	}
+	// The input files were live for the first measurement, so they must stay
+	// live for the second; otherwise their bytes would be subtracted.
+	runtime.KeepAlive(files)
 
 	tools := snapshot.Tools()
 	proxies := map[string]bool{}

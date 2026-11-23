@@ -6,8 +6,11 @@ package bench
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/rand"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
@@ -31,6 +34,9 @@ var DefaultSizes = Sizes{Proxies: 5, ToolsPerProxy: 40, Callers: 1000, Rules: 50
 // names are drawn more often, as real role and team names are.
 type Vocabulary struct {
 	issuers, subjects, roles, groups, scopes []string
+	// strings and longs supply argument values.
+	strings []string
+	longs   []int64
 }
 
 func names(prefix string, count int) []string {
@@ -104,10 +110,7 @@ type toolSpec struct {
 // vocabulary that callers are built from.
 func Synthetic(seed int64, sizes Sizes) (rules, tools []byte, vocab Vocabulary) {
 	s := &skewed{rng: rand.New(rand.NewSource(seed)), zipf: map[int]*rand.Zipf{}}
-	vocab = Vocabulary{
-		issuers: names("https://idp", 2), subjects: names("user", max(sizes.Callers, 1)),
-		roles: names("role", 24), groups: names("group", 60), scopes: names("scope", 12),
-	}
+	vocab = genericVocabulary(sizes.Callers)
 	inventory := map[string]any{}
 	type ref struct{ proxy, name string }
 	var refs []ref
@@ -189,33 +192,55 @@ func Synthetic(seed int64, sizes Sizes) (rules, tools []byte, vocab Vocabulary) 
 	return []byte(b.String()), tools, vocab
 }
 
-var literal = regexp.MustCompile(`principal\.(roles|groups|scopes)\.contains\("((?:[^"\\]|\\.)*)"\)|principal\.(issuer|subject) == "((?:[^"\\]|\\.)*)"`)
+var (
+	annotation    = regexp.MustCompile(`@\w+\("(?:[^"\\]|\\.)*"\)`)
+	stringLiteral = regexp.MustCompile(`"((?:[^"\\]|\\.)*)"`)
+	longLiteral   = regexp.MustCompile(`-?\b\d+\b`)
+)
 
-// Harvest builds a caller Vocabulary from the names an existing set's rules
-// mention, so generated callers can match those rules. Kinds the rules never
-// mention fall back to generic names.
+// Harvest builds a vocabulary from an existing set's rules, so generated
+// callers and arguments can match them. Every string and integer literal
+// in the rules joins the pools in the order it appears, ahead of generic
+// names. Popular picks therefore favor values the rules test, whatever
+// operator or attribute the rules compare them with.
 func Harvest(rules []byte, callers int) Vocabulary {
-	found := map[string][]string{}
-	seen := map[string]bool{}
-	for _, m := range literal.FindAllStringSubmatch(string(rules), -1) {
-		kind, value := m[1], m[2]
-		if kind == "" {
-			kind, value = m[3]+"s", m[4]
+	text := annotation.ReplaceAllString(string(rules), "")
+	var strs []string
+	seen := map[string]bool{"tools/call": true}
+	for _, m := range stringLiteral.FindAllStringSubmatch(text, -1) {
+		value := m[1]
+		if unquoted, err := strconv.Unquote(m[0]); err == nil {
+			value = unquoted
 		}
-		if !seen[kind+"\x00"+value] {
-			seen[kind+"\x00"+value] = true
-			found[kind] = append(found[kind], value)
+		if !seen[value] {
+			seen[value] = true
+			strs = append(strs, value)
 		}
 	}
-	or := func(kind string, fallback []string) []string {
-		if len(found[kind]) > 0 {
-			return found[kind]
+	var longs []int64
+	seenLong := map[int64]bool{}
+	for _, m := range longLiteral.FindAllString(stringLiteral.ReplaceAllString(text, ""), -1) {
+		if n, err := strconv.ParseInt(m, 10, 64); err == nil && !seenLong[n] {
+			seenLong[n] = true
+			longs = append(longs, n)
 		}
-		return fallback
+	}
+	v := genericVocabulary(callers)
+	join := func(generic []string) []string { return append(slices.Clone(strs), generic...) }
+	v.issuers, v.subjects, v.roles, v.groups, v.scopes = join(v.issuers), join(v.subjects), join(v.roles), join(v.groups), join(v.scopes)
+	v.strings, v.longs = join(v.strings), append(longs, v.longs...)
+	return v
+}
+
+func genericVocabulary(callers int) Vocabulary {
+	longs := make([]int64, 10)
+	for i := range longs {
+		longs[i] = int64(i)
 	}
 	return Vocabulary{
-		issuers: or("issuers", names("https://idp", 2)), subjects: or("subjects", names("user", max(callers, 1))),
-		roles: or("roles", names("role", 24)), groups: or("groups", names("group", 60)), scopes: or("scopes", names("scope", 12)),
+		issuers: names("https://idp", 2), subjects: names("user", max(callers, 1)),
+		roles: names("role", 24), groups: names("group", 60), scopes: names("scope", 12),
+		strings: names("v", 10), longs: longs,
 	}
 }
 
@@ -237,17 +262,18 @@ type Request struct {
 	Arguments json.RawMessage
 }
 
-func arguments(s *skewed, declared map[string]string) json.RawMessage {
+func (v Vocabulary) arguments(s *skewed, declared map[string]string) json.RawMessage {
 	args := map[string]any{}
-	for name, kind := range declared {
+	// Sorted order keeps the random sequence, and so the workload, fixed for a seed.
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
 		if s.rng.Intn(5) == 0 {
 			continue
 		}
-		switch kind {
+		switch declared[name] {
 		case "string":
-			args[name] = fmt.Sprintf("v%d", s.rng.Intn(10))
+			args[name] = s.pick(v.strings)
 		case "long":
-			args[name] = s.rng.Intn(10)
+			args[name] = v.longs[s.index(len(v.longs))]
 		case "boolean":
 			args[name] = s.rng.Intn(2) == 0
 		}
@@ -267,21 +293,27 @@ func Requests(seed int64, snapshot *policy.Snapshot, vocab Vocabulary, sizes Siz
 	}
 	callers := vocab.callers(s, sizes.Callers)
 	wantPermit := int(float64(sizes.Requests)*sizes.PermitRatio + 0.5)
-	wantDeny := sizes.Requests - wantPermit
+	wantOther := sizes.Requests - wantPermit
+	// Keep up to a full run of each outcome, so a set that cannot produce
+	// the target share still yields a full run from what it does produce.
 	var permitted, other []Request
-	for attempt := 0; attempt < 20*sizes.Requests && (len(permitted) < wantPermit || len(other) < wantDeny); attempt++ {
+	for attempt := 0; attempt < 20*sizes.Requests && (len(permitted) < wantPermit || len(other) < wantOther); attempt++ {
 		t := tools[s.index(len(tools))]
-		r := Request{Caller: callers[s.index(len(callers))], Tool: t, Arguments: arguments(s, t.Arguments)}
+		r := Request{Caller: callers[s.index(len(callers))], Tool: t, Arguments: vocab.arguments(s, t.Arguments)}
 		if outcome, _ := snapshot.Decide(r.Caller, t.Proxy, t.Upstream, t.Name, r.Arguments); outcome == "permitted" {
-			if len(permitted) < wantPermit {
+			if len(permitted) < sizes.Requests {
 				permitted = append(permitted, r)
 			}
-		} else if len(other) < wantDeny {
+		} else if len(other) < sizes.Requests {
 			other = append(other, r)
 		}
 	}
-	out := append(permitted, other...)
-	// Fill any shortfall from the outcome the set does produce.
+	take := min(wantPermit, len(permitted))
+	if short := wantOther - len(other); short > 0 {
+		take = min(len(permitted), take+short)
+	}
+	out := append(permitted[:take:take], other[:min(len(other), sizes.Requests-take)]...)
+	// Repeat the drawn calls if the attempts ran out before a full run.
 	for i := 0; len(out) < sizes.Requests && len(out) > 0; i++ {
 		out = append(out, out[i])
 	}

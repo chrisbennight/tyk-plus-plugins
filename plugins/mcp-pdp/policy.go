@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/cedar-policy/cedar-go"
@@ -63,16 +64,58 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Operators choose the names of reviewed facts and tags. The plug-in gives
+// no name a meaning; only the operator's rules do.
 type tool struct {
-	ReadOnly   *bool             `json:"readOnly"`
-	Risk       string            `json:"risk"`
-	Definition *toolDefinition   `json:"definition"`
-	Arguments  map[string]string `json:"arguments"`
+	Facts      map[string]json.RawMessage `json:"facts"`
+	Tags       []string                   `json:"tags"`
+	Definition *toolDefinition            `json:"definition"`
+	Arguments  map[string]string          `json:"arguments"`
+	reviewed   cedar.Record
+}
+
+func (t *tool) prepare(name string) error {
+	if t.Definition != nil && t.Definition.Name != name {
+		return fmt.Errorf("upstream definition name differs from reviewed tool %q", name)
+	}
+	for _, kind := range t.Arguments {
+		switch kind {
+		case "string", "long", "boolean":
+		default:
+			return fmt.Errorf("unsupported argument type %q", kind)
+		}
+	}
+	values := scalarFacts{}
+	for fact, raw := range t.Facts {
+		switch raw[0] {
+		case '"':
+			var value string
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return err
+			}
+			values.add("string", fact, cedar.String(value))
+		case 't', 'f':
+			values.add("boolean", fact, cedar.Boolean(raw[0] == 't'))
+		default:
+			var value *int64
+			if json.Unmarshal(raw, &value) != nil || value == nil {
+				return fmt.Errorf("fact %q on tool %q must be a string, boolean, or signed 64-bit integer", fact, name)
+			}
+			values.add("long", fact, cedar.Long(*value))
+		}
+	}
+	fields := values.fields()
+	if slices.Contains(t.Tags, "") {
+		return fmt.Errorf("tool %q has an empty tag", name)
+	}
+	fields["tags"] = stringsSet(t.Tags)
+	t.reviewed = cedar.NewRecord(fields)
+	return nil
 }
 
 type inventory struct {
-	Upstream string          `json:"upstream"`
-	Tools    map[string]tool `json:"tools"`
+	Upstream string           `json:"upstream"`
+	Tools    map[string]*tool `json:"tools"`
 }
 
 type snapshot struct {
@@ -119,35 +162,30 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
 		}
 		for name, t := range inv.Tools {
-			if name == "" || t.ReadOnly == nil {
-				return nil, fmt.Errorf("tool %q needs a reviewed readOnly classification", name)
+			if name == "" || t == nil {
+				return nil, fmt.Errorf("tool %q for proxy %q must be a named object", name, proxy)
 			}
-			if t.Definition != nil && t.Definition.Name != name {
-				return nil, fmt.Errorf("upstream definition name differs from reviewed tool %q", name)
-			}
-			for _, kind := range t.Arguments {
-				switch kind {
-				case "string", "long", "boolean":
-				default:
-					return nil, fmt.Errorf("unsupported argument type %q", kind)
-				}
+			if err := t.prepare(name); err != nil {
+				return nil, err
 			}
 		}
 	}
+	// Activation checks are optional. An operator adds them to test a candidate's
+	// decisions before it can replace the last good configuration.
 	var cases []struct {
 		Caller           caller          `json:"caller"`
 		Proxy            string          `json:"proxy"`
 		Upstream         string          `json:"upstream"`
 		Tool             string          `json:"tool"`
 		Arguments        json.RawMessage `json:"arguments"`
-		ReviewedReadOnly *bool           `json:"reviewedReadOnly"`
+		HypotheticalTool *tool           `json:"hypotheticalTool"`
 		Expect           string          `json:"expect"`
 	}
 	if err := jsonv2.Unmarshal(checks, &cases, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, err
 	}
-	if len(cases) == 0 {
-		return nil, fmt.Errorf("at least one activation check is required")
+	if cases == nil {
+		return nil, fmt.Errorf("activation checks must be an array")
 	}
 	for i, c := range cases {
 		if c.Caller.Issuer == "" || c.Caller.Subject == "" || c.Proxy == "" || c.Tool == "" || c.Upstream == "" {
@@ -159,13 +197,13 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 			return nil, fmt.Errorf("invalid expected outcome in activation check %d", i)
 		}
 		candidate := s
-		if c.ReviewedReadOnly != nil {
-			if len(c.Arguments) != 0 {
-				return nil, fmt.Errorf("argument check %d requires a real inventory entry", i)
+		if h := c.HypotheticalTool; h != nil {
+			if err := h.prepare(c.Tool); err != nil {
+				return nil, fmt.Errorf("activation check %d: %w", i, err)
 			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
 			candidate = &snapshot{policies: s.policies, tools: map[string]inventory{
-				c.Proxy: {Upstream: c.Upstream, Tools: map[string]tool{c.Tool: {ReadOnly: c.ReviewedReadOnly}}},
+				c.Proxy: {Upstream: c.Upstream, Tools: map[string]*tool{c.Tool: h}},
 			}}
 		}
 		reason, _ := candidate.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)

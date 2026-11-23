@@ -9,6 +9,31 @@ from urllib.request import Request, urlopen
 
 UPSTREAM = "http://upstream:8000/mcp"
 
+# Example rules for one convention: callers with the support role may call tools
+# the operator marked read-only, and only operators may call anything else.
+# The gateway ships none of these; the test installs them.
+EXAMPLE_RULES = """
+@id("support-read")
+permit (principal, action == Action::"tools/call", resource)
+when { principal.roles.contains("support") && resource.reviewed.flags.contains({name: "readOnly", value: true}) };
+
+@id("operator-call")
+permit (principal, action == Action::"tools/call", resource)
+when { principal.roles.contains("operator") };
+
+@id("operator-required-for-changes")
+forbid (principal, action == Action::"tools/call", resource)
+when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !principal.roles.contains("operator") };
+"""
+EXAMPLE_CHECKS = [
+    {"caller": {"issuer": "local", "subject": "support", "roles": ["support"]},
+     "proxy": "governed", "upstream": "http://upstream.invalid/mcp", "tool": "lookup",
+     "hypotheticalTool": {"facts": {"readOnly": True}}, "expect": "permitted"},
+    {"caller": {"issuer": "local", "subject": "support", "roles": ["support"]},
+     "proxy": "governed", "upstream": "http://upstream.invalid/mcp", "tool": "update",
+     "hypotheticalTool": {}, "expect": "policy_denied"},
+]
+
 
 def observed():
     with urlopen("http://upstream:8000/requests", timeout=5) as response:
@@ -82,12 +107,47 @@ assert status == 200, listing
 catalog = {tool["name"]: tool for tool in listing["result"]["tools"]}
 assert catalog["change"]["annotations"]["readOnlyHint"] is True
 
-rules = Path("/policy/rules.cedar")
-initial = rules.read_text()
-inventory = {"lookup": {"readOnly": True, "definition": catalog["lookup"], "arguments": {"count": "long"}}}
-publish_inventory(inventory)
-replace(rules, "invalid")
+# The gateway ships with no rules, tools, or activation checks.
+rules, tools, checks = (Path("/policy") / name for name in ("rules.cedar", "tools.json", "checks.json"))
+assert rules.read_text().strip() == "", "the gateway must ship without rules"
+assert json.loads(tools.read_text()) == {} and json.loads(checks.read_text()) == []
+assert sorted(path.name for path in Path("/policy").iterdir()) == ["checks.json", "rules.cedar", "tools.json"]
 call(operator, "lookup", {})
+
+# A denial alone cannot show that an empty file was accepted, because an
+# unavailable evaluator also denies. Each empty file is swapped in while a
+# permitting configuration is active instead: a rejected file would leave that
+# configuration in force. The first permit relies on the shipped empty checks.
+inventory = {"lookup": {"facts": {"readOnly": True}, "definition": catalog["lookup"],
+                        "arguments": {"count": "long"}}}
+publish_inventory(inventory)
+initial = EXAMPLE_RULES
+replace(rules, initial)
+call(support, "lookup", {}, "found")
+replace(rules, "")
+call(operator, "lookup", {})
+replace(rules, initial)
+call(operator, "lookup", {}, "found")
+replace(tools, "{}")
+call(operator, "lookup", {})
+publish_inventory(inventory)
+call(operator, "lookup", {}, "found")
+# A null tool entry is rejected rather than treated as a reviewed tool.
+publish_inventory(dict(inventory, change=None))
+call(operator, "change", {"count": 2})
+
+# A rejected candidate keeps the last good configuration.
+publish_inventory(inventory)
+replace(checks, json.dumps(EXAMPLE_CHECKS))
+replace(rules, "invalid")
+call(operator, "lookup", {}, "found")
+replace(rules, initial)
+call(support, "lookup", {}, "found")
+# Null checks are not an empty list: alongside empty rules they are rejected.
+replace(checks, "null")
+replace(rules, "")
+call(operator, "lookup", {}, "found")
+replace(checks, json.dumps(EXAMPLE_CHECKS))
 replace(rules, initial)
 call(support, "lookup", {}, "found")
 
@@ -108,9 +168,10 @@ call(guest, "lookup", {"count": 3}, "found")
 call(guest, "lookup", {})
 call(operator, "change", {"count": 3})
 
-# Onboard the real tool as state-changing. The reviewed classification wins,
-# and the upstream declaration can further restrict the operator's call.
-inventory["change"] = {"readOnly": False, "arguments": {"count": "long"}}
+# Onboard the real tool without facts. Under the example rules a tool not marked
+# read-only is reserved for operators whatever the upstream declares, and the
+# upstream declaration can further restrict the operator's call.
+inventory["change"] = {"arguments": {"count": "long"}}
 publish_inventory(inventory)
 call(operator, "change", {"count": 2}, "updated")
 denied = call(support, "change", {"count": 3})
@@ -130,7 +191,7 @@ publish_inventory(inventory, "http://replacement.invalid/mcp")
 call(operator, "lookup", {})
 publish_inventory(inventory)
 call(operator, "lookup", {}, "found")
-publish_inventory(dict(inventory, change={"readOnly": False, "argumants": {"count": "long"}}))
+publish_inventory(dict(inventory, change={"argumants": {"count": "long"}}))
 call(operator, "change", {"count": 2})
 publish_inventory(inventory)
 replace(rules, "forbid(principal, action, resource);")
@@ -140,7 +201,7 @@ call(operator, "change", {"count": 2})
 # The operator can delegate a reviewed mutation to the same guest denied above.
 delegated = """
 permit (principal, action, resource) when {
-  (principal.roles.contains("support") && resource.reviewed.readOnly) ||
+  (principal.roles.contains("support") && resource.reviewed.flags.contains({name: "readOnly", value: true})) ||
   (principal.roles.contains("guest") && resource.name == "change" &&
    context.numbers.contains({name: "count", value: 3}))
 };
@@ -152,4 +213,22 @@ forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };
 """)
 call(guest, "change", {"count": 3})
+
+# Rules can match each kind of operator-defined fact. An invalid fact value
+# rejects the whole inventory and keeps the last good configuration.
+inventory["lookup"]["facts"].update({"risk": "low", "tier": 1})
+inventory["lookup"]["tags"] = ["directory"]
+publish_inventory(inventory)
+replace(rules, delegated + """
+permit (principal, action, resource) when {
+  principal.roles.contains("guest") &&
+  resource.reviewed.strings.contains({name: "risk", value: "low"}) &&
+  resource.reviewed.numbers.contains({name: "tier", value: 1}) &&
+  resource.reviewed.tags.contains("directory")
+};
+""")
+call(guest, "lookup", {}, "found")
+call(guest, "change", {})
+publish_inventory(dict(inventory, lookup={"facts": {"readOnly": True}}, change={"facts": {"weight": 1.5}}))
+call(guest, "lookup", {}, "found")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

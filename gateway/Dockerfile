@@ -11,4 +11,4 @@ FROM tykio/tyk-gateway:v5.16.0
 COPY --from=compiler /mcp-pdp.so /opt/tyk-gateway/middleware/mcp-pdp.so
 COPY tyk.conf /opt/tyk-gateway/tyk.conf
 COPY apps /opt/tyk-gateway/mcp-apps
-COPY policy /opt/tyk-gateway/cedar
+COPY policy/rules.cedar policy/tools.json policy/checks.json /opt/tyk-gateway/cedar/

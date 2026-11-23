@@ -13,10 +13,6 @@ import (
 )
 
 func Authorize(w http.ResponseWriter, r *http.Request) {
-	if ctx.GetMCPMethod(r) != "tools/call" {
-		return
-	}
-	name := ctx.GetMCPPrimitiveName(r)
 	var metadata map[string]any
 	if session := ctx.GetSession(r); session != nil {
 		metadata = session.MetaData
@@ -24,6 +20,17 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	// The context also holds the raw credential, so only claims are read from it.
 	data, _ := r.Context().Value(ctx.ContextData).(map[string]any)
 	who, method, callerErr := identity.Resolve(data, metadata, claimNames)
+	// Every request needs an identifiable caller, not only tool calls, so a
+	// credential the plug-in rejects cannot reach any other MCP method.
+	if callerErr != nil {
+		slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
+		refuse(w, nil, "Caller not identified")
+		return
+	}
+	if ctx.GetMCPMethod(r) != "tools/call" {
+		return
+	}
+	name := ctx.GetMCPPrimitiveName(r)
 	oas := ctx.GetOASDefinition(r)
 	state := current()
 	var call struct {
@@ -46,8 +53,6 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case state == nil:
-	case callerErr != nil:
-		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
 	default:
@@ -60,9 +65,13 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	if reason == "permitted" {
 		return
 	}
+	refuse(w, call.ID, "Tool call denied")
+}
+
+func refuse(w http.ResponseWriter, id json.RawMessage, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": call.ID, "error": map[string]any{"code": -32002, "message": "Tool call denied"}})
+	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "error": map[string]any{"code": -32002, "message": message}})
 }
 
 func main() {}

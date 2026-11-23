@@ -337,12 +337,18 @@ refused(token(app_roles=["support"], iss="https://other.test"))
 refused(token(app_roles=["support"], aud="other"))
 refused(token(app_roles=["support"], exp=int(time.time()) - 300))
 refused("Bearer not-a-token")
-# A token without an expiry would never lapse, so it is refused.
+# A token without an expiry would never lapse, so it is refused for every
+# method, not only tool calls.
 refused(token(app_roles=["support"], exp=None))
+status, response = rpc(token(app_roles=["support"], exp=None), "tools/list", {})
+assert status == 403, (status, response)
 # With a valid key and a valid token, the key is tried first and identifies the
 # caller. Neither credential reaches the upstream, which rejects any it sees.
-both = {"X-API-Key": support, "Authorization": token(app_roles=["operator"])}
+# The token's guest role would permit this change, so a denial shows that the
+# token adds nothing to the key's identity.
+call(token(app_roles=["guest"]), "change", {"count": 3}, "updated")
+both = {"X-API-Key": support, "Authorization": token(app_roles=["guest"])}
 call(both, "lookup", {}, "found")
-call(both, "change", {})
+call(both, "change", {"count": 3})
 refused("not-a-key")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

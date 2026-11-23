@@ -29,7 +29,7 @@ Tyk verifies the token's signature against your identity provider's published ke
 
 Leave all three unset to accept keys only. The gateway then refuses every token.
 
-The caller's issuer and subject come from the `iss` and `sub` claims. A token without both, or without an `exp` expiry, is denied. Roles, groups, and scopes come from the claims named by these variables:
+The caller's issuer and subject come from the `iss` and `sub` claims. A token without both, or without an `exp` expiry, cannot identify a caller, and the gateway refuses every request made with it. Roles, groups, and scopes come from the claims named by these variables:
 
 | Variable | Default |
 | --- | --- |
@@ -45,7 +45,7 @@ A token stays valid until it expires, even after the person is disabled in your 
 
 ### Keys
 
-Give each service account a Tyk key with access to `governed`. Set the following metadata on the key when provisioning it through Tyk's control API. Roles, groups, and scopes are arrays of strings whose names you choose. Deleting the key revokes access immediately.
+Give each service account a Tyk key with access to `governed`. Set the following metadata on the key when provisioning it through Tyk's control API. The gateway refuses every request made with a key that lacks an issuer and subject. Roles, groups, and scopes are arrays of strings whose names you choose. Deleting the key revokes access immediately.
 
 ```json
 {"meta_data":{"cedar":{"issuer":"company","subject":"indexer","roles":["analyst"]}}}

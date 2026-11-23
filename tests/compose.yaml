@@ -2,6 +2,7 @@ services:
   gateway:
     environment:
       MCP_UPSTREAM_URL: http://upstream:8000/mcp
+      CEDAR_REFRESH_INTERVAL: 200ms
     volumes:
       - policy:/opt/tyk-gateway/cedar:ro
   upstream:

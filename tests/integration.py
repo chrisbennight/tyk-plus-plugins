@@ -83,10 +83,16 @@ def publish_inventory(tools, upstream=UPSTREAM):
     replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
 
 
+# The gateway checks for configuration changes every 200ms in this test, so a
+# replaced file is in effect, or rejected, well within this wait.
+SETTLE_SECONDS = 1
+
+
 def replace(path, text):
     candidate = path.with_suffix(".next")
     candidate.write_text(text)
     candidate.replace(path)
+    time.sleep(SETTLE_SECONDS)
 
 
 for attempt in range(30):

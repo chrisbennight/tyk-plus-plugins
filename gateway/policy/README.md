@@ -101,7 +101,7 @@ The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that de
 
 - A set whose files do not match its manifest is treated as not ready, for example while it is still being copied. The gateway keeps its current set and checks again.
 - A set that fails validation is rejected, and the gateway keeps enforcing its last good set.
-- After a restart, if `active` names a set the gateway cannot enforce, it restores the set its own status report last named as enforced. An older set is never restored, because it could grant access a later set revoked. Restart recovery therefore needs `CEDAR_STATUS_FILE` on storage that survives the restart; without it, calls are denied until a valid set is active.
+- `active` only moves to a set that passed validation, so after a restart the gateway enforces the same last good set. If `active` names a set the gateway rejects, for example after a manual edit, calls are denied and the status report shows the rejection. The gateway never falls back to an older set on its own, because an older set could grant access a later set revoked. Roll back with `cedar-policy activate`.
 - With no valid set, tool calls are denied.
 
 Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.

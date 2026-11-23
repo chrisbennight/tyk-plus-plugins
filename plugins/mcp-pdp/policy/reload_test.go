@@ -63,7 +63,7 @@ func TestReloaderKeepsTheLastGoodSetWhenACandidateIsRejected(t *testing.T) {
 	}
 }
 
-func TestReloaderRestoresTheLastGoodSetAfterARestart(t *testing.T) {
+func TestReloaderDeniesAfterARestartWhenTheActiveSetIsRejected(t *testing.T) {
 	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
 	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
 	if err != nil {
@@ -71,52 +71,17 @@ func TestReloaderRestoresTheLastGoodSetAfterARestart(t *testing.T) {
 	}
 	var first atomic.Pointer[Snapshot]
 	NewReloader(store, statusFile, &first).Load()
-	publishRaw(t, store, "invalid", "")
-
-	// The restarted process recovers the set its status report named, even
-	// though the pointer records no previous set.
+	// A pointer edited to name a set this gateway rejects fails closed after
+	// a restart. The previous set is not restored, because it could grant
+	// access a later set revoked.
+	bad := publishRaw(t, store, "invalid", good)
 	var restarted atomic.Pointer[Snapshot]
 	NewReloader(store, statusFile, &restarted).Load()
-	if snapshot := restarted.Load(); snapshot == nil || snapshot.Version != good {
-		t.Fatalf("restart enforced %v", snapshot)
+	if snapshot := restarted.Load(); snapshot != nil {
+		t.Fatalf("restart enforced %s", snapshot.Version)
 	}
-
-	// Without this gateway's own report, an older set is never restored, even
-	// one the pointer records as previous, because it could restore access a
-	// later set revoked.
-	publishRaw(t, store, "invalid", good)
-	var noReport atomic.Pointer[Snapshot]
-	NewReloader(store, "", &noReport).Load()
-	if snapshot := noReport.Load(); snapshot != nil {
-		t.Fatalf("restart without a report enforced %s", snapshot.Version)
-	}
-}
-
-func TestReloaderRetriesRecoveryWhileTheLastGoodSetIsUnavailable(t *testing.T) {
-	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
-	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var first atomic.Pointer[Snapshot]
-	NewReloader(store, statusFile, &first).Load()
-	publishRaw(t, store, "invalid", good)
-	dir := filepath.Join(store, setsDir, good)
-	if err := os.Rename(dir, dir+".away"); err != nil {
-		t.Fatal(err)
-	}
-	var restarted atomic.Pointer[Snapshot]
-	r := NewReloader(store, statusFile, &restarted)
-	r.Load()
-	if restarted.Load() != nil {
-		t.Fatal("an unavailable set was enforced")
-	}
-	if err := os.Rename(dir+".away", dir); err != nil {
-		t.Fatal(err)
-	}
-	r.Load()
-	if snapshot := restarted.Load(); snapshot == nil || snapshot.Version != good {
-		t.Fatalf("recovery was not retried: %v", snapshot)
+	if status := readStatus(t, statusFile); status.Enforcing != "" || status.Active != bad || status.Outcome != "rejected" {
+		t.Fatalf("status %+v", status)
 	}
 }
 

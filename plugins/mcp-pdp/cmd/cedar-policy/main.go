@@ -59,14 +59,19 @@ func main() {
 		if err != nil {
 			fail(err)
 		}
-		_, manifest, err := policy.LoadSet(*store, pointer.Set)
-		if err != nil {
-			fail(err)
-		}
-		data, _ := json.MarshalIndent(struct {
+		// Print the pointer even when its set cannot be loaded, so the previous
+		// fingerprint is available for a rollback.
+		view := struct {
 			policy.Pointer
 			Label string `json:"label,omitempty"`
-		}{pointer, manifest.Label}, "", "  ")
+			Error string `json:"error,omitempty"`
+		}{Pointer: pointer}
+		if _, manifest, err := policy.LoadSet(*store, pointer.Set); err != nil {
+			view.Error = err.Error()
+		} else {
+			view.Label = manifest.Label
+		}
+		data, _ := json.MarshalIndent(view, "", "  ")
 		fmt.Println(string(data))
 	default:
 		fail(fmt.Errorf("unknown command %q", os.Args[1]))

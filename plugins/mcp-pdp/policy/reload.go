@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"sync/atomic"
 	"time"
 )
@@ -32,22 +31,16 @@ type Reloader struct {
 	evaluated string
 	report    Status
 	written   bool
-	recovered string
 }
 
-// NewReloader prepares a reloader. A status report left by an earlier run
-// names the set that run enforced, which a restart can fall back to.
+// NewReloader prepares a reloader. It needs no recovery state of its own:
+// the store's active pointer only moves to sets that passed the same
+// validation, so after a restart the gateway enforces the same last good set.
+// If the pointer names a set this gateway rejects, for example after a manual
+// edit, calls are denied rather than falling back to an older set, which
+// could grant access a later set revoked.
 func NewReloader(root, statusFile string, active *atomic.Pointer[Snapshot]) *Reloader {
-	r := &Reloader{Root: root, StatusFile: statusFile, Active: active}
-	if statusFile != "" {
-		if data, err := os.ReadFile(statusFile); err == nil {
-			var previous Status
-			if json.Unmarshal(data, &previous) == nil && fingerprintPattern.MatchString(previous.Enforcing) {
-				r.recovered = previous.Enforcing
-			}
-		}
-	}
-	return r
+	return &Reloader{Root: root, StatusFile: statusFile, Active: active}
 }
 
 // Load evaluates a newly named active set. An incomplete set is retried on
@@ -64,13 +57,10 @@ func (r *Reloader) Load() {
 	if err != nil {
 		// Evaluate the named set again once the pointer is readable.
 		r.evaluated = ""
-		r.fallBack(pointer)
 		r.record(Status{Outcome: "unreadable", Error: err.Error()})
 		return
 	}
 	if pointer.Set == r.evaluated {
-		// Recovery may have failed while the last good set was unavailable.
-		r.fallBack(pointer)
 		r.flush()
 		return
 	}
@@ -81,30 +71,14 @@ func (r *Reloader) Load() {
 		// Evaluate again on the next call, including if the pointer returns
 		// to the set already enforced.
 		r.evaluated = ""
-		r.fallBack(pointer)
 		r.record(Status{Active: pointer.Set, Outcome: "not_ready", Error: err.Error()})
 	case err != nil:
 		r.evaluated = pointer.Set
-		r.fallBack(pointer)
 		r.record(Status{Active: pointer.Set, Outcome: "rejected", Error: err.Error()})
 	default:
 		r.evaluated = pointer.Set
 		r.Active.Store(next)
 		r.record(Status{Active: pointer.Set, Outcome: "activated"})
-	}
-}
-
-// fallBack restores this gateway's last good set after a restart, when the
-// active pointer names a set it cannot enforce. Only the set this gateway
-// itself last reported enforcing is eligible: an older set could restore
-// access a later set revoked. Without that report, calls stay denied.
-func (r *Reloader) fallBack(pointer Pointer) {
-	if r.Active.Load() != nil || r.recovered == "" || r.recovered == pointer.Set {
-		return
-	}
-	if snapshot, _, err := LoadSet(r.Root, r.recovered); err == nil {
-		r.Active.Store(snapshot)
-		slog.Warn("Cedar configuration restored this gateway's last enforced set", "set", r.recovered)
 	}
 }
 

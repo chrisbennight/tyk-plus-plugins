@@ -111,6 +111,7 @@ assert catalog["change"]["annotations"]["readOnlyHint"] is True
 rules, tools, checks = (Path("/policy") / name for name in ("rules.cedar", "tools.json", "checks.json"))
 assert rules.read_text().strip() == "", "the gateway must ship without rules"
 assert json.loads(tools.read_text()) == {} and json.loads(checks.read_text()) == []
+assert sorted(path.name for path in Path("/policy").iterdir()) == ["checks.json", "rules.cedar", "tools.json"]
 call(operator, "lookup", {})
 
 # A denial alone cannot show that an empty file was accepted, because an

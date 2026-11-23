@@ -62,7 +62,7 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 ## Activation checks
 
-[Activation checks](checks.json) are optional. Each check specifies the caller, proxy, upstream URL, tool, optional arguments, and expected decision, `permitted` or `policy_denied`. A candidate configuration whose checks do not all pass is rejected. To test rules without publishing a tool, give a check a `hypotheticalTool` with its own `facts`, `tags`, and `arguments`. Without one, the check uses the real inventory entry.
+[Activation checks](checks.json) are optional, but add representative permit and deny cases for your own rules so that a change which alters those decisions is rejected before it takes effect. Each check specifies the caller, proxy, upstream URL, tool, optional arguments, and expected decision, `permitted` or `policy_denied`. A candidate configuration whose checks do not all pass is rejected. To test rules without publishing a tool, give a check a `hypotheticalTool` with its own `facts`, `tags`, and `arguments`. Without one, the check uses the real inventory entry.
 
 ```json
 [{"caller": {"issuer": "company", "subject": "jane", "roles": ["analyst"]},

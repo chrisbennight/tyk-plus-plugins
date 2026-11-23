@@ -162,6 +162,30 @@ for attempt in range(30):
         pass
     time.sleep(1)
 
+# The workflow restarts the gateway after the main run leaves `active` naming
+# a set the gateway rejects. The restarted gateway has never loaded a valid
+# set, so it must refuse every tool call before dispatch.
+if os.environ.get("PROBE_PHASE") == "restarted":
+    rejected_set = json.loads((POLICY / "active").read_text())["set"]
+    deadline = time.monotonic() + 30
+    while True:
+        try:
+            report = json.loads(STATUS.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            report = {}
+        # The report from before the restart still names the last good set.
+        if report.get("active") == rejected_set and report.get("outcome") == "rejected" and report.get("enforcing", None) == "":
+            break
+        assert time.monotonic() < deadline, f"restarted gateway did not report the rejection: {report}"
+        time.sleep(0.2)
+    # The last good set permits this guest call, so its refusal comes from the
+    # missing evaluator, not from a policy decision or a credential check.
+    guest = key("guest")
+    response = call(guest, "lookup", {})
+    assert response["error"]["message"] == "Tool call denied", response
+    print("Verified that a gateway with no valid set refuses tool calls before dispatch.")
+    raise SystemExit(0)
+
 support, operator, guest = key("support"), key("operator"), key("guest")
 status, init = rpc(operator, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
                                            "clientInfo": {"name": "integration", "version": "1"}})
@@ -351,4 +375,8 @@ both = {"X-API-Key": support, "Authorization": token(app_roles=["guest"])}
 call(both, "lookup", {}, "found")
 call(both, "change", {"count": 3})
 refused("not-a-key")
+# Leave `active` naming a set that fails validation. The running gateway keeps
+# its last good set; the workflow then restarts it to check fail-closed startup.
+point_to(write_set(dict(staged, **{"rules.cedar": "permit (principal, action, resource) when { invalid };"})), "rejected")
+call(guest, "lookup", {}, "found")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

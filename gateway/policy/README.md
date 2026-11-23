@@ -153,7 +153,7 @@ The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that de
 
 Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.
 
-Gateway logs record each decision with the caller, whether a token or a key identified them, the tool, the reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.
+Gateway logs record each decision with the caller, whether a token or a key identified them, the tool, the reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint, including after a restart with no valid set. Unit tests run under the Go race detector and check that decisions never wait for a set being validated or swapped in.
 
 ## Measuring performance
 

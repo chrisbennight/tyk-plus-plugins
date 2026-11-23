@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -124,5 +125,68 @@ func TestSummarizePercentiles(t *testing.T) {
 	}
 	if got := summarize(samples); got != (Durations{Count: 100, Median: 50, P99: 99, Max: 100}) {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A gateway validates a new set in the background while calls keep using the
+// current one. While the reloader compiles a large candidate, decisions read
+// through the active pointer must not wait for it.
+func TestDecisionsDoNotWaitForValidation(t *testing.T) {
+	rules, tools, vocab := Synthetic(4, small)
+	bigRules, bigTools, _ := Synthetic(5, Sizes{Proxies: 10, ToolsPerProxy: 500, Callers: 10, Rules: 1000})
+	store := t.TempDir()
+	publish := func(label string, rules, tools []byte) string {
+		source := t.TempDir()
+		for name, data := range map[string][]byte{"rules.cedar": rules, "tools.json": tools, "checks.json": []byte("[]")} {
+			if err := os.WriteFile(filepath.Join(source, name), data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		set, err := policy.Promote(store, source, label, time.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+	candidate := publish("candidate", bigRules, bigTools)
+	current := publish("current", rules, tools)
+	var active atomic.Pointer[policy.Snapshot]
+	reloader := policy.NewReloader(store, "", &active)
+	reloader.Load()
+	if active.Load() == nil || active.Load().Version != current {
+		t.Fatal("current set not loaded")
+	}
+	requests := Requests(4, active.Load(), vocab, small)
+	if err := policy.Activate(store, candidate, time.Now); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan time.Duration)
+	go func() {
+		begin := time.Now()
+		reloader.Load()
+		done <- time.Since(begin)
+	}()
+	// Count decisions against the current set that finish while the reload is
+	// still running. A decision that waited for the reload would end the count
+	// at one or two; a reload slow enough to matter leaves room for many.
+	var decided int
+	for compiling := true; compiling; {
+		select {
+		case compile := <-done:
+			compiling = false
+			if active.Load().Version != candidate {
+				t.Fatal("the candidate was not activated")
+			}
+			if decided < 100 {
+				t.Fatalf("only %d decisions completed during a %s reload", decided, compile)
+			}
+		default:
+			r := requests[decided%len(requests)]
+			if snapshot := active.Load(); snapshot.Version == current {
+				snapshot.Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
+				decided++
+			}
+		}
 	}
 }

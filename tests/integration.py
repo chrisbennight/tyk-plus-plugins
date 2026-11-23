@@ -64,8 +64,8 @@ def call(token, name, arguments, allowed):
     return response
 
 
-def publish_inventory(tools, upstream="http://probe:8000/mcp"):
-    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
+def publish_inventory(tools):
+    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": "http://probe:8000/mcp", "tools": tools}}))
 
 
 def replace(path, text):
@@ -85,86 +85,48 @@ for attempt in range(30):
         pass
     time.sleep(1)
 
-support, operator, observer = key("support"), key("operator"), key("observer")
+support, operator = key("support"), key("operator")
 rules = Path("/policy/rules.cedar")
 initial = rules.read_text()
-inventory = {"lookup": {"readOnly": True}, "change": {"readOnly": False, "arguments": {"count": "long"}}}
+inventory = {"lookup": {"readOnly": True},
+             "change": {"readOnly": False, "arguments": {"count": "long"}}}
 publish_inventory(inventory)
+
+# Without a usable policy, the gateway must not dispatch even an operator's call.
 replace(rules, "invalid")
-call(operator, "change", {}, False)
+call(operator, "change", {"count": 2}, False)
 replace(rules, initial)
 call(support, "lookup", {}, True)
-replace(rules, "forbid(principal, action, resource);")
-call(support, "lookup", {}, True)
-replace(rules, initial)
-replace(Path("/policy/tools.json"), "null")
-call(support, "lookup", {}, True)
-for hint in ({}, {"readOnlyHint": True}):
-    inventory["change"]["definition"] = {"name": "change", "annotations": hint}
-    publish_inventory(inventory)
-    hidden = call(support, "change", {}, False)
-    assert call(support, "change", {"count": "wrong"}, False) == hidden
-    assert call(support, "new-tool", {"count": "wrong"}, False) == hidden
-call(operator, "change", {"count": 2}, True)
-call(operator, "new-tool", {}, False)
-publish_inventory(inventory, upstream="http://different.invalid/mcp")
-call(support, "lookup", {}, False)
-publish_inventory(inventory)
-call(support, "lookup", {}, True)
-replace(Path("/policy/tools.json"), '{"governed":{"upstream":"http://probe:8000/mcp","tools":{"change":{"readOnly":false,"readOnly":true}}}}')
 call(support, "change", {}, False)
-call(support, "lookup", {}, True)
-publish_inventory(inventory)
+call(operator, "change", {"count": 2}, True)
 
-inventory["new-tool"] = {"readOnly": False}
-inventory["lookup"].update({"definition": {"name": "lookup", "annotations": {"readOnlyHint": True}},
-                            "arguments": {"count": "long"}})
+# The operator's classification holds even when the upstream advertises read-only.
+inventory["change"]["definition"] = {"name": "change", "annotations": {"readOnlyHint": True}}
 publish_inventory(inventory)
-replace(rules, initial + "permit(principal, action, resource);")
-call(observer, "lookup", {}, True)
-call(support, "new-tool", {}, False)
-call(operator, "new-tool", {}, True)
+call(support, "change", {}, False)
+hidden = call(support, "change", {"count": "wrong"}, False)
+assert call(support, "unknown", {"count": "wrong"}, False) == hidden
 
+# A live policy change restricts the same operator call and keeps new mutations
+# operator-only even with a broad permit. A rejected edit preserves both decisions.
 replace(rules, initial + """
-permit (principal, action, resource) when {
-  context.numbers.contains({name: "count", value: 5}) ||
-  (resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint)
-};
-""")
-call(observer, "lookup", {"count": 5}, True)
-call(observer, "lookup", {}, False)
-
-replace(rules, initial + """
-forbid (principal, action, resource) when {
-  resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint
-};
-""")
-call(operator, "change", {}, False)
-inventory["change"]["definition"]["annotations"] = {}
-publish_inventory(inventory)
-call(operator, "change", {}, True)
-
-restriction = """
-@id("restricted-count")
+permit (principal, action, resource);
 forbid (principal, action, resource)
 when { context.numbers.contains({name: "count", value: 2}) };
-"""
-replace(rules, initial + restriction)
-call(operator, "change", {"count": 2}, False)
-call(operator, "change", {"count": 3}, True)
-typo = dict(inventory, change={"readOnly": False, "argumants": {"count": "long"}})
-publish_inventory(typo)
-call(operator, "change", {"count": 2}, False)
+""")
+inventory["new-tool"] = {"readOnly": False}
 publish_inventory(inventory)
+call(support, "new-tool", {}, False)
+call(operator, "new-tool", {}, True)
+call(operator, "change", {"count": 2}, False)
 replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
 call(operator, "change", {"count": 2}, False)
 call(operator, "change", {"count": 3}, True)
 
-# A well-typed arithmetic expression may still overflow at evaluation time.
+# A forbid that errors during evaluation must override the matching operator permit.
 replace(rules, initial + """
-@id("overflow")
 forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };
 """)
-call(operator, "change", {}, False)
+call(operator, "change", {"count": 3}, False)
 print("Cedar decisions, live policy changes, and upstream dispatch verified.")

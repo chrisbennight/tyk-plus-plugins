@@ -17,6 +17,10 @@ jobs:
           docker compose build
           docker compose up -d gateway upstream issuer
           docker compose run --rm probe
+          # The probe left `active` naming a rejected set. After a restart the
+          # gateway has no valid set and must refuse every tool call.
+          docker compose restart gateway
+          docker compose run --rm -e PROBE_PHASE=restarted probe
       - name: Benchmark Cedar decisions
         run: |
           # The benchmark starts no gateway; Compose still requires its secrets to be set.

@@ -126,3 +126,45 @@ func TestSummarizePercentiles(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A gateway validates a new set in the background while calls keep using the
+// current one. Decisions made while a large set compiles must not wait for it.
+func TestDecisionsDoNotWaitForValidation(t *testing.T) {
+	rules, tools, vocab := Synthetic(4, small)
+	current, err := policy.Compile(rules, tools, []byte("[]"), "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := Requests(4, current, vocab, small)
+	large := Sizes{Proxies: 10, ToolsPerProxy: 500, Callers: 10, Rules: 1000}
+	bigRules, bigTools, _ := Synthetic(5, large)
+
+	done := make(chan time.Duration)
+	go func() {
+		start := time.Now()
+		if _, err := policy.Compile(bigRules, bigTools, []byte("[]"), "candidate"); err != nil {
+			t.Error(err)
+		}
+		done <- time.Since(start)
+	}()
+	var decided int
+	var slowest time.Duration
+	for compiling := true; compiling; {
+		select {
+		case compile := <-done:
+			compiling = false
+			if decided == 0 {
+				t.Fatalf("no decision completed during a %s compile", compile)
+			}
+			if slowest > compile/4 {
+				t.Fatalf("slowest decision %s during a %s compile", slowest, compile)
+			}
+		default:
+			r := requests[decided%len(requests)]
+			start := time.Now()
+			current.Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
+			slowest = max(slowest, time.Since(start))
+			decided++
+		}
+	}
+}

@@ -1,0 +1,77 @@
+// Command cedar-policy publishes and activates policy sets in a policy store.
+// It validates with the same code the gateway uses, so a set it activates is
+// one the gateway accepts.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
+)
+
+const usage = `Usage:
+  cedar-policy promote -store DIR [-label TEXT] SOURCE_DIR
+      Validate rules.cedar, tools.json, and checks.json in SOURCE_DIR, store
+      them as a set, and make that set active.
+  cedar-policy activate -store DIR [-label TEXT] SET
+      Validate an existing set again and make it active, for example to roll
+      back to the set the active pointer records as previous.
+  cedar-policy show -store DIR
+      Print the active pointer.
+`
+
+func main() {
+	if len(os.Args) < 2 {
+		fail(fmt.Errorf("a command is required"))
+	}
+	flags := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
+	flags.Usage = func() { fmt.Fprint(os.Stderr, usage) }
+	store := flags.String("store", "", "policy store directory")
+	label := flags.String("label", "", "human-readable label for the set")
+	if err := flags.Parse(os.Args[2:]); err != nil {
+		fail(err)
+	}
+	if *store == "" {
+		fail(fmt.Errorf("-store is required"))
+	}
+	switch os.Args[1] {
+	case "promote":
+		requireArgs(flags, 1)
+		set, err := policy.Promote(*store, flags.Arg(0), *label, time.Now())
+		if err != nil {
+			fail(err)
+		}
+		fmt.Println(set)
+	case "activate":
+		requireArgs(flags, 1)
+		if err := policy.Activate(*store, flags.Arg(0), *label, time.Now()); err != nil {
+			fail(err)
+		}
+		fmt.Println(flags.Arg(0))
+	case "show":
+		requireArgs(flags, 0)
+		pointer, err := policy.ReadPointer(*store)
+		if err != nil {
+			fail(err)
+		}
+		data, _ := json.MarshalIndent(pointer, "", "  ")
+		fmt.Println(string(data))
+	default:
+		fail(fmt.Errorf("unknown command %q", os.Args[1]))
+	}
+}
+
+func requireArgs(flags *flag.FlagSet, count int) {
+	if flags.NArg() != count {
+		fail(fmt.Errorf("%s expects %d argument(s)", flags.Name(), count))
+	}
+}
+
+func fail(err error) {
+	fmt.Fprintf(os.Stderr, "cedar-policy: %v\n\n%s", err, usage)
+	os.Exit(1)
+}

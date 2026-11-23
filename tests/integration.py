@@ -1,5 +1,6 @@
 """Exercise authorization through Tyk and count the actual upstream dispatches."""
 
+import hashlib
 import json
 import os
 import time
@@ -79,20 +80,65 @@ def call(token, name, arguments, expected=None):
     return response
 
 
-def publish_inventory(tools, upstream=UPSTREAM):
-    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
+# The policy store holds immutable sets and an active pointer, and the gateway
+# reports the set it enforces. The probe publishes sets in the documented store
+# format and waits for that report, so every outcome is observed, not assumed.
+POLICY = Path("/policy")
+STATUS = Path("/status/status.json")
+FILES = ("rules.cedar", "tools.json", "checks.json")
+rules, tools, checks = (Path(name) for name in FILES)
+staged = {}
 
 
-# The gateway checks for configuration changes every 200ms in this test, so a
-# replaced file is in effect, or rejected, well within this wait.
-SETTLE_SECONDS = 1
+def digest(data):
+    return hashlib.sha256(data.encode()).hexdigest()
 
 
-def replace(path, text):
-    candidate = path.with_suffix(".next")
-    candidate.write_text(text)
-    candidate.replace(path)
-    time.sleep(SETTLE_SECONDS)
+def write_set(contents, manifest_files=None):
+    hashes = {name: digest(contents[name]) for name in FILES}
+    set_id = digest("".join(f"{name}\n{hashes[name]}\n" for name in FILES))
+    final = POLICY / "sets" / set_id
+    if not final.exists():
+        staging = POLICY / "sets" / f".staging-{set_id}"
+        staging.mkdir()
+        for name in FILES:
+            (staging / name).write_text(contents[name])
+        manifest = {"format": 1, "files": manifest_files or hashes}
+        (staging / "manifest.json").write_text(json.dumps(manifest))
+        staging.rename(final)
+    return set_id
+
+
+def point_to(set_id, expect):
+    pointer = POLICY / ".active-next"
+    pointer.write_text(json.dumps({"set": set_id}))
+    pointer.replace(POLICY / "active")
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            report = json.loads(STATUS.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            report = {}
+        if report.get("active") == set_id and report.get("outcome") == expect:
+            if expect == "activated":
+                assert report["enforcing"] == set_id, report
+            return report
+        time.sleep(0.05)
+    raise AssertionError(f"set {set_id} was not {expect}: {report}")
+
+
+def publish(expect="activated", **files):
+    for name, text in files.items():
+        staged[f"{name}.cedar" if name == "rules" else f"{name}.json"] = text
+    return point_to(write_set(staged), expect)
+
+
+def replace(path, text, expect="activated"):
+    return publish(expect, **{path.stem: text})
+
+
+def publish_inventory(tools, upstream=UPSTREAM, expect="activated"):
+    publish(expect, tools=json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
 
 
 for attempt in range(30):
@@ -113,11 +159,15 @@ assert status == 200, listing
 catalog = {tool["name"]: tool for tool in listing["result"]["tools"]}
 assert catalog["change"]["annotations"]["readOnlyHint"] is True
 
-# The gateway ships with no rules, tools, or activation checks.
-rules, tools, checks = (Path("/policy") / name for name in ("rules.cedar", "tools.json", "checks.json"))
-assert rules.read_text().strip() == "", "the gateway must ship without rules"
-assert json.loads(tools.read_text()) == {} and json.loads(checks.read_text()) == []
-assert sorted(path.name for path in Path("/policy").iterdir()) == ["checks.json", "rules.cedar", "tools.json"]
+# The gateway ships a store whose active set has no rules, tools, or checks,
+# and it reports enforcing that set.
+shipped = json.loads((POLICY / "active").read_text())["set"]
+assert sorted(path.name for path in POLICY.iterdir()) == ["active", "sets"]
+assert sorted(path.name for path in (POLICY / "sets" / shipped).iterdir()) == sorted(FILES + ("manifest.json",))
+staged.update({name: (POLICY / "sets" / shipped / name).read_text() for name in FILES})
+assert staged["rules.cedar"].strip() == "", "the gateway must ship without rules"
+assert json.loads(staged["tools.json"]) == {} and json.loads(staged["checks.json"]) == [], staged
+point_to(shipped, "activated")
 call(operator, "lookup", {})
 
 # A denial alone cannot show that an empty file was accepted, because an
@@ -139,22 +189,20 @@ call(operator, "lookup", {})
 publish_inventory(inventory)
 call(operator, "lookup", {}, "found")
 # A null tool entry is rejected rather than treated as a reviewed tool.
-publish_inventory(dict(inventory, change=None))
+publish_inventory(dict(inventory, change=None), expect="rejected")
 call(operator, "change", {"count": 2})
 
 # A rejected candidate keeps the last good configuration.
 publish_inventory(inventory)
 replace(checks, json.dumps(EXAMPLE_CHECKS))
-replace(rules, "invalid")
+replace(rules, "invalid", "rejected")
 call(operator, "lookup", {}, "found")
 replace(rules, initial)
 call(support, "lookup", {}, "found")
 # Null checks are not an empty list: alongside empty rules they are rejected.
-replace(checks, "null")
-replace(rules, "")
+publish("rejected", checks="null", rules="")
 call(operator, "lookup", {}, "found")
-replace(checks, json.dumps(EXAMPLE_CHECKS))
-replace(rules, initial)
+publish(checks=json.dumps(EXAMPLE_CHECKS), rules=initial)
 call(support, "lookup", {}, "found")
 
 # The guest permit applies across tools for count=3. An upstream hint alone cannot
@@ -197,12 +245,12 @@ publish_inventory(inventory, "http://replacement.invalid/mcp")
 call(operator, "lookup", {})
 publish_inventory(inventory)
 call(operator, "lookup", {}, "found")
-publish_inventory(dict(inventory, change={"argumants": {"count": "long"}}))
+publish_inventory(dict(inventory, change={"argumants": {"count": "long"}}), expect="rejected")
 call(operator, "change", {"count": 2})
 publish_inventory(inventory)
-replace(rules, "forbid(principal, action, resource);")
+replace(rules, "forbid(principal, action, resource);", "rejected")
 call(guest, "lookup", {"count": 3}, "found")
-replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
+replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};', "rejected")
 call(operator, "change", {"count": 2})
 # The operator can delegate a reviewed mutation to the same guest denied above.
 delegated = """
@@ -235,6 +283,12 @@ permit (principal, action, resource) when {
 """)
 call(guest, "lookup", {}, "found")
 call(guest, "change", {})
-publish_inventory(dict(inventory, lookup={"facts": {"readOnly": True}}, change={"facts": {"weight": 1.5}}))
+publish_inventory(dict(inventory, lookup={"facts": {"readOnly": True}}, change={"facts": {"weight": 1.5}}), expect="rejected")
 call(guest, "lookup", {}, "found")
+# A set whose files do not match its manifest is still being published: the
+# gateway reports it as not ready and keeps enforcing the current set.
+mismatched = dict(staged, **{"rules.cedar": "permit (principal, action, resource);"})
+point_to(write_set(mismatched, manifest_files={name: digest(staged[name]) for name in FILES}), "not_ready")
+call(guest, "lookup", {}, "found")
+call(guest, "change", {})
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/cedar-policy/cedar-go"
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
@@ -214,37 +216,77 @@ func compile(rules, inventoryData, checks []byte, version string) (*snapshot, er
 	return s, nil
 }
 
-var active struct {
-	sync.Mutex
-	version  string
-	snapshot *snapshot
+// active holds the configuration tool calls are decided against. Calls read it
+// without locking or touching the filesystem; only the refresh loop replaces it.
+var active atomic.Pointer[snapshot]
+
+var refresh sync.Once
+
+// The default interval keeps a promoted change visible within seconds while
+// reading the configuration rarely.
+const defaultRefreshInterval = 5 * time.Second
+
+// current returns the active configuration. The first call loads the
+// configuration and starts the refresh loop; later calls never block on it.
+func current() *snapshot {
+	refresh.Do(startRefresh)
+	return active.Load()
 }
 
-// Operators replace files by rename. Serialize reads and activation so an older
-// observation cannot overwrite a newer snapshot after validation.
-func current() *snapshot {
-	active.Lock()
-	defer active.Unlock()
+func startRefresh() {
+	interval := defaultRefreshInterval
+	if value := os.Getenv("CEDAR_REFRESH_INTERVAL"); value != "" {
+		parsed, err := time.ParseDuration(value)
+		if err != nil || parsed <= 0 {
+			slog.Error("Invalid CEDAR_REFRESH_INTERVAL; using the default", "value", value, "default", interval.String())
+		} else {
+			interval = parsed
+		}
+	}
+	var r reloader
+	r.load()
+	go func() {
+		for range time.Tick(interval) {
+			r.load()
+		}
+	}()
+}
+
+// reloader is owned by the refresh loop, so its state needs no lock.
+type reloader struct {
+	version string
+}
+
+// load validates a changed configuration and activates it only if it passes.
+// A rejected or unreadable configuration leaves the last good one active. A
+// panic during validation is contained here so the gateway keeps serving.
+func (r *reloader) load() {
+	defer func() {
+		if failure := recover(); failure != nil {
+			slog.Error("Cedar configuration refresh failed", "panic", fmt.Sprint(failure))
+		}
+	}()
 	dir := "/opt/tyk-gateway/cedar"
 	rules, e1 := os.ReadFile(filepath.Join(dir, "rules.cedar"))
 	tools, e2 := os.ReadFile(filepath.Join(dir, "tools.json"))
 	checks, e3 := os.ReadFile(filepath.Join(dir, "checks.json"))
 	if e1 != nil || e2 != nil || e3 != nil {
-		if active.version != "unreadable" {
+		if r.version != "unreadable" {
 			slog.Warn("Cedar configuration unreadable", "rules", e1, "tools", e2, "checks", e3)
-			active.version = "unreadable"
+			r.version = "unreadable"
 		}
-		return active.snapshot
+		return
 	}
 	version := fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%x%x%x", sha256.Sum256(rules), sha256.Sum256(tools), sha256.Sum256(checks)))))
-	if version != active.version {
-		next, err := compile(rules, tools, checks, version)
-		if err == nil {
-			active.snapshot = next
-		} else {
-			slog.Warn("Cedar configuration rejected", "candidate", version, "error", err.Error())
-		}
-		active.version = version
+	if version == r.version {
+		return
 	}
-	return active.snapshot
+	r.version = version
+	next, err := compile(rules, tools, checks, version)
+	if err != nil {
+		slog.Warn("Cedar configuration rejected", "candidate", version, "error", err.Error())
+		return
+	}
+	active.Store(next)
+	slog.Info("Cedar configuration activated", "version", version)
 }

@@ -322,6 +322,8 @@ call(token(app_roles=["support"]), "change", {})
 # Only the configured claim grants roles, and a malformed one is refused.
 call(token(roles=["support"]), "lookup", {})
 call(token(app_roles=[7]), "lookup", {})
+# Dropping a malformed claim would leave a valid role that permits this call.
+call(token(app_roles=["support"], groups=[7]), "lookup", {})
 # The gateway refuses tokens it cannot trust before the plug-in sees them.
 refused(token("unpublished", app_roles=["support"]))
 refused(token(app_roles=["support"], iss="https://other.test"))

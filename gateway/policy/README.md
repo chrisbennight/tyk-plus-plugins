@@ -122,6 +122,10 @@ The gateway reads a policy store at `/opt/tyk-gateway/cedar`:
 
 The image ships a store whose active set is the empty policy in this directory. To manage policy at run time, mount your own store at `/opt/tyk-gateway/cedar`.
 
+### Upgrading key callers
+
+Earlier builds read keys from the `Authorization` header. Keys now go in `X-API-Key`, and `Authorization` carries tokens only. Update clients that use keys before upgrading; a key sent in `Authorization` is refused.
+
 ### Upgrading from the three-file layout
 
 Earlier builds read `rules.cedar`, `tools.json`, and `checks.json` directly from `/opt/tyk-gateway/cedar`. If you mount a directory containing only those files there, convert it before upgrading: run `cedar-policy promote -store <new store> <old directory>` and mount the new store instead. A gateway that finds no `active` pointer denies every call and reports the pointer as unreadable.

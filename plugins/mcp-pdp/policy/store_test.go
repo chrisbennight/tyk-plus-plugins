@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -102,5 +103,48 @@ func TestReadPointerRejectsAnInvalidSetName(t *testing.T) {
 	}
 	if _, err := ReadPointer(store); err == nil {
 		t.Fatal("an invalid set name was accepted")
+	}
+}
+
+func TestPromoteRepairsADamagedSet(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store, setsDir, set, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := Promote(store, source, "", epoch); err != nil || again != set {
+		t.Fatalf("re-promotion = %s, %v", again, err)
+	}
+	if _, _, err := LoadSet(store, set); err != nil {
+		t.Fatalf("repaired set: %v", err)
+	}
+}
+
+func TestPromoteWritesReadableFilesUnderARestrictiveUmask(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	store := t.TempDir()
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		filepath.Join(store, setsDir),
+		filepath.Join(store, setsDir, set),
+		filepath.Join(store, setsDir, set, "rules.cedar"),
+		filepath.Join(store, setsDir, set, manifestFile),
+		filepath.Join(store, pointerFile),
+	} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm()&0o044 != 0o044 {
+			t.Fatalf("%s is not readable by other users: %v", path, info.Mode())
+		}
 	}
 }

@@ -203,16 +203,29 @@ func lockStore(root string) (func(), error) {
 }
 
 // writeSet stores a set by renaming a completed temporary directory into
-// place, so readers never see a partial set. An existing set with the same
-// fingerprint already holds the same content.
+// place, so readers never see a partial set. An intact set with the same
+// fingerprint already holds the same content; a damaged one is replaced.
+// Permissions are set explicitly so a gateway running as another user can
+// read the set regardless of the publisher's umask, and every file and
+// directory is synced so a crash cannot leave a published set incomplete.
 func writeSet(root, set string, manifest Manifest, contents map[string][]byte) error {
 	sets := filepath.Join(root, setsDir)
 	if err := os.MkdirAll(sets, 0o755); err != nil {
 		return err
 	}
+	if err := os.Chmod(sets, 0o755); err != nil {
+		return err
+	}
 	final := filepath.Join(sets, set)
 	if _, err := os.Stat(final); err == nil {
-		return nil
+		if setIntact(final, manifest.Files) {
+			return nil
+		}
+		damaged := filepath.Join(sets, fmt.Sprintf(".damaged-%s-%d", set, time.Now().UnixNano()))
+		if err := os.Rename(final, damaged); err != nil {
+			return err
+		}
+		defer os.RemoveAll(damaged)
 	}
 	staging, err := os.MkdirTemp(sets, ".staging-")
 	if err != nil {
@@ -220,7 +233,7 @@ func writeSet(root, set string, manifest Manifest, contents map[string][]byte) e
 	}
 	defer os.RemoveAll(staging)
 	for _, name := range Files {
-		if err := os.WriteFile(filepath.Join(staging, name), contents[name], 0o644); err != nil {
+		if err := writeFileSynced(filepath.Join(staging, name), contents[name]); err != nil {
 			return err
 		}
 	}
@@ -228,22 +241,76 @@ func writeSet(root, set string, manifest Manifest, contents map[string][]byte) e
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(staging, manifestFile), append(data, '\n'), 0o644); err != nil {
+	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n')); err != nil {
 		return err
 	}
 	if err := os.Chmod(staging, 0o755); err != nil {
 		return err
 	}
+	if err := syncDir(staging); err != nil {
+		return err
+	}
 	if err := os.Rename(staging, final); err != nil {
-		if _, statErr := os.Stat(final); statErr == nil {
+		if setIntact(final, manifest.Files) {
 			return nil
 		}
 		return err
 	}
-	return nil
+	return syncDir(sets)
 }
 
-// writeAtomically replaces path by renaming a completed file over it.
+// setIntact reports whether dir holds a manifest and files matching hashes.
+func setIntact(dir string, hashes map[string]string) bool {
+	if _, err := os.Stat(filepath.Join(dir, manifestFile)); err != nil {
+		return false
+	}
+	for _, name := range Files {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return false
+		}
+		sum := sha256.Sum256(data)
+		if hex.EncodeToString(sum[:]) != hashes[name] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeFileSynced(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Chmod(0o644); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func syncDir(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	err = handle.Sync()
+	if closeErr := handle.Close(); err == nil {
+		err = closeErr
+	}
+	return err
+}
+
+// writeAtomically replaces path by renaming a completed, synced file over it
+// and syncing its directory, so the replacement survives a crash.
 func writeAtomically(path string, data []byte) error {
 	file, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-")
 	if err != nil {
@@ -258,8 +325,15 @@ func writeAtomically(path string, data []byte) error {
 		file.Close()
 		return err
 	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), path)
+	if err := os.Rename(file.Name(), path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
 }

@@ -83,6 +83,10 @@ The gateway reads a policy store at `/opt/tyk-gateway/cedar`:
 
 The image ships a store whose active set is the empty policy in this directory. To manage policy at run time, mount your own store at `/opt/tyk-gateway/cedar`.
 
+### Upgrading from the three-file layout
+
+Earlier builds read `rules.cedar`, `tools.json`, and `checks.json` directly from `/opt/tyk-gateway/cedar`. If you mount a directory containing only those files there, convert it before upgrading: run `cedar-policy promote -store <new store> <old directory>` and mount the new store instead. A gateway that finds no `active` pointer denies every call and reports the pointer as unreadable.
+
 ### Promoting and rolling back
 
 Use the `cedar-policy` command, which is included in the image at `/opt/tyk-gateway/bin/cedar-policy`. It validates with the same code the gateway runs, so a set it activates is one the gateway accepts.

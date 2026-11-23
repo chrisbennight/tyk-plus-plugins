@@ -11,6 +11,7 @@ jobs:
       - name: Verify Cedar authorization through Tyk
         run: |
           export TYK_GW_SECRET="$(openssl rand -hex 32)"
+          export TYK_GW_NODESECRET="$(openssl rand -hex 32)"
           export COMPOSE_FILE=compose.yaml:tests/compose.yaml
           trap 'docker compose down -v' EXIT
           docker compose build

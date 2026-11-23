@@ -9,6 +9,7 @@ services:
       CEDAR_REFRESH_INTERVAL: ${CEDAR_REFRESH_INTERVAL:-5s}
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
+      TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     depends_on:

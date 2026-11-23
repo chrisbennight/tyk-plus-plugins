@@ -70,7 +70,11 @@ func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Recor
 }
 
 func (s *snapshot) decide(who caller, proxy, upstream, name string, args json.RawMessage) (string, []string) {
-	t, ok := s.tools[proxy][name]
+	inv, exists := s.tools[proxy]
+	if exists && upstream != inv.Upstream {
+		return "unreviewed_upstream", nil
+	}
+	t, ok := inv.Tools[name]
 	if !ok {
 		return "unknown_tool", nil
 	}

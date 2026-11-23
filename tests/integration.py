@@ -64,6 +64,10 @@ def call(token, name, arguments, allowed):
     return response
 
 
+def publish_inventory(tools, upstream="http://probe:8000/mcp"):
+    replace(Path("/policy/tools.json"), json.dumps({"governed": {"upstream": upstream, "tools": tools}}))
+
+
 def replace(path, text):
     candidate = path.with_suffix(".next")
     candidate.write_text(text)
@@ -85,7 +89,7 @@ support, operator, observer = key("support"), key("operator"), key("observer")
 rules = Path("/policy/rules.cedar")
 initial = rules.read_text()
 inventory = {"lookup": {"readOnly": True}, "change": {"readOnly": False, "arguments": {"count": "long"}}}
-replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+publish_inventory(inventory)
 replace(rules, "invalid")
 call(operator, "change", {}, False)
 replace(rules, initial)
@@ -97,21 +101,25 @@ replace(Path("/policy/tools.json"), "null")
 call(support, "lookup", {}, True)
 for hint in ({}, {"readOnlyHint": True}):
     inventory["change"]["definition"] = {"name": "change", "annotations": hint}
-    replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+    publish_inventory(inventory)
     hidden = call(support, "change", {}, False)
     assert call(support, "change", {"count": "wrong"}, False) == hidden
     assert call(support, "new-tool", {"count": "wrong"}, False) == hidden
 call(operator, "change", {"count": 2}, True)
 call(operator, "new-tool", {}, False)
-replace(Path("/policy/tools.json"), '{"governed":{"change":{"readOnly":false,"readOnly":true}}}')
+publish_inventory(inventory, upstream="http://different.invalid/mcp")
+call(support, "lookup", {}, False)
+publish_inventory(inventory)
+call(support, "lookup", {}, True)
+replace(Path("/policy/tools.json"), '{"governed":{"upstream":"http://probe:8000/mcp","tools":{"change":{"readOnly":false,"readOnly":true}}}}')
 call(support, "change", {}, False)
 call(support, "lookup", {}, True)
-replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+publish_inventory(inventory)
 
 inventory["new-tool"] = {"readOnly": False}
 inventory["lookup"].update({"definition": {"name": "lookup", "annotations": {"readOnlyHint": True}},
                             "arguments": {"count": "long"}})
-replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+publish_inventory(inventory)
 replace(rules, initial + "permit(principal, action, resource);")
 call(observer, "lookup", {}, True)
 call(support, "new-tool", {}, False)
@@ -133,7 +141,7 @@ forbid (principal, action, resource) when {
 """)
 call(operator, "change", {}, False)
 inventory["change"]["definition"]["annotations"] = {}
-replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+publish_inventory(inventory)
 call(operator, "change", {}, True)
 
 restriction = """
@@ -144,6 +152,10 @@ when { context.numbers.contains({name: "count", value: 2}) };
 replace(rules, initial + restriction)
 call(operator, "change", {"count": 2}, False)
 call(operator, "change", {"count": 3}, True)
+typo = dict(inventory, change={"readOnly": False, "argumants": {"count": "long"}})
+publish_inventory(typo)
+call(operator, "change", {"count": 2}, False)
+publish_inventory(inventory)
 replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
 call(operator, "change", {"count": 2}, False)
 call(operator, "change", {"count": 3}, True)

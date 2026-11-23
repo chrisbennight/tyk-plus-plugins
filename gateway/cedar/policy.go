@@ -20,25 +20,38 @@ import (
 //go:embed schema.cedarschema
 var inputSchema []byte
 
+// The native upstream definition may include MCP fields outside the Cedar schema.
+type toolDefinition struct {
+	Name        string `json:"name"`
+	Annotations struct {
+		ReadOnlyHint *bool `json:"readOnlyHint"`
+	} `json:"annotations"`
+}
+
+func (d *toolDefinition) UnmarshalJSON(data []byte) error {
+	type wire toolDefinition
+	return jsonv2.Unmarshal(data, (*wire)(d))
+}
+
 type tool struct {
-	ReadOnly   *bool  `json:"readOnly"`
-	Risk       string `json:"risk"`
-	Definition *struct {
-		Name        string `json:"name"`
-		Annotations struct {
-			ReadOnlyHint *bool `json:"readOnlyHint"`
-		} `json:"annotations"`
-	} `json:"definition"`
-	Arguments map[string]string `json:"arguments"`
+	ReadOnly   *bool             `json:"readOnly"`
+	Risk       string            `json:"risk"`
+	Definition *toolDefinition   `json:"definition"`
+	Arguments  map[string]string `json:"arguments"`
+}
+
+type inventory struct {
+	Upstream string          `json:"upstream"`
+	Tools    map[string]tool `json:"tools"`
 }
 
 type snapshot struct {
 	version  string
 	policies *cedar.PolicySet
-	tools    map[string]map[string]tool
+	tools    map[string]inventory
 }
 
-func compile(rules, inventory, checks []byte, version string) (*snapshot, error) {
+func compile(rules, inventoryData, checks []byte, version string) (*snapshot, error) {
 	var schemaDoc schema.Schema
 	if err := schemaDoc.UnmarshalCedar(inputSchema); err != nil {
 		return nil, err
@@ -65,17 +78,17 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 			return nil, fmt.Errorf("duplicate policy ID %s", id)
 		}
 	}
-	if err := jsonv2.Unmarshal(inventory, &s.tools); err != nil {
+	if err := jsonv2.Unmarshal(inventoryData, &s.tools, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, err
 	}
 	if s.tools == nil {
 		return nil, fmt.Errorf("tool inventory must be an object")
 	}
-	for proxy, tools := range s.tools {
-		if proxy == "" || tools == nil {
+	for proxy, inv := range s.tools {
+		if proxy == "" || inv.Upstream == "" || inv.Tools == nil {
 			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
 		}
-		for name, t := range tools {
+		for name, t := range inv.Tools {
 			if name == "" || t.ReadOnly == nil {
 				return nil, fmt.Errorf("tool %q needs a reviewed readOnly classification", name)
 			}
@@ -100,7 +113,7 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 		ReviewedReadOnly *bool           `json:"reviewedReadOnly"`
 		Expect           string          `json:"expect"`
 	}
-	if err := jsonv2.Unmarshal(checks, &cases); err != nil {
+	if err := jsonv2.Unmarshal(checks, &cases, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, err
 	}
 	if len(cases) == 0 {
@@ -121,8 +134,8 @@ func compile(rules, inventory, checks []byte, version string) (*snapshot, error)
 				return nil, fmt.Errorf("argument check %d requires a real inventory entry", i)
 			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
-			candidate = &snapshot{policies: s.policies, tools: map[string]map[string]tool{
-				c.Proxy: {c.Tool: {ReadOnly: c.ReviewedReadOnly}},
+			candidate = &snapshot{policies: s.policies, tools: map[string]inventory{
+				c.Proxy: {Upstream: c.Upstream, Tools: map[string]tool{c.Tool: {ReadOnly: c.ReviewedReadOnly}}},
 			}}
 		}
 		reason, _ := candidate.decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)

@@ -20,7 +20,7 @@ Add reviewed tools to [tools.json](tools.json), keyed by proxy ID and exact upst
 }
 ```
 
-The operator sets `readOnly` and `risk`. For rules that use upstream annotations, copy the upstream’s tool object from `tools/list` into `definition` at onboarding and replace it when reviewing a change. Cedar receives its declared `readOnlyHint` in `resource.upstreamAnnotations`. It can restrict an otherwise permitted call. The supplied [rules](rules.cedar) permit support to invoke reviewed read-only tools and operators to invoke reviewed tools.
+The operator sets `readOnly` and `risk`. For rules that use upstream annotations, copy the upstream’s tool object from `tools/list` into `definition` at onboarding and replace it when reviewing a change. Cedar receives its declared `readOnlyHint` in `resource.upstreamAnnotations`. It can restrict an otherwise permitted call. The supplied [rules](rules.cedar) permit support to invoke reviewed read-only tools and operators to invoke reviewed tools. An explicit forbid reserves reviewed state-changing tools for operators even if another rule broadly permits access.
 
 Cedar sees the caller as `principal`, the tool as `resource`, and the MCP method as `action`. For selected top-level arguments, use `context.strings`, `context.numbers`, and `context.flags` for `string`, `long`, and `boolean` values. For example, `context.numbers.contains({name: "count", value: 2})` matches a submitted integer. See the [policy schema](../cedar/schema.cedarschema).
 

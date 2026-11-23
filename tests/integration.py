@@ -81,7 +81,7 @@ for attempt in range(30):
         pass
     time.sleep(1)
 
-support, operator = key("support"), key("operator")
+support, operator, observer = key("support"), key("operator"), key("observer")
 rules = Path("/policy/rules.cedar")
 initial = rules.read_text()
 inventory = {"lookup": {"readOnly": True}, "change": {"readOnly": False, "arguments": {"count": "long"}}}
@@ -108,14 +108,23 @@ call(support, "change", {}, False)
 call(support, "lookup", {}, True)
 replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
 
+inventory["new-tool"] = {"readOnly": False}
+inventory["lookup"].update({"definition": {"name": "lookup", "annotations": {"readOnlyHint": True}},
+                            "arguments": {"count": "long"}})
+replace(Path("/policy/tools.json"), json.dumps({"governed": inventory}))
+replace(rules, initial + "permit(principal, action, resource);")
+call(observer, "lookup", {}, True)
+call(support, "new-tool", {}, False)
+call(operator, "new-tool", {}, True)
+
 replace(rules, initial + """
 permit (principal, action, resource) when {
   context.numbers.contains({name: "count", value: 5}) ||
   (resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint)
 };
 """)
-call(support, "change", {"count": 5}, True)
-call(support, "change", {}, False)
+call(observer, "lookup", {"count": 5}, True)
+call(observer, "lookup", {}, False)
 
 replace(rules, initial + """
 forbid (principal, action, resource) when {
@@ -135,7 +144,7 @@ when { context.numbers.contains({name: "count", value: 2}) };
 replace(rules, initial + restriction)
 call(operator, "change", {"count": 2}, False)
 call(operator, "change", {"count": 3}, True)
-replace(rules, initial + 'forbid(principal, action, resource) when {principal.missing};')
+replace(rules, initial + 'permit(principal, action, resource) when {principal.missing == "yes"};')
 call(operator, "change", {"count": 2}, False)
 call(operator, "change", {"count": 3}, True)
 

@@ -50,6 +50,11 @@ func fromClaims(context map[string]any, names ClaimNames) (policy.Caller, error)
 	if caller.Subject, err = text(context, "sub"); err != nil {
 		return policy.Caller{}, err
 	}
+	// Tyk rejects an expiry in the past but accepts a token with none. Such a
+	// token would never lapse, so it cannot identify a caller.
+	if _, ok := context[claimPrefix+"exp"].(float64); !ok {
+		return policy.Caller{}, errors.New(`claim "exp" must be a number`)
+	}
 	for _, field := range []struct {
 		claim string
 		into  *[]string

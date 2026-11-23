@@ -13,7 +13,7 @@ A caller presents one of two credentials. The gateway tries the key first, then 
 | A person signed in through your identity provider | `Authorization: Bearer <token>` | The token's claims |
 | A service account | `X-API-Key: <key>` | Metadata on the Tyk key |
 
-When a request carries a valid token, its claims are the whole identity. Key metadata never adds to or replaces them.
+The first credential Tyk accepts identifies the caller. A request with a valid key is identified by that key even if it also carries a token. When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes both credential headers before forwarding the request.
 
 Cedar decides which tools every caller may use. Do not give Tyk keys or policies per-tool MCP access rights, because tool access is controlled through Cedar alone.
 
@@ -29,7 +29,7 @@ Tyk verifies the token's signature against your identity provider's published ke
 
 Leave all three unset to accept keys only. The gateway then refuses every token.
 
-The caller's issuer and subject come from the `iss` and `sub` claims. A token without both is denied. Roles, groups, and scopes come from the claims named by these variables:
+The caller's issuer and subject come from the `iss` and `sub` claims. A token without both, or without an `exp` expiry, is denied. Roles, groups, and scopes come from the claims named by these variables:
 
 | Variable | Default |
 | --- | --- |

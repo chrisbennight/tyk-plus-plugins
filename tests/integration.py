@@ -62,10 +62,16 @@ def key(role):
 
 
 def rpc(credential, method, params):
-    # Tokens travel as bearer credentials and keys in their own header.
-    header = "Authorization" if credential.startswith("Bearer ") else "X-API-Key"
+    # Tokens travel as bearer credentials and keys in their own header. A dict
+    # sends several credential headers at once.
+    if isinstance(credential, dict):
+        headers = credential
+    elif credential.startswith("Bearer "):
+        headers = {"Authorization": credential}
+    else:
+        headers = {"X-API-Key": credential}
     return post("http://gateway:8080/mcp/",
-                {header: credential, "Accept": "application/json, text/event-stream",
+                {**headers, "Accept": "application/json, text/event-stream",
                  "MCP-Protocol-Version": "2025-11-25"},
                 {"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 
@@ -305,6 +311,7 @@ ISSUER, AUDIENCE = "https://issuer.test", "governed-mcp"
 
 def token(key="published", **claims):
     claims = {"iss": ISSUER, "aud": AUDIENCE, "sub": "alice", "exp": int(time.time()) + 300, **claims}
+    claims = {name: value for name, value in claims.items() if value is not None}
     request = Request(f"http://issuer:8000/token?key={key}", data=json.dumps(claims).encode())
     with urlopen(request, timeout=5) as response:
         return "Bearer " + response.read().decode()
@@ -330,5 +337,12 @@ refused(token(app_roles=["support"], iss="https://other.test"))
 refused(token(app_roles=["support"], aud="other"))
 refused(token(app_roles=["support"], exp=int(time.time()) - 300))
 refused("Bearer not-a-token")
+# A token without an expiry would never lapse, so it is refused.
+refused(token(app_roles=["support"], exp=None))
+# With a valid key and a valid token, the key is tried first and identifies the
+# caller. Neither credential reaches the upstream, which rejects any it sees.
+both = {"X-API-Key": support, "Authorization": token(app_roles=["operator"])}
+call(both, "lookup", {}, "found")
+call(both, "change", {})
 refused("not-a-key")
 print("Verified Cedar access and upstream dispatch with a Go MCP server.")

@@ -11,7 +11,7 @@ var names = ClaimNames{Roles: "roles", Groups: "groups", Scopes: "scope"}
 
 func TestTokenClaimsBecomeTheCaller(t *testing.T) {
 	context := map[string]any{
-		"jwt_claims_iss": "https://idp.example", "jwt_claims_sub": "alice",
+		"jwt_claims_iss": "https://idp.example", "jwt_claims_sub": "alice", "jwt_claims_exp": 1.9e9,
 		"jwt_claims_roles": []any{"support"}, "jwt_claims_groups": "team-a team-b",
 		"jwt_claims_scope": "mcp:call", "headers_Authorization": "Bearer secret",
 	}
@@ -24,11 +24,13 @@ func TestTokenClaimsBecomeTheCaller(t *testing.T) {
 	}
 }
 
-func TestTokenWithoutIssuerOrSubjectIsRejected(t *testing.T) {
+func TestTokenWithoutIssuerSubjectOrExpiryIsRejected(t *testing.T) {
 	for _, context := range []map[string]any{
 		{"jwt_claims_sub": "alice"},
 		{"jwt_claims_iss": "https://idp.example", "jwt_claims_sub": 7.0},
 		{"jwt_claims_alg": "RS256"},
+		{"jwt_claims_iss": "https://idp.example", "jwt_claims_sub": "alice"},
+		{"jwt_claims_iss": "https://idp.example", "jwt_claims_sub": "alice", "jwt_claims_exp": "soon"},
 	} {
 		// Key metadata must never stand in for a token that lacks an identity.
 		metadata := map[string]any{"cedar": map[string]any{"issuer": "keys", "subject": "service"}}
@@ -39,7 +41,7 @@ func TestTokenWithoutIssuerOrSubjectIsRejected(t *testing.T) {
 }
 
 func TestMalformedListClaimIsRejected(t *testing.T) {
-	context := map[string]any{"jwt_claims_iss": "i", "jwt_claims_sub": "s", "jwt_claims_roles": []any{"a", 1.0}}
+	context := map[string]any{"jwt_claims_iss": "i", "jwt_claims_sub": "s", "jwt_claims_exp": 1.9e9, "jwt_claims_roles": []any{"a", 1.0}}
 	if _, _, err := Resolve(context, nil, names); err == nil {
 		t.Fatal("accepted a non-string role")
 	}
@@ -58,7 +60,7 @@ func TestMalformedListClaimIsRejected(t *testing.T) {
 }
 
 func TestUnmappedClaimsAreIgnored(t *testing.T) {
-	context := map[string]any{"jwt_claims_iss": "i", "jwt_claims_sub": "s", "jwt_claims_roles": []any{"operator"}}
+	context := map[string]any{"jwt_claims_iss": "i", "jwt_claims_sub": "s", "jwt_claims_exp": 1.9e9, "jwt_claims_roles": []any{"operator"}}
 	caller, _, err := Resolve(context, nil, ClaimNames{})
 	if err != nil || caller.Roles != nil {
 		t.Fatalf("got %+v %v", caller, err)

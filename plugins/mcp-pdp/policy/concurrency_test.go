@@ -43,44 +43,52 @@ func TestDecisionsDuringSetSwapsAreRaceFree(t *testing.T) {
 		t.Fatal("no set loaded")
 	}
 
-	// Deciders keep going until the reloader has published several new sets,
-	// so the run cannot pass on the initially loaded set alone.
+	// The deciders start first and keep going until the swapper stops, which
+	// it does after publishing several new sets or after a bounded number of
+	// attempts, so a failure cannot hang the build.
 	const publications = 20
 	var published atomic.Int64
-	var swapper sync.WaitGroup
-	swapper.Add(1)
-	go func() {
-		defer swapper.Done()
-		for i := 0; published.Load() < publications; i++ {
-			target := [2]string{permit, deny}[i%2]
-			if err := Activate(store, target, time.Now); err != nil {
-				t.Error(err)
-				return
-			}
-			before := active.Load()
-			reloader.Load()
-			if after := active.Load(); after != before && after.Version == target {
-				published.Add(1)
-			}
-		}
-	}()
-
+	var swapping atomic.Bool
+	swapping.Store(true)
 	caller := Caller{Issuer: "i", Subject: "s", Roles: []string{"r"}}
-	var deciders sync.WaitGroup
+	var deciders, ready sync.WaitGroup
 	outcomes := make([]map[string]int, 8)
 	for g := range outcomes {
 		outcomes[g] = map[string]int{}
 		deciders.Add(1)
+		ready.Add(1)
 		go func(seen map[string]int) {
 			defer deciders.Done()
-			for published.Load() < publications {
+			ready.Done()
+			for swapping.Load() {
 				reason, _ := active.Load().Decide(caller, "p", "https://u.example/mcp", "t", []byte(`{"n": 1}`))
 				seen[reason]++
 			}
 		}(outcomes[g])
 	}
-	swapper.Wait()
+	ready.Wait()
+	for i := 0; i < 50*publications && published.Load() < publications; i++ {
+		target := [2]string{permit, deny}[i%2]
+		if err := Activate(store, target, time.Now); err != nil {
+			t.Error(err)
+			break
+		}
+		before := active.Load()
+		reloader.Load()
+		if after := active.Load(); after != before && after.Version == target {
+			published.Add(1)
+		}
+	}
+	swapping.Store(false)
 	deciders.Wait()
+	if published.Load() < publications {
+		t.Fatalf("only %d of %d sets were published", published.Load(), publications)
+	}
+	for g, seen := range outcomes {
+		if len(seen) == 0 {
+			t.Fatalf("worker %d made no decision during the swaps", g)
+		}
+	}
 
 	total := map[string]int{}
 	for _, seen := range outcomes {

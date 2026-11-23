@@ -161,15 +161,16 @@ func TestDecisionsDoNotWaitForValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	started, done := make(chan struct{}), make(chan time.Duration)
+	done := make(chan time.Duration)
 	go func() {
-		close(started)
 		begin := time.Now()
 		reloader.Load()
 		done <- time.Since(begin)
 	}()
-	<-started
-	var samples []time.Duration
+	// Count decisions against the current set that finish while the reload is
+	// still running. A decision that waited for the reload would end the count
+	// at one or two; a reload slow enough to matter leaves room for many.
+	var decided int
 	for compiling := true; compiling; {
 		select {
 		case compile := <-done:
@@ -177,18 +178,15 @@ func TestDecisionsDoNotWaitForValidation(t *testing.T) {
 			if active.Load().Version != candidate {
 				t.Fatal("the candidate was not activated")
 			}
-			if len(samples) == 0 {
-				t.Fatalf("no decision completed during a %s reload", compile)
-			}
-			// The median ignores a single scheduler or collector pause.
-			if median := summarize(samples).Median; time.Duration(median) > compile/20 {
-				t.Fatalf("median decision %s during a %s reload", time.Duration(median), compile)
+			if decided < 100 {
+				t.Fatalf("only %d decisions completed during a %s reload", decided, compile)
 			}
 		default:
-			r := requests[len(samples)%len(requests)]
-			begin := time.Now()
-			active.Load().Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
-			samples = append(samples, time.Since(begin))
+			r := requests[decided%len(requests)]
+			if snapshot := active.Load(); snapshot.Version == current {
+				snapshot.Decide(r.Caller, r.Tool.Proxy, r.Tool.Upstream, r.Tool.Name, r.Arguments)
+				decided++
+			}
 		}
 	}
 }

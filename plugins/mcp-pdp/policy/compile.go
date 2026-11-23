@@ -114,9 +114,11 @@ type inventory struct {
 }
 
 // Snapshot is a validated configuration ready to decide tool calls. Version
-// identifies the policy set it was built from.
+// identifies the policy set it was built from, and Label is that set's
+// human-readable label.
 type Snapshot struct {
 	Version  string
+	Label    string
 	policies *cedar.PolicySet
 	tools    map[string]inventory
 }

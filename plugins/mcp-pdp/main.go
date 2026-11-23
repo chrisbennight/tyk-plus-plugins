@@ -42,9 +42,9 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	validBody := readErr == nil && len(body) <= maxBody && jsonv2.Unmarshal(body, &call) == nil
 	var rules []string
-	version, reason := "", "unavailable"
+	version, label, reason := "", "", "unavailable"
 	if state != nil {
-		version = state.Version
+		version, label = state.Version, state.Label
 	}
 	switch {
 	case state == nil:
@@ -58,7 +58,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			reason, rules = state.Decide(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
 		}
 	}
-	slog.Info("Cedar authorization", "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "rules", rules)
+	slog.Info("Cedar authorization", "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules)
 	if reason == "permitted" {
 		return
 	}

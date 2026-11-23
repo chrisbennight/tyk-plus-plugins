@@ -93,7 +93,7 @@ cedar-policy show -store /path/to/store
 cedar-policy activate -store /path/to/store <previous fingerprint>
 ```
 
-`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Each switch replaces `active` by atomic rename.
+`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Each switch replaces `active` by atomic rename while holding a lock on the store, so the recorded previous set is the one actually replaced. `activate` also repairs an unreadable `active` file.
 
 ### What the gateway does
 
@@ -101,8 +101,9 @@ The gateway reads `active` every `CEDAR_REFRESH_INTERVAL`, a Go duration that de
 
 - A set whose files do not match its manifest is treated as not ready, for example while it is still being copied. The gateway keeps its current set and checks again.
 - A set that fails validation is rejected, and the gateway keeps enforcing its last good set.
+- After a restart, if `active` names a set the gateway cannot enforce, it falls back to the set its status report last named as enforced, then to the set `active` records as previous.
 - With no valid set, tool calls are denied.
 
 Set `CEDAR_STATUS_FILE` to have each gateway write a JSON report of the set it is enforcing, the set `active` names, and the outcome of its last evaluation: `activated`, `rejected`, `not_ready`, or `unreadable`. Comparing `enforcing` with `active` shows whether a gateway has caught up. The Compose deployment writes it to `/opt/tyk-gateway/cedar-status/status.json`.
 
-Gateway logs record each decision with the caller, tool, reason, the fingerprint of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.
+Gateway logs record each decision with the caller, tool, reason, the fingerprint and label of the enforced set, and determining rule IDs. CI builds the gateway and checks policy behavior through the MCP endpoint.

@@ -162,7 +162,7 @@ assert catalog["change"]["annotations"]["readOnlyHint"] is True
 # The gateway ships a store whose active set has no rules, tools, or checks,
 # and it reports enforcing that set.
 shipped = json.loads((POLICY / "active").read_text())["set"]
-assert sorted(path.name for path in POLICY.iterdir()) == ["active", "sets"]
+assert sorted(path.name for path in POLICY.iterdir() if not path.name.startswith(".")) == ["active", "sets"]
 assert sorted(path.name for path in (POLICY / "sets" / shipped).iterdir()) == sorted(FILES + ("manifest.json",))
 staged.update({name: (POLICY / "sets" / shipped / name).read_text() for name in FILES})
 assert staged["rules.cedar"].strip() == "", "the gateway must ship without rules"

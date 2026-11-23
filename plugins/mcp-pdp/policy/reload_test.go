@@ -1,0 +1,150 @@
+package policy
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// publishRaw stores a set without validating it and points active at it, as a
+// gateway would see after a pointer edit or a validation change.
+func publishRaw(t *testing.T, store, rules, previous string) string {
+	t.Helper()
+	contents := map[string][]byte{"rules.cedar": []byte(rules), "tools.json": []byte("{}"), "checks.json": []byte("[]")}
+	hashes := hashFiles(contents)
+	set := Fingerprint(hashes)
+	if err := writeSet(store, set, Manifest{Format: FormatVersion, Files: hashes}, contents); err != nil {
+		t.Fatal(err)
+	}
+	pointTo(t, store, Pointer{Set: set, Previous: previous})
+	return set
+}
+
+func pointTo(t *testing.T, store string, pointer Pointer) {
+	t.Helper()
+	data, _ := json.Marshal(pointer)
+	if err := writeAtomically(filepath.Join(store, pointerFile), data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readStatus(t *testing.T, path string) Status {
+	t.Helper()
+	var status Status
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	return status
+}
+
+func TestReloaderKeepsTheLastGoodSetWhenACandidateIsRejected(t *testing.T) {
+	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "good", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active atomic.Pointer[Snapshot]
+	r := NewReloader(store, statusFile, &active)
+	r.Load()
+	if status := readStatus(t, statusFile); status.Enforcing != good || status.Outcome != "activated" || status.EnforcingLabel != "good" {
+		t.Fatalf("status %+v", status)
+	}
+	bad := publishRaw(t, store, "invalid", good)
+	r.Load()
+	if status := readStatus(t, statusFile); status.Enforcing != good || status.Active != bad || status.Outcome != "rejected" {
+		t.Fatalf("status %+v", status)
+	}
+}
+
+func TestReloaderRestoresTheLastGoodSetAfterARestart(t *testing.T) {
+	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first atomic.Pointer[Snapshot]
+	NewReloader(store, statusFile, &first).Load()
+	publishRaw(t, store, "invalid", "")
+
+	// The restarted process recovers the set its status report named, even
+	// though the pointer records no previous set.
+	var restarted atomic.Pointer[Snapshot]
+	NewReloader(store, statusFile, &restarted).Load()
+	if snapshot := restarted.Load(); snapshot == nil || snapshot.Version != good {
+		t.Fatalf("restart enforced %v", snapshot)
+	}
+
+	// Without a status report, the pointer's previous set is used.
+	publishRaw(t, store, "invalid", good)
+	var noReport atomic.Pointer[Snapshot]
+	NewReloader(store, "", &noReport).Load()
+	if snapshot := noReport.Load(); snapshot == nil || snapshot.Version != good {
+		t.Fatalf("restart without a report enforced %v", snapshot)
+	}
+}
+
+func TestReloaderReportsARollbackFromAnIncompleteSet(t *testing.T) {
+	store, statusFile := t.TempDir(), filepath.Join(t.TempDir(), "status.json")
+	good, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var active atomic.Pointer[Snapshot]
+	r := NewReloader(store, statusFile, &active)
+	r.Load()
+	incomplete := publishRaw(t, store, "", good)
+	if err := os.Remove(filepath.Join(store, setsDir, incomplete, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	r.Load()
+	if status := readStatus(t, statusFile); status.Outcome != "not_ready" || status.Active != incomplete {
+		t.Fatalf("status %+v", status)
+	}
+	pointTo(t, store, Pointer{Set: good})
+	r.Load()
+	if status := readStatus(t, statusFile); status.Outcome != "activated" || status.Active != good {
+		t.Fatalf("status after rollback %+v", status)
+	}
+}
+
+func TestReloaderRetriesAFailedStatusWrite(t *testing.T) {
+	store := t.TempDir()
+	statusFile := filepath.Join(t.TempDir(), "missing", "status.json")
+	if _, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "", time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	var active atomic.Pointer[Snapshot]
+	r := NewReloader(store, statusFile, &active)
+	r.Load()
+	if err := os.MkdirAll(filepath.Dir(statusFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.Load()
+	if status := readStatus(t, statusFile); status.Outcome != "activated" {
+		t.Fatalf("status %+v", status)
+	}
+}
+
+func TestActivateReplacesAnUnreadablePointer(t *testing.T) {
+	store := t.TempDir()
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store, pointerFile), []byte("{broken"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Activate(store, set, "repair", time.Unix(0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if pointer, err := ReadPointer(store); err != nil || pointer.Set != set || pointer.Previous != "" {
+		t.Fatalf("pointer %+v, %v", pointer, err)
+	}
+}

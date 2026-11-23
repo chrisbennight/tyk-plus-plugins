@@ -4,11 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"syscall"
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
@@ -121,7 +121,11 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 		return nil, manifest, &NotReadyError{Reason: "content does not match the set name"}
 	}
 	snapshot, err := Compile(contents["rules.cedar"], contents["tools.json"], contents["checks.json"], set)
-	return snapshot, manifest, err
+	if err != nil {
+		return nil, manifest, err
+	}
+	snapshot.Label = manifest.Label
+	return snapshot, manifest, nil
 }
 
 // Promote validates the policy files in source, stores them as an immutable
@@ -153,21 +157,44 @@ func Activate(root, set, label string, now time.Time) error {
 	if _, _, err := LoadSet(root, set); err != nil {
 		return fmt.Errorf("policy set %s cannot be activated: %w", set, err)
 	}
+	// Serialize publishers so the recorded previous set is the one replaced.
+	unlock, err := lockStore(root)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	pointer := Pointer{Set: set, Label: label, PromotedAt: now.UTC().Format(time.RFC3339)}
+	// An unreadable pointer names no set to record as previous; replacing it is
+	// how an operator repairs a corrupted pointer.
 	if current, err := ReadPointer(root); err == nil {
 		if current.Set == set {
 			pointer.Previous = current.Previous
 		} else {
 			pointer.Previous = current.Set
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	data, err := json.MarshalIndent(pointer, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeAtomically(filepath.Join(root, pointerFile), append(data, '\n'))
+}
+
+// lockStore takes an exclusive lock on the store, released when the returned
+// function is called or the process exits.
+func lockStore(root string) (func(), error) {
+	file, err := os.OpenFile(filepath.Join(root, ".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return func() {
+		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		file.Close()
+	}, nil
 }
 
 // writeSet stores a set by renaming a completed temporary directory into
@@ -231,7 +258,3 @@ func writeAtomically(path string, data []byte) error {
 	}
 	return os.Rename(file.Name(), path)
 }
-
-// WriteFileAtomically is exported for callers that publish status beside a
-// store, such as the gateway's enforcement report.
-func WriteFileAtomically(path string, data []byte) error { return writeAtomically(path, data) }

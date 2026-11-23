@@ -87,11 +87,11 @@ func ReadPointer(root string) (Pointer, error) {
 	return p, nil
 }
 
-// readSet returns a set's manifest and files after verifying that the files
+// ReadSet returns a set's manifest and files after verifying that the files
 // match the manifest and the set name. It is the single definition of an
 // intact set, used both by gateways loading a set and by publishers deciding
 // whether an existing set can be reused. A mismatch returns a NotReadyError.
-func readSet(root, set string) (Manifest, map[string][]byte, error) {
+func ReadSet(root, set string) (Manifest, map[string][]byte, error) {
 	if !fingerprintPattern.MatchString(set) {
 		return Manifest{}, nil, fmt.Errorf("invalid set name %q", set)
 	}
@@ -135,10 +135,10 @@ func readManifest(dir string) (Manifest, error) {
 	return manifest, nil
 }
 
-// LoadSet verifies a set with readSet, then validates it. A validation failure
+// LoadSet verifies a set with ReadSet, then validates it. A validation failure
 // returns the validation error.
 func LoadSet(root, set string) (*Snapshot, Manifest, error) {
-	manifest, contents, err := readSet(root, set)
+	manifest, contents, err := ReadSet(root, set)
 	if err != nil {
 		return nil, manifest, err
 	}
@@ -278,7 +278,7 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 		return err
 	}
 	final := filepath.Join(sets, set)
-	if _, _, err := readSet(s.root, set); err == nil {
+	if _, _, err := ReadSet(s.root, set); err == nil {
 		return syncDir(sets)
 	}
 	if _, err := os.Stat(final); err == nil {

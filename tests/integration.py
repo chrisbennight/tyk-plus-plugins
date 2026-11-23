@@ -10,9 +10,9 @@ from urllib.request import Request, urlopen
 UPSTREAM = "http://upstream:8000/mcp"
 
 
-def request_count():
+def observed():
     with urlopen("http://upstream:8000/requests", timeout=5) as response:
-        return int(response.read())
+        return json.load(response)
 
 
 def post(url, headers, data):
@@ -43,13 +43,14 @@ def rpc(token, method, params):
 
 
 def call(token, name, arguments, expected=None):
-    before = request_count()
+    before = observed()["requests"]
     status, response = rpc(token, "tools/call", {"name": name, "arguments": arguments})
+    after = observed()
     if expected is None:
-        assert status == 403 and request_count() == before, (name, status, response)
+        assert status == 403 and after["requests"] == before, (name, status, response)
     else:
         assert status == 200 and response["result"]["content"] == [{"type": "text", "text": expected}], response
-        assert request_count() == before + 1
+        assert after == {"requests": before + 1, "arguments": arguments}, after
     return response
 
 
@@ -66,7 +67,7 @@ def replace(path, text):
 for attempt in range(30):
     try:
         with urlopen("http://gateway:9696/hello", timeout=2) as health:
-            if json.load(health)["status"] == "pass" and request_count() >= 0:
+            if json.load(health)["status"] == "pass" and observed()["requests"] >= 0:
                 break
     except (URLError, ConnectionError):
         pass

@@ -182,7 +182,13 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	if state != nil {
 		version = state.version
 	}
-	if state != nil && oas != nil && oas.GetTykExtension() != nil && who.Issuer != "" && who.Subject != "" {
+	switch {
+	case state == nil:
+	case who.Issuer == "" || who.Subject == "":
+		reason = "invalid_caller_metadata"
+	case oas == nil || oas.GetTykExtension() == nil:
+		reason = "missing_proxy"
+	default:
 		reason = "invalid_call"
 		if validBody && call.Method == "tools/call" && call.Params.Name == name {
 			reason, rules = state.decide(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)

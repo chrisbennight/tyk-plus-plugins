@@ -5,8 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 
+	"github.com/go-json-experiment/json/jsontext"
 	"github.com/gowebpki/jcs"
 )
 
@@ -15,10 +15,10 @@ import (
 // which carries protocol metadata rather than text a reviewer approves.
 // Field order and whitespace do not change it; any other change does.
 func DefinitionFingerprint(definition []byte) (string, error) {
-	// Canonicalizing the whole definition first rejects duplicate keys at any
-	// depth, which the map below would otherwise silently collapse.
-	if _, err := jcs.Transform(definition); err != nil {
-		return "", fmt.Errorf("definition is not canonical JSON: %w", err)
+	// Reject duplicate keys at any depth, which the map below would otherwise
+	// silently collapse, without interpreting numbers in the ignored _meta.
+	if !jsontext.Value(definition).IsValid() {
+		return "", errors.New("definition is not valid JSON or repeats a key")
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(definition, &fields); err != nil || fields == nil {

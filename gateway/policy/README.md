@@ -121,7 +121,7 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.
 
-Each approved tool definition has a fingerprint: the SHA-256 of its RFC 8785 canonical JSON, ignoring the top-level `_meta` member. Field order, whitespace and different spellings of the same number (`1`, `1.0`, `1e0`) don't change it; any other change does. A set whose definitions repeat a key is rejected. A whole-number annotation is the same Cedar integer however it is spelled, so the fingerprint and the facts rules see always agree.
+Each approved tool definition has a fingerprint: the SHA-256 of its RFC 8785 canonical JSON, ignoring the top-level `_meta` member. Field order, whitespace and different spellings of the same number (`1`, `1.0`, `1e0`) don't change it; any other change does. A set whose definitions repeat a key is rejected. In a format-2 set, rules see each upstream annotation as its canonical value, the same text the fingerprint covers, so two definitions with one fingerprint always produce the same facts. Format-1 sets read annotations as written, exactly as before.
 
 ### The policy store
 

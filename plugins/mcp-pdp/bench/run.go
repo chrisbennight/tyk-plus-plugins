@@ -24,7 +24,7 @@ type Files struct {
 // inputs returns the files in the roles the compiler reads them. A current
 // set without instructions approves none.
 func (f Files) inputs() policy.Inputs {
-	in := policy.Inputs{Rules: f.Rules, Tools: f.Tools, Instructions: f.Instructions, Checks: f.Checks}
+	in := policy.Inputs{Rules: f.Rules, Tools: f.Tools, Instructions: f.Instructions, Checks: f.Checks, Format: f.Format}
 	if f.Format != 1 && in.Instructions == nil {
 		in.Instructions = []byte("{}\n")
 	}

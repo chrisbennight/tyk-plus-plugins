@@ -173,3 +173,66 @@ forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers
 		t.Fatalf("a fractional annotation became an integer: %s", got)
 	}
 }
+
+// compileCost builds a one-tool set whose definition annotates a cost, in the
+// given format, and decides a call to it.
+func compileCost(t *testing.T, rules, cost string, format int) string {
+	t.Helper()
+	definition := `{"name": "lookup", "annotations": {"cost": ` + cost + `}}`
+	tools := `{"governed": {"upstream": "https://u.example/mcp", "tools": {"lookup": {"definition": ` + definition + `}}}}`
+	in := Inputs{Rules: []byte(rules), Tools: []byte(tools), Checks: []byte("[]"), Format: format}
+	if format != legacyFormat {
+		in.Instructions = []byte("{}")
+	}
+	s, err := Compile(in, "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decide(s)
+}
+
+func TestFormatOneAnnotationDecisionsAreUnchanged(t *testing.T) {
+	rules := `permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 1}) };`
+	// Earlier builds read only integer spellings as numbers; format-1 sets keep that.
+	if got := compileCost(t, rules, "1", legacyFormat); got != "policy_denied" {
+		t.Fatalf("format 1, cost 1: %s", got)
+	}
+	if got := compileCost(t, rules, "1.0", legacyFormat); got != "permitted" {
+		t.Fatalf("format 1, cost 1.0 changed meaning: %s", got)
+	}
+}
+
+func TestNullIsNeverANumber(t *testing.T) {
+	// A forbid for cost 0 applies to 0 and not to null. (An annotation can only
+	// narrow access, so the check is a forbid rather than an exception.)
+	rules := `permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 0}) };`
+	for _, format := range []int{legacyFormat, FormatVersion} {
+		if got := compileCost(t, rules, "0", format); got != "policy_denied" {
+			t.Fatalf("format %d: cost 0: %s", format, got)
+		}
+		if got := compileCost(t, rules, "null", format); got != "permitted" {
+			t.Fatalf("format %d: null was read as 0: %s", format, got)
+		}
+	}
+}
+
+func TestLargeIntegersAgreeWithFingerprints(t *testing.T) {
+	// Both spellings canonicalize to the same binary64 number.
+	rules := `permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 9007199254740992}) };`
+	a, b := "9007199254740993", "9007199254740993.0"
+	if fingerprint(t, `{"name":"lookup","annotations":{"cost":`+a+`}}`) != fingerprint(t, `{"name":"lookup","annotations":{"cost":`+b+`}}`) {
+		t.Fatal("the two spellings fingerprinted differently")
+	}
+	if compileCost(t, rules, a, FormatVersion) != compileCost(t, rules, b, FormatVersion) {
+		t.Fatal("two spellings with one fingerprint produced different decisions")
+	}
+}
+
+func TestMetaDoesNotBlockAFingerprint(t *testing.T) {
+	if _, err := DefinitionFingerprint([]byte(`{"name": "lookup", "_meta": {"big": 1e400}}`)); err != nil {
+		t.Fatalf("ignored metadata blocked the fingerprint: %v", err)
+	}
+}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/cedar-policy/cedar-go/x/exp/schema"
 	"github.com/cedar-policy/cedar-go/x/exp/schema/validate"
 	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/gowebpki/jcs"
 )
 
 //go:embed schema.cedarschema
@@ -37,49 +37,60 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	d.raw = append([]byte(nil), data...)
+	facts, err := annotationFacts(d.Annotations, false)
+	if err != nil {
+		return err
+	}
+	d.facts = facts
+	return nil
+}
+
+// annotationFacts turns upstream annotations into the facts rules read.
+// Format-1 sets read each value as written, as they always have. Format-2
+// sets read each value's RFC 8785 canonical form, the same text the
+// definition's fingerprint covers, so two spellings that share a fingerprint
+// always produce the same facts. JSON null is never a fact.
+func annotationFacts(annotations map[string]json.RawMessage, canonical bool) (cedar.RecordMap, error) {
 	values := scalarFacts{}
-	for name, raw := range d.Annotations {
+	readOnly := json.RawMessage(nil)
+	for name, raw := range annotations {
+		if canonical {
+			canon, err := jcs.Transform(raw)
+			if err != nil {
+				return nil, fmt.Errorf("annotation %q: %w", name, err)
+			}
+			raw = canon
+		}
+		if name == "readOnlyHint" {
+			readOnly = raw
+		}
 		switch raw[0] {
 		case '"':
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
-				return err
+				return nil, err
 			}
 			values.add("string", name, cedar.String(value))
 		case 't', 'f':
 			values.add("boolean", name, cedar.Boolean(raw[0] == 't'))
 		default:
-			if value, ok := wholeNumber(raw); ok {
+			var value int64
+			if raw[0] != 'n' && json.Unmarshal(raw, &value) == nil {
 				values.add("long", name, cedar.Long(value))
 			}
 		}
 	}
-	d.facts = values.fields()
-	if raw, ok := d.Annotations["readOnlyHint"]; ok {
+	facts := values.fields()
+	if readOnly != nil {
 		var hint *bool
-		if err := json.Unmarshal(raw, &hint); err != nil {
-			return err
+		if err := json.Unmarshal(readOnly, &hint); err != nil {
+			return nil, err
 		}
 		if hint != nil {
-			d.facts["readOnlyHint"] = cedar.Boolean(*hint)
+			facts["readOnlyHint"] = cedar.Boolean(*hint)
 		}
 	}
-	return nil
-}
-
-// wholeNumber reads a JSON number that has an integer value. Spellings such
-// as 1, 1.0 and 1e0 are the same number, as they are in a definition's
-// canonical form, so they produce the same Cedar fact.
-func wholeNumber(raw json.RawMessage) (int64, bool) {
-	var exact int64
-	if json.Unmarshal(raw, &exact) == nil {
-		return exact, true
-	}
-	var value float64
-	if json.Unmarshal(raw, &value) != nil || value != math.Trunc(value) || value < math.MinInt64 || value >= math.MaxInt64 {
-		return 0, false
-	}
-	return int64(value), true
+	return facts, nil
 }
 
 // Operators choose the names of reviewed facts and tags. The plug-in gives
@@ -204,9 +215,13 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 				return nil, err
 			}
 			// Format-2 sets approve exact definitions, so each must have a
-			// fingerprint. Format-1 sets predate fingerprints and load as before.
+			// fingerprint, and their annotation facts come from the same
+			// canonical text. Format-1 sets predate fingerprints and load as before.
 			if in.Format != legacyFormat && t.Definition != nil {
 				if t.Definition.fingerprint, err = DefinitionFingerprint(t.Definition.raw); err != nil {
+					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
+				}
+				if t.Definition.facts, err = annotationFacts(t.Definition.Annotations, true); err != nil {
 					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
 				}
 			}

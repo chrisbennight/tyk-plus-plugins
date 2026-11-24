@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -194,5 +195,104 @@ func TestPublishedFilesInheritARestrictedStoreRoot(t *testing.T) {
 		if info.Mode().Perm() != want {
 			t.Fatalf("%s has mode %v, want %v", path, info.Mode().Perm(), want)
 		}
+	}
+}
+
+func TestAFailedRepairKeepsTheDamagedSet(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "first", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store, setsDir, set, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	renameSet = func(string, string) error { return errors.New("injected failure") }
+	defer func() { renameSet = os.Rename }()
+	if _, err := Promote(store, source, "", epoch); err == nil {
+		t.Fatal("the replacement did not fail")
+	}
+	// The damaged set is back in place with its label and readable files.
+	manifest, err := readManifest(filepath.Join(store, setsDir, set))
+	if err != nil || manifest.Label != "first" {
+		t.Fatalf("damaged set not restored: %+v, %v", manifest, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(store, setsDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != set {
+			t.Fatalf("left behind %s", e.Name())
+		}
+	}
+}
+
+func TestANewStoreIsSyncedIntoItsParent(t *testing.T) {
+	parent := t.TempDir()
+	store := filepath.Join(parent, "a", "store")
+	var synced []string
+	syncDir = func(dir string) error {
+		synced = append(synced, dir)
+		handle, err := os.Open(dir)
+		if err != nil {
+			return err
+		}
+		defer handle.Close()
+		return handle.Sync()
+	}
+	defer func() { syncDir = syncDirectory }()
+	if _, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{parent, filepath.Join(parent, "a"), store} {
+		if !slices.Contains(synced, want) {
+			t.Fatalf("%s was not synced; synced %v", want, synced)
+		}
+	}
+}
+
+func TestASharedStoreKeepsItsGroupAndLock(t *testing.T) {
+	previous := syscall.Umask(0o077)
+	defer syscall.Umask(previous)
+	store := t.TempDir()
+	if err := os.Chmod(store, 0o770|os.ModeSetgid); err != nil {
+		t.Fatal(err)
+	}
+	set, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{filepath.Join(store, setsDir), filepath.Join(store, setsDir, set)} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode()&os.ModeSetgid == 0 || info.Mode().Perm() != 0o770 {
+			t.Fatalf("%s has mode %v, want setgid and 0770", dir, info.Mode())
+		}
+	}
+	info, err := os.Stat(filepath.Join(store, ".lock"))
+	if err != nil || info.Mode().Perm() != 0o660 {
+		t.Fatalf("lock file: %v, %v", info.Mode(), err)
+	}
+}
+
+func TestAnExistingSetsDirectoryIsLeftAsItIs(t *testing.T) {
+	// Another publisher created sets with its own mode; only its owner may
+	// change that, so publishing must not try.
+	store := t.TempDir()
+	if err := os.Mkdir(filepath.Join(store, setsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(store, setsDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(filepath.Join(store, setsDir)); info.Mode().Perm() != 0o700 {
+		t.Fatalf("sets mode changed to %v", info.Mode().Perm())
 	}
 }

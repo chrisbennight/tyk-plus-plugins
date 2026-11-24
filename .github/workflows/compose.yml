@@ -46,3 +46,10 @@ jobs:
           # The benchmark starts no gateway; Compose still requires its secrets to be set.
           export TYK_GW_SECRET=unused TYK_GW_NODESECRET=unused
           docker compose run --rm --no-deps --entrypoint /opt/tyk-gateway/bin/cedar-policy gateway bench -synthetic -rules 1000 -proxies 10 -tools 1000
+  shared-store:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Publish into a shared policy store as several users
+        run: docker run --rm -v "$PWD":/w -w /w golang:1.26.10-bookworm bash tests/shared-store.sh

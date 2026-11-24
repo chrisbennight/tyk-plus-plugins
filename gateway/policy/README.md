@@ -167,6 +167,16 @@ The gateway reads a policy store at `/opt/tyk-gateway/cedar`:
 
 The image ships a store whose active set is the empty policy in this directory. To manage policy at run time, mount your own store at `/opt/tyk-gateway/cedar`.
 
+#### Sharing a store between publishers
+
+Several people or services can publish into one store when they share a Unix group. Create the store root owned by that group, group-writable, with the setgid bit, for example `chgrp policy /srv/policy && chmod 2770 /srv/policy`. Everything published inside takes the root's permissions and keeps its group, whatever each publisher's own primary group and umask, and any member can publish, roll back, or repair a set another member published. Give the gateway's user read access through the same group.
+
+These setups are not supported or handled:
+
+- A store root with the sticky bit, such as a directory like `/tmp`. Members could not replace the `active` pointer another member wrote.
+- Stores that rely on default access control lists. Publishing sets explicit modes taken from the root, which can override an inherited access control list.
+- Leftover `.staging-*` and `.damaged-*` directories inside `sets/` after a publisher crashes. They are never named by `active`, so gateways ignore them, but they are not cleaned up automatically; remove them while no one is publishing.
+
 ### Upgrading key callers
 
 Earlier builds read keys from the `Authorization` header. Keys now go in `X-API-Key`, and `Authorization` carries tokens only. Update clients that use keys before upgrading; a key sent in `Authorization` is refused. Every request now needs an identifiable caller, including `initialize` and `tools/list`, so give every key `cedar` metadata with an issuer and subject before upgrading.

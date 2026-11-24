@@ -46,16 +46,18 @@ func filesFor(format int) ([]string, bool) {
 	return nil, false
 }
 
-// Inputs are a set's policy files in the roles Compile reads them.
-// Instructions is nil for a format-1 set, which has no approved instructions.
+// Inputs are a set's policy files in the roles Compile reads them. Format is
+// the set's format; zero means the current one. Instructions is nil for a
+// format-1 set, which has no approved instructions.
 type Inputs struct {
 	Rules, Tools, Instructions, Checks []byte
+	Format                             int
 }
 
 // InputsOf maps a set's files to their roles according to its format.
 func InputsOf(format int, contents map[string][]byte) Inputs {
 	if format == legacyFormat {
-		return Inputs{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"]}
+		return Inputs{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"], Format: legacyFormat}
 	}
 	return Inputs{Rules: contents["rules.cedar"], Tools: contents["approved_tools.json"],
 		Instructions: contents["approved_instructions.json"], Checks: contents["checks.json"]}

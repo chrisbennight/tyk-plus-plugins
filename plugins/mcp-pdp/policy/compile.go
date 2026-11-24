@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 
@@ -23,7 +24,10 @@ type toolDefinition struct {
 	Name        string                     `json:"name"`
 	Annotations map[string]json.RawMessage `json:"annotations"`
 	facts       cedar.RecordMap
-	// fingerprint identifies the exact definition the operator approved.
+	// raw is the definition as published, kept to fingerprint it.
+	raw []byte
+	// fingerprint identifies the exact definition the operator approved. It
+	// is set for format-2 sets only.
 	fingerprint string
 }
 
@@ -32,11 +36,7 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	if err := jsonv2.Unmarshal(data, (*wire)(d)); err != nil {
 		return err
 	}
-	fingerprint, err := DefinitionFingerprint(data)
-	if err != nil {
-		return err
-	}
-	d.fingerprint = fingerprint
+	d.raw = append([]byte(nil), data...)
 	values := scalarFacts{}
 	for name, raw := range d.Annotations {
 		switch raw[0] {
@@ -49,8 +49,7 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 		case 't', 'f':
 			values.add("boolean", name, cedar.Boolean(raw[0] == 't'))
 		default:
-			var value int64
-			if raw[0] != 'n' && json.Unmarshal(raw, &value) == nil {
+			if value, ok := wholeNumber(raw); ok {
 				values.add("long", name, cedar.Long(value))
 			}
 		}
@@ -66,6 +65,21 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 		}
 	}
 	return nil
+}
+
+// wholeNumber reads a JSON number that has an integer value. Spellings such
+// as 1, 1.0 and 1e0 are the same number, as they are in a definition's
+// canonical form, so they produce the same Cedar fact.
+func wholeNumber(raw json.RawMessage) (int64, bool) {
+	var exact int64
+	if json.Unmarshal(raw, &exact) == nil {
+		return exact, true
+	}
+	var value float64
+	if json.Unmarshal(raw, &value) != nil || value != math.Trunc(value) || value < math.MinInt64 || value >= math.MaxInt64 {
+		return 0, false
+	}
+	return int64(value), true
 }
 
 // Operators choose the names of reviewed facts and tags. The plug-in gives
@@ -188,6 +202,13 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 			}
 			if err := t.prepare(name); err != nil {
 				return nil, err
+			}
+			// Format-2 sets approve exact definitions, so each must have a
+			// fingerprint. Format-1 sets predate fingerprints and load as before.
+			if in.Format != legacyFormat && t.Definition != nil {
+				if t.Definition.fingerprint, err = DefinitionFingerprint(t.Definition.raw); err != nil {
+					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
+				}
 			}
 		}
 	}

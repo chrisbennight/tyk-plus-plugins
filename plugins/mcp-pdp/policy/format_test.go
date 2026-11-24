@@ -132,3 +132,44 @@ func TestDefinitionsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatOneToleratesDefinitionsFormatTwoRefuses(t *testing.T) {
+	// A number beyond the range of a 64-bit float cannot be canonicalized.
+	tools := `{"governed": {"upstream": "https://u.example/mcp", "tools": {"lookup": {"facts": {"readOnly": true},
+	  "definition": {"name": "lookup", "inputSchema": {"type": "object", "properties": {"n": {"type": "number", "maximum": 1e400}}}}}}}}`
+	if _, err := Compile(Inputs{Rules: []byte(formatRules), Tools: []byte(tools), Checks: []byte("[]"), Format: legacyFormat}, "v"); err != nil {
+		t.Fatalf("a format-1 set that loaded before now fails: %v", err)
+	}
+	if _, err := Compile(Inputs{Rules: []byte(formatRules), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v"); err == nil {
+		t.Fatal("a format-2 set approved a definition without a fingerprint")
+	}
+}
+
+func TestWholeNumberAnnotationsAgreeWithFingerprints(t *testing.T) {
+	// Upstream annotations can only narrow access, so the rule that reads one
+	// is a forbid.
+	rules := []byte(`permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 1}) };`)
+	decideWith := func(cost string) string {
+		definition := `{"name": "lookup", "annotations": {"cost": ` + cost + `}}`
+		tools := `{"governed": {"upstream": "https://u.example/mcp", "tools": {"lookup": {"definition": ` + definition + `}}}}`
+		s, err := Compile(Inputs{Rules: rules, Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decide(s)
+	}
+	var fingerprints []string
+	for _, cost := range []string{"1", "1.0", "1e0"} {
+		if got := decideWith(cost); got != "policy_denied" {
+			t.Errorf("cost %s was not read as the integer 1: %s", cost, got)
+		}
+		fingerprints = append(fingerprints, fingerprint(t, `{"name": "lookup", "annotations": {"cost": `+cost+`}}`))
+	}
+	if fingerprints[0] != fingerprints[1] || fingerprints[0] != fingerprints[2] {
+		t.Fatalf("spellings of one number fingerprinted differently: %v", fingerprints)
+	}
+	if got := decideWith("1.5"); got != "permitted" {
+		t.Fatalf("a fractional annotation became an integer: %s", got)
+	}
+}

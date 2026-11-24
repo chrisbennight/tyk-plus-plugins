@@ -162,7 +162,9 @@ func call(c *conn, cred credential, name string, arguments map[string]any, expec
 	after, args := observed()
 	check(len(r.ID) > 0, "%s: reply has no ID: %v", name, r)
 	if len(expected) == 0 {
-		check(r.Status == http.StatusForbidden && r.Error != nil && after == before, "%s: expected refusal with no dispatch, got %v (requests %d -> %d)", name, r, before, after)
+		// Refused tool calls carry the plug-in's denial, whatever the reason.
+		check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Code == -32002 && r.Error.Message == "Tool call denied" && after == before,
+			"%s: expected the plug-in's refusal with no dispatch, got %v (requests %d -> %d)", name, r, before, after)
 		return r
 	}
 	var result struct {

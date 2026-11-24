@@ -117,9 +117,7 @@ func connect(cred credential, version string) *conn {
 	}
 	check(r.Status == http.StatusOK && r.Error == nil && json.Unmarshal(r.Result, &initialized) == nil &&
 		initialized.ServerInfo.Name == "test-upstream" && initialized.ProtocolVersion == olderProtocol, "initialize failed: %v", r)
-	if c.session != "" {
-		c.notify(cred, "notifications/initialized")
-	}
+	c.notify(cred, "notifications/initialized")
 	return c
 }
 

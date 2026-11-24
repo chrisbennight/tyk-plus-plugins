@@ -151,6 +151,7 @@ func sdkBaseline(k keys, version, want string) {
 		text, ok := called.Content[0].(*mcp.TextContent)
 		check(ok && text.Text == "found", "%s SDK client (%s) got %+v", version, caller.name, called.Content)
 		check(after == before+1 && sameJSON(seen, args("count", 5)), "%s SDK client (%s): requests %d -> %d, upstream saw %v", version, caller.name, before, after, seen)
+		check(upstreamVersion() == want, "%s SDK client (%s): the gateway used %q upstream, want %q", version, caller.name, upstreamVersion(), want)
 
 		// A denied call and an unknown tool never reach the upstream, and the
 		// client cannot tell them apart.

@@ -137,7 +137,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 //
 // request is the ID of the request being answered, when known, as for
 // FilterToolsList. report, when set, receives instructions the upstream
-// declared that are not the approved text.
+// declared that are not the approved text, empty when it declared none.
 func FilterInstructions(message []byte, approved string, strip, discovery bool, request jsontext.Value, report func(declared string)) []byte {
 	return checkReply(message, request, "Upstream could not start the session", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
 		changed := dropVariants(result, "instructions")
@@ -148,7 +148,7 @@ func FilterInstructions(message []byte, approved string, strip, discovery bool, 
 			}
 		}
 		if declared != approved {
-			if report != nil && declared != "" {
+			if report != nil {
 				report(declared)
 			}
 			changed = true

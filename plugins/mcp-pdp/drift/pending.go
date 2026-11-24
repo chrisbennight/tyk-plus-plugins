@@ -21,39 +21,44 @@ import (
 // Pending shares what gateways see with each other and with reviewers,
 // through a directory every gateway can write:
 //
+//   - <proxy>/latest/<tool>/<gateway>.json holds the definition, by
+//     fingerprint, that one gateway last saw an upstream declare for a tool,
+//     when, and from which upstream. Each gateway writes only its own file,
+//     in the order it saw the declarations, so no gateway can overwrite
+//     another's newer one; readers take the newest across gateways.
 //   - <proxy>/tools/<tool>/<fingerprint>.json and
 //     <proxy>/instructions/<fingerprint>.json hold each new or changed tool
 //     definition and each changed instructions text, once per fingerprint,
-//     for review;
-//   - <proxy>/latest/<tool>.json holds the fingerprint of the definition a
-//     gateway last saw an upstream declare for an approved tool, and when.
+//     for review.
 //
-// Proxy and tool names are stored base64url-encoded, so no name can leave its
-// directory, and every file is opened through an os.Root confined to the
-// directory.
+// Proxy, tool and gateway names are stored base64url-encoded, so no name can
+// leave its directory, and every file is opened through an os.Root confined
+// to the directory.
 //
 // The request path never touches the directory: gateways offer what they see
-// to a bounded queue that one background writer drains, and read the latest
+// to bounded queues that one background writer drains, and read the latest
 // declarations in the background into a copy that calls read without a lock.
-// A gateway refuses calls to a tool whose newest declaration, its own or
-// another gateway's, is not the approved one, so a change seen by one gateway
-// is refused by all within their refresh interval.
+// Every list offers all its tools again, so a write dropped from a full queue
+// is made by the next list.
 type Pending struct {
-	root    *os.Root
-	gateway string
-	limits  Limits
-	queue   chan pendingWrite
-	latest  atomic.Pointer[map[string]Declared]
-	counts  atomic.Pointer[map[string]int]
-	now     func() time.Time
+	root         *os.Root
+	gateway      string
+	limits       Limits
+	declarations chan declaration
+	reviews      chan review
+	latest       atomic.Pointer[map[string]Declared]
+	counts       atomic.Pointer[entryCounts]
+	now          func() time.Time
 }
 
-// Declared is a tool definition an upstream declared, by fingerprint, and
-// when a gateway received it.
+// Declared is a tool definition an upstream declared, by fingerprint, when a
+// gateway received it, and the upstream it came from. An empty fingerprint
+// means the definition could not be identified, which matches no approval.
 type Declared struct {
 	Fingerprint string    `json:"fingerprint"`
 	SeenAt      time.Time `json:"seenAt"`
 	Gateway     string    `json:"gateway"`
+	Upstream    string    `json:"upstream"`
 }
 
 // ToolEntry and InstructionsEntry are the review files. FirstSeen and Gateway
@@ -75,23 +80,33 @@ type InstructionsEntry struct {
 	Gateway      string    `json:"gateway"`
 }
 
-type pendingWrite struct {
-	tool         *ToolEntry
-	instructions *InstructionsEntry
-	latest       *latestWrite
-}
-
-type latestWrite struct {
+type declaration struct {
 	proxy, tool string
+	approved    bool
 	declared    Declared
 }
 
-// pendingQueue bounds the writes waiting for the writer. A write offered when
-// the queue is full is dropped and logged; the next list offers it again.
-const pendingQueue = 1024
+type review struct {
+	tool         *ToolEntry
+	instructions *InstructionsEntry
+}
 
-// maxLatestFile bounds a latest-declaration file the gateway reads.
-const maxLatestFile = 4096
+// entryCounts are the review entries each proxy held at a refresh.
+type entryCounts struct {
+	generation uint64
+	byProxy    map[string]int
+}
+
+// queueLength bounds each queue of writes waiting for the writer. A write
+// offered when its queue is full is dropped and logged.
+const queueLength = 4096
+
+// maxDeclarationFile bounds a declaration file the gateway reads, and
+// maxGatewaysPerTool the declaration files it reads for one tool.
+const (
+	maxDeclarationFile = 4096
+	maxGatewaysPerTool = 256
+)
 
 var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -99,9 +114,8 @@ var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // returned value accepts and ignores writes and reports no declarations.
 func OpenPending(dir, gateway string, limits Limits) (*Pending, error) {
 	p := &Pending{gateway: gateway, limits: limits, now: time.Now}
-	empty, counts := map[string]Declared{}, map[string]int{}
-	p.latest.Store(&empty)
-	p.counts.Store(&counts)
+	p.latest.Store(&map[string]Declared{})
+	p.counts.Store(&entryCounts{byProxy: map[string]int{}})
 	if dir == "" {
 		return p, nil
 	}
@@ -110,7 +124,8 @@ func OpenPending(dir, gateway string, limits Limits) (*Pending, error) {
 		return nil, err
 	}
 	p.root = root
-	p.queue = make(chan pendingWrite, pendingQueue)
+	p.declarations = make(chan declaration, queueLength)
+	p.reviews = make(chan review, queueLength)
 	go p.write()
 	return p, nil
 }
@@ -122,15 +137,18 @@ func decodeName(encoded string) (string, bool) {
 	return string(name), err == nil && len(name) > 0
 }
 
-// offer queues a write without waiting.
-func (p *Pending) offer(w pendingWrite) {
-	if p.queue == nil {
+// Saw shares the definition an upstream declared for a tool, approved or
+// not, so every gateway decides calls on the newest declaration. An empty
+// fingerprint is shared as a definition that matches no approval.
+func (p *Pending) Saw(proxy, upstream, tool, fingerprint string, approved bool, at time.Time) {
+	if p.declarations == nil || (fingerprint != "" && !fingerprintPattern.MatchString(fingerprint)) || len(tool) > maxToolName {
 		return
 	}
 	select {
-	case p.queue <- w:
+	case p.declarations <- declaration{proxy: proxy, tool: tool, approved: approved,
+		declared: Declared{Fingerprint: fingerprint, SeenAt: at.UTC(), Gateway: p.gateway, Upstream: upstream}}:
 	default:
-		slog.Warn("Drift review queue is full; a declaration was not shared")
+		slog.Warn("Drift declaration queue is full; the next list shares the declaration", "proxy", proxy, "tool", tool)
 	}
 }
 
@@ -141,49 +159,54 @@ func (p *Pending) Changed(proxy, tool, fingerprint string, definition jsontext.V
 	if !fingerprintPattern.MatchString(fingerprint) || len(definition) > p.limits.MaxDefinitionBytes || len(tool) > maxToolName {
 		return
 	}
-	p.offer(pendingWrite{tool: &ToolEntry{Proxy: proxy, Tool: tool, Fingerprint: fingerprint,
+	p.offerReview(review{tool: &ToolEntry{Proxy: proxy, Tool: tool, Fingerprint: fingerprint,
 		Definition: definition.Clone(), FirstSeen: p.now().UTC(), Gateway: p.gateway}})
 }
 
-// ChangedInstructions queues changed instructions for review.
+// ChangedInstructions queues changed instructions for review, including
+// instructions the upstream removed, which are empty.
 func (p *Pending) ChangedInstructions(proxy, fingerprint, instructions string) {
 	if !fingerprintPattern.MatchString(fingerprint) || len(instructions) > p.limits.MaxDefinitionBytes {
 		return
 	}
-	p.offer(pendingWrite{instructions: &InstructionsEntry{Proxy: proxy, Fingerprint: fingerprint,
+	p.offerReview(review{instructions: &InstructionsEntry{Proxy: proxy, Fingerprint: fingerprint,
 		Instructions: instructions, FirstSeen: p.now().UTC(), Gateway: p.gateway}})
 }
 
-// Saw shares the fingerprint an upstream declared for an approved tool, when
-// it differs from the newest declaration the gateways share, so every gateway
-// decides calls on the newest one.
-func (p *Pending) Saw(proxy, tool, fingerprint string, at time.Time) {
-	if !fingerprintPattern.MatchString(fingerprint) || len(tool) > maxToolName {
+func (p *Pending) offerReview(r review) {
+	if p.reviews == nil {
 		return
 	}
-	if shared, ok := p.Latest(proxy, tool); ok && shared.Fingerprint == fingerprint {
-		return
+	select {
+	case p.reviews <- r:
+	default:
+		slog.Warn("Drift review queue is full; the next list queues the change")
 	}
-	p.offer(pendingWrite{latest: &latestWrite{proxy: proxy, tool: tool,
-		declared: Declared{Fingerprint: fingerprint, SeenAt: at.UTC(), Gateway: p.gateway}}})
 }
 
-// Latest returns the newest declaration of a tool the gateways share.
+// Latest returns the newest declaration of a tool any gateway shares.
 func (p *Pending) Latest(proxy, tool string) (Declared, bool) {
 	d, ok := (*p.latest.Load())[observationKey(proxy, tool)]
 	return d, ok
 }
 
+// writer holds what the background writer has written, which only it reads.
+type writer struct {
+	own        map[string]Declared
+	unapproved map[string]int
+	generation uint64
+	written    map[string]int
+}
+
 func (p *Pending) write() {
-	for w := range p.queue {
+	w := writer{own: map[string]Declared{}, unapproved: map[string]int{}, written: map[string]int{}}
+	for {
 		var err error
-		switch {
-		case w.tool != nil:
-			err = p.writeTool(w.tool)
-		case w.instructions != nil:
-			err = p.writeInstructions(w.instructions)
-		case w.latest != nil:
-			err = p.writeLatest(w.latest)
+		select {
+		case d := <-p.declarations:
+			err = p.writeDeclaration(&w, d)
+		case r := <-p.reviews:
+			err = p.writeReview(&w, r)
 		}
 		if err != nil {
 			slog.Error("Could not share a drift declaration", "error", err)
@@ -191,31 +214,66 @@ func (p *Pending) write() {
 	}
 }
 
-// full reports whether a proxy already has as many review entries as the
-// limit allows. Counts come from the last refresh, so gateways writing at
-// once can pass the limit by a few entries.
-func (p *Pending) full(proxy string) bool {
-	return (*p.counts.Load())[proxy] >= p.limits.MaxUnapprovedPerProxy
-}
-
-func (p *Pending) writeTool(e *ToolEntry) error {
-	if p.full(e.Proxy) {
+// writeDeclaration writes this gateway's declaration of a tool. A declaration
+// that repeats this gateway's last one is not written again, unless another
+// gateway has since shared a newer, different one, which this sighting must
+// override. Tools without approval are shared up to the per-proxy limit.
+func (p *Pending) writeDeclaration(w *writer, d declaration) error {
+	key := observationKey(d.proxy, d.tool)
+	last, written := w.own[key]
+	if written && last.Fingerprint == d.declared.Fingerprint && last.Upstream == d.declared.Upstream {
+		shared, ok := p.Latest(d.proxy, d.tool)
+		if !ok || !shared.SeenAt.After(last.SeenAt) || shared.Fingerprint == last.Fingerprint {
+			return nil
+		}
+	}
+	if written && d.declared.SeenAt.Before(last.SeenAt) {
 		return nil
 	}
-	dir := path.Join(encodeName(e.Proxy), "tools", encodeName(e.Tool))
-	return p.create(dir, e.Fingerprint+".json", e)
+	if !d.approved && !written {
+		if w.unapproved[d.proxy] >= p.limits.MaxUnapprovedPerProxy {
+			return nil
+		}
+		w.unapproved[d.proxy]++
+	}
+	dir := path.Join(encodeName(d.proxy), "latest", encodeName(d.tool))
+	if err := p.root.MkdirAll(dir, 0o775); err != nil {
+		return err
+	}
+	data, err := jsonv2.Marshal(d.declared, jsonv2.Deterministic(true))
+	if err != nil {
+		return err
+	}
+	if err := p.publish(dir, encodeName(p.gateway)+".json", data, true); err != nil {
+		return err
+	}
+	w.own[key] = d.declared
+	return nil
 }
 
-func (p *Pending) writeInstructions(e *InstructionsEntry) error {
-	if p.full(e.Proxy) {
+// writeReview writes a review entry once per fingerprint. The per-proxy limit
+// counts the entries found at the last refresh and those written since.
+func (p *Pending) writeReview(w *writer, r review) error {
+	counts := p.counts.Load()
+	if counts.generation != w.generation {
+		w.generation, w.written = counts.generation, map[string]int{}
+	}
+	proxy := ""
+	var dir, name string
+	var v any
+	switch {
+	case r.tool != nil:
+		proxy, v = r.tool.Proxy, r.tool
+		dir, name = path.Join(encodeName(proxy), "tools", encodeName(r.tool.Tool)), r.tool.Fingerprint+".json"
+	case r.instructions != nil:
+		proxy, v = r.instructions.Proxy, r.instructions
+		dir, name = path.Join(encodeName(proxy), "instructions"), r.instructions.Fingerprint+".json"
+	default:
 		return nil
 	}
-	return p.create(path.Join(encodeName(e.Proxy), "instructions"), e.Fingerprint+".json", e)
-}
-
-// create writes a review file once: an existing file for the same
-// fingerprint is left as it is, so FirstSeen keeps the first sighting.
-func (p *Pending) create(dir, name string, v any) error {
+	if counts.byProxy[proxy]+w.written[proxy] >= p.limits.MaxUnapprovedPerProxy {
+		return nil
+	}
 	if err := p.root.MkdirAll(dir, 0o775); err != nil {
 		return err
 	}
@@ -223,19 +281,14 @@ func (p *Pending) create(dir, name string, v any) error {
 	if err != nil {
 		return err
 	}
-	return p.publish(dir, name, data, false)
-}
-
-func (p *Pending) writeLatest(w *latestWrite) error {
-	dir := path.Join(encodeName(w.proxy), "latest")
-	if err := p.root.MkdirAll(dir, 0o775); err != nil {
+	if _, err := p.root.Stat(path.Join(dir, name)); err == nil {
+		return nil
+	}
+	if err := p.publish(dir, name, data, false); err != nil {
 		return err
 	}
-	data, err := jsonv2.Marshal(w.declared, jsonv2.Deterministic(true))
-	if err != nil {
-		return err
-	}
-	return p.publish(dir, encodeName(w.tool)+".json", data, true)
+	w.written[proxy]++
+	return nil
 }
 
 // publish writes a file whole: to a temporary file first, then linked or
@@ -268,10 +321,12 @@ func (p *Pending) publish(dir, name string, data []byte, replace bool) error {
 	return err
 }
 
-// Refresh reads the latest declarations and counts the review entries of
-// every proxy. It reads at most maxLatest declarations per proxy, and skips
-// files it cannot read or that are larger than a declaration can be.
-func (p *Pending) Refresh(maxLatest int) {
+// Refresh reads the newest declaration of every tool keep accepts, and
+// counts each proxy's review entries. keep limits reading to the tools of the
+// active policy set, so declarations of tools no longer reviewed cannot
+// crowd out current ones. Files that cannot be read, or are larger than a
+// declaration can be, are skipped.
+func (p *Pending) Refresh(keep func(proxy, tool string) bool) {
 	if p.root == nil {
 		return
 	}
@@ -281,38 +336,43 @@ func (p *Pending) Refresh(maxLatest int) {
 		slog.Error("Could not read shared drift declarations", "error", err)
 		return
 	}
-	for _, encoded := range proxies {
-		proxy, ok := decodeName(encoded)
+	for _, encodedProxy := range proxies {
+		proxy, ok := decodeName(encodedProxy)
 		if !ok {
 			continue
 		}
-		counts[proxy] = p.countEntries(encoded)
-		files, err := p.readDir(path.Join(encoded, "latest"))
-		if err != nil {
-			continue
-		}
-		read := 0
-		for _, file := range files {
-			tool, ok := decodeName(trimJSON(file))
-			if !ok || read >= maxLatest {
+		counts[proxy] = p.countEntries(encodedProxy)
+		tools, _ := p.readDir(path.Join(encodedProxy, "latest"))
+		for _, encodedTool := range tools {
+			tool, ok := decodeName(encodedTool)
+			if !ok || !keep(proxy, tool) {
 				continue
 			}
-			var d Declared
-			if p.readJSON(path.Join(encoded, "latest", file), &d) && fingerprintPattern.MatchString(d.Fingerprint) {
-				latest[observationKey(proxy, tool)] = d
-				read++
+			gateways, _ := p.readDir(path.Join(encodedProxy, "latest", encodedTool))
+			for i, file := range gateways {
+				if i >= maxGatewaysPerTool {
+					break
+				}
+				var d Declared
+				if !p.readJSON(path.Join(encodedProxy, "latest", encodedTool, file), &d) ||
+					(d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint)) {
+					continue
+				}
+				key := observationKey(proxy, tool)
+				if newest, ok := latest[key]; !ok || d.SeenAt.After(newest.SeenAt) {
+					latest[key] = d
+				}
 			}
 		}
 	}
 	p.latest.Store(&latest)
-	p.counts.Store(&counts)
+	p.counts.Store(&entryCounts{generation: p.counts.Load().generation + 1, byProxy: counts})
 }
 
 // countEntries counts a proxy's review entries, stopping past the limit.
 func (p *Pending) countEntries(encoded string) int {
-	count := 0
 	instructions, _ := p.readDir(path.Join(encoded, "instructions"))
-	count += len(instructions)
+	count := len(instructions)
 	tools, _ := p.readDir(path.Join(encoded, "tools"))
 	for _, tool := range tools {
 		if count > p.limits.MaxUnapprovedPerProxy {
@@ -350,13 +410,6 @@ func (p *Pending) readJSON(name string, v any) bool {
 		return false
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxLatestFile+1))
-	return err == nil && len(data) <= maxLatestFile && jsonv2.Unmarshal(data, v) == nil
-}
-
-func trimJSON(name string) string {
-	if len(name) > 5 && name[len(name)-5:] == ".json" {
-		return name[:len(name)-5]
-	}
-	return ""
+	data, err := io.ReadAll(io.LimitReader(f, maxDeclarationFile+1))
+	return err == nil && len(data) <= maxDeclarationFile && jsonv2.Unmarshal(data, v) == nil
 }

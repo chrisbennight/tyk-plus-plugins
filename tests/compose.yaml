@@ -48,6 +48,7 @@ services:
       - policy:/policy
       - status:/status:ro
       - pending:/pending:ro
+      - peer-status:/peer-status:ro
     depends_on:
       - gateway-peer
 volumes:

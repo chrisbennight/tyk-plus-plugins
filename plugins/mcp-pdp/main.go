@@ -86,7 +86,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			if view, enforcing := state.Drift(proxy); enforcing {
 				latest, at, seen := observed.LatestAt(proxy, name)
 				// Another gateway may have seen a newer declaration.
-				if d, ok := shared.Latest(proxy, name); ok && (!seen || d.SeenAt.After(at)) {
+				if d, ok := shared.Latest(proxy, name); ok && d.Upstream == view.Upstream() && (!seen || d.SeenAt.After(at)) {
 					latest, seen = d.Fingerprint, true
 				}
 				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))

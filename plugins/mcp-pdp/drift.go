@@ -27,10 +27,6 @@ var observed drift.Observations
 // on what it has seen itself.
 var shared *drift.Pending
 
-// maxSharedPerProxy bounds the shared declarations a gateway reads for each
-// proxy. Gateways write one for each approved tool.
-const maxSharedPerProxy = 10000
-
 // maxReply bounds a plain reply, or one streamed event, that the
 // gateway reads to check it.
 const maxReply = 16 << 20
@@ -131,9 +127,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool, definition jsontext.Value) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
 			approvedFingerprint, _, _ := view.Approved(tool)
-			if approved {
-				shared.Saw(proxy, tool, fingerprint, now)
-			}
+			shared.Saw(proxy, upstream, tool, fingerprint, approved, now)
 			if fingerprint != approvedFingerprint && !view.Rejected(tool, fingerprint) {
 				shared.Changed(proxy, tool, fingerprint, definition)
 			}

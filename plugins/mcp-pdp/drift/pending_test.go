@@ -13,47 +13,123 @@ import (
 const (
 	fingerprintA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	fingerprintB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testUpstream = "https://u.example/mcp"
 )
 
-func openTestPending(t *testing.T, dir string) *Pending {
+func every(string, string) bool { return true }
+
+func openTestPending(t *testing.T, dir, gateway string) *Pending {
 	t.Helper()
-	p, err := OpenPending(dir, "gateway-1", Limits{MaxDefinitionBytes: 1 << 10, MaxUnapprovedPerProxy: 2})
+	p, err := OpenPending(dir, gateway, Limits{MaxDefinitionBytes: 1 << 10, MaxUnapprovedPerProxy: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return p
 }
 
-func TestSharedDeclarationsAreReadByEveryGateway(t *testing.T) {
+func newWriter() *writer {
+	return &writer{own: map[string]Declared{}, unapproved: map[string]int{}, written: map[string]int{}}
+}
+
+func declare(fingerprint string, at time.Time, approved bool) declaration {
+	return declaration{proxy: "governed", tool: "lookup", approved: approved,
+		declared: Declared{Fingerprint: fingerprint, SeenAt: at, Upstream: testUpstream}}
+}
+
+func TestTheNewestDeclarationOfAnyGatewayWins(t *testing.T) {
 	dir := t.TempDir()
-	writer, reader := openTestPending(t, dir), openTestPending(t, dir)
-	seen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	if err := writer.writeLatest(&latestWrite{proxy: "governed", tool: "lookup", declared: Declared{Fingerprint: fingerprintA, SeenAt: seen, Gateway: "gateway-1"}}); err != nil {
+	one, two, reader := openTestPending(t, dir, "one"), openTestPending(t, dir, "two"), openTestPending(t, dir, "reader")
+	w1, w2 := newWriter(), newWriter()
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	// Gateway two's newer declaration is written first; gateway one's older
+	// one arrives late, in its own file, and does not replace it.
+	if err := two.writeDeclaration(w2, declare(fingerprintB, start.Add(time.Minute), true)); err != nil {
 		t.Fatal(err)
 	}
-	reader.Refresh(10)
+	if err := one.writeDeclaration(w1, declare(fingerprintA, start, true)); err != nil {
+		t.Fatal(err)
+	}
+	reader.Refresh(every)
 	d, ok := reader.Latest("governed", "lookup")
-	if !ok || d.Fingerprint != fingerprintA || !d.SeenAt.Equal(seen) {
+	if !ok || d.Fingerprint != fingerprintB || d.Upstream != testUpstream {
 		t.Fatalf("read %+v, %v", d, ok)
 	}
-	// A newer declaration replaces it.
-	if err := writer.writeLatest(&latestWrite{proxy: "governed", tool: "lookup", declared: Declared{Fingerprint: fingerprintB, SeenAt: seen.Add(time.Minute)}}); err != nil {
+}
+
+func TestARepeatedSightingOverridesANewerDifferentOne(t *testing.T) {
+	dir := t.TempDir()
+	one, two := openTestPending(t, dir, "one"), openTestPending(t, dir, "two")
+	w1, w2 := newWriter(), newWriter()
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := one.writeDeclaration(w1, declare(fingerprintA, start, true)); err != nil {
 		t.Fatal(err)
 	}
-	reader.Refresh(10)
-	if d, _ := reader.Latest("governed", "lookup"); d.Fingerprint != fingerprintB {
+	if err := two.writeDeclaration(w2, declare(fingerprintB, start.Add(time.Minute), true)); err != nil {
+		t.Fatal(err)
+	}
+	one.Refresh(every)
+	// Gateway one sees A again after two saw B: it writes again, so its
+	// sighting is the newest.
+	if err := one.writeDeclaration(w1, declare(fingerprintA, start.Add(2*time.Minute), true)); err != nil {
+		t.Fatal(err)
+	}
+	one.Refresh(every)
+	if d, _ := one.Latest("governed", "lookup"); d.Fingerprint != fingerprintA {
 		t.Fatalf("read %+v", d)
+	}
+}
+
+func TestUnidentifiedDefinitionsAreShared(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	if err := p.writeDeclaration(newWriter(), declare("", time.Now(), true)); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh(every)
+	if d, ok := p.Latest("governed", "lookup"); !ok || d.Fingerprint != "" {
+		t.Fatalf("read %+v, %v", d, ok)
+	}
+}
+
+func TestOnlyReviewedToolsAreRead(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh(func(_, tool string) bool { return tool != "lookup" })
+	if _, ok := p.Latest("governed", "lookup"); ok {
+		t.Fatal("read a declaration of a tool the set does not review")
+	}
+}
+
+func TestToolsWithoutApprovalAreSharedUpToTheLimit(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	w := newWriter()
+	for _, tool := range []string{"a", "b", "c"} {
+		d := declaration{proxy: "governed", tool: tool, declared: Declared{Fingerprint: fingerprintA, SeenAt: time.Now()}}
+		if err := p.writeDeclaration(w, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p.Refresh(every)
+	_, a := p.Latest("governed", "a")
+	_, c := p.Latest("governed", "c")
+	if !a || c {
+		t.Fatalf("shared a=%v c=%v past a limit of two", a, c)
 	}
 }
 
 func TestReviewEntriesAreWrittenOncePerFingerprint(t *testing.T) {
 	dir := t.TempDir()
-	p := openTestPending(t, dir)
+	p := openTestPending(t, dir, "one")
+	w := newWriter()
 	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i, at := range []time.Time{first, first.Add(time.Hour)} {
-		e := &ToolEntry{Proxy: "governed", Tool: "lookup", Fingerprint: fingerprintA, Definition: []byte(`{"name":"lookup"}`), FirstSeen: at, Gateway: "gateway-1"}
-		if err := p.writeTool(e); err != nil {
-			t.Fatalf("write %d: %v", i, err)
+	for _, at := range []time.Time{first, first.Add(time.Hour)} {
+		e := &ToolEntry{Proxy: "governed", Tool: "lookup", Fingerprint: fingerprintA, Definition: []byte(`{"name":"lookup"}`), FirstSeen: at}
+		if err := p.writeReview(w, review{tool: e}); err != nil {
+			t.Fatal(err)
 		}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, encodeName("governed"), "tools", encodeName("lookup"), fingerprintA+".json"))
@@ -64,23 +140,22 @@ func TestReviewEntriesAreWrittenOncePerFingerprint(t *testing.T) {
 	if err := jsonv2.Unmarshal(data, &e); err != nil || !e.FirstSeen.Equal(first) || string(e.Definition) != `{"name":"lookup"}` {
 		t.Fatalf("entry %s: %v", data, err)
 	}
-	// No temporary files are left behind.
-	leftovers, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*", ".*"))
-	if len(leftovers) != 0 {
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, "*", "*", "*", ".*")); len(leftovers) != 0 {
 		t.Fatalf("left %v", leftovers)
 	}
 }
 
-func TestReviewEntriesStopAtTheLimit(t *testing.T) {
+func TestReviewEntriesStopAtTheLimitBetweenRefreshes(t *testing.T) {
 	dir := t.TempDir()
-	p := openTestPending(t, dir)
+	p := openTestPending(t, dir, "one")
+	w := newWriter()
 	for _, fp := range []string{fingerprintA, fingerprintB} {
-		if err := p.writeInstructions(&InstructionsEntry{Proxy: "governed", Fingerprint: fp, Instructions: "x"}); err != nil {
+		if err := p.writeReview(w, review{instructions: &InstructionsEntry{Proxy: "governed", Fingerprint: fp}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	p.Refresh(10)
-	if err := p.writeTool(&ToolEntry{Proxy: "governed", Tool: "lookup", Fingerprint: fingerprintA, Definition: []byte(`{}`)}); err != nil {
+	// No refresh has counted the two entries; the writer counts them itself.
+	if err := p.writeReview(w, review{tool: &ToolEntry{Proxy: "governed", Tool: "lookup", Fingerprint: fingerprintA, Definition: []byte(`{}`)}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, encodeName("governed"), "tools")); !os.IsNotExist(err) {
@@ -94,12 +169,14 @@ func TestNamesCannotLeaveTheDirectory(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p := openTestPending(t, dir)
-	if err := p.writeTool(&ToolEntry{Proxy: "../..", Tool: "../../escape", Fingerprint: fingerprintA, Definition: []byte(`{}`)}); err != nil {
+	p := openTestPending(t, dir, "../../gateway")
+	if err := p.writeReview(newWriter(), review{tool: &ToolEntry{Proxy: "../..", Tool: "../../escape", Fingerprint: fingerprintA, Definition: []byte(`{}`)}}); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := os.ReadDir(parent)
-	if len(entries) != 1 {
+	if err := p.writeDeclaration(newWriter(), declaration{proxy: "../..", tool: "../x", approved: true, declared: Declared{Fingerprint: fingerprintA}}); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ := os.ReadDir(parent); len(entries) != 1 {
 		t.Fatalf("wrote outside the directory: %v", entries)
 	}
 	if strings.ContainsAny(encodeName("../a/b"), "./") {
@@ -109,48 +186,46 @@ func TestNamesCannotLeaveTheDirectory(t *testing.T) {
 
 func TestUnreadableDeclarationsAreSkipped(t *testing.T) {
 	dir := t.TempDir()
-	latest := filepath.Join(dir, encodeName("governed"), "latest")
-	if err := os.MkdirAll(latest, 0o755); err != nil {
+	tool := filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"))
+	if err := os.MkdirAll(tool, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
-		encodeName("garbled") + ".json":   `{`,
-		encodeName("oversized") + ".json": `{"fingerprint":"` + fingerprintA + `","pad":"` + strings.Repeat("x", maxLatestFile) + `"}`,
-		encodeName("notahash") + ".json":  `{"fingerprint":"nope"}`,
-		"not-base64!.json":                `{"fingerprint":"` + fingerprintA + `"}`,
+		"garbled.json":   `{`,
+		"oversized.json": `{"fingerprint":"` + fingerprintA + `","pad":"` + strings.Repeat("x", maxDeclarationFile) + `"}`,
+		"notahash.json":  `{"fingerprint":"nope"}`,
 	} {
-		if err := os.WriteFile(filepath.Join(latest, name), []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(tool, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	p := openTestPending(t, dir)
-	p.Refresh(10)
-	if n := len(*p.latest.Load()); n != 0 {
-		t.Fatalf("read %d declarations", n)
+	p := openTestPending(t, dir, "one")
+	p.Refresh(every)
+	if _, ok := p.Latest("governed", "lookup"); ok {
+		t.Fatal("read an unreadable declaration")
 	}
 }
 
 func TestWithoutADirectoryNothingIsShared(t *testing.T) {
-	p := openTestPending(t, "")
+	p := openTestPending(t, "", "one")
 	p.Changed("governed", "lookup", fingerprintA, []byte(`{}`))
-	p.Saw("governed", "lookup", fingerprintA, time.Now())
-	p.Refresh(10)
+	p.Saw("governed", testUpstream, "lookup", fingerprintA, true, time.Now())
+	p.Refresh(every)
 	if _, ok := p.Latest("governed", "lookup"); ok {
 		t.Fatal("a declaration was shared without a directory")
 	}
 }
 
-func TestMatchingSharedDeclarationsAreNotWrittenAgain(t *testing.T) {
-	// No writer drains this queue, so what was offered stays in it.
-	p := &Pending{queue: make(chan pendingWrite, 4)}
-	declared := map[string]Declared{observationKey("governed", "lookup"): {Fingerprint: fingerprintA}}
-	p.latest.Store(&declared)
-	p.Saw("governed", "lookup", fingerprintA, time.Now())
-	if len(p.queue) != 0 {
-		t.Fatal("a matching declaration was queued")
-	}
-	p.Saw("governed", "lookup", fingerprintB, time.Now())
-	if len(p.queue) != 1 {
-		t.Fatal("a different declaration was not queued")
+func TestSightingsAreQueuedInOrderWithoutDropping(t *testing.T) {
+	// No writer drains these queues, so what was offered stays in them.
+	p := &Pending{declarations: make(chan declaration, 4), reviews: make(chan review, 4)}
+	latest := map[string]Declared{observationKey("governed", "lookup"): {Fingerprint: fingerprintB}}
+	p.latest.Store(&latest)
+	// Even a sighting that matches the shared copy is queued, so a change
+	// queued before it cannot be the last word.
+	p.Saw("governed", testUpstream, "lookup", fingerprintA, true, time.Now())
+	p.Saw("governed", testUpstream, "lookup", fingerprintB, true, time.Now())
+	if len(p.declarations) != 2 {
+		t.Fatalf("queued %d sightings", len(p.declarations))
 	}
 }

@@ -45,9 +45,13 @@ func driftSuite(k keys, version string) {
 	inventory(map[string]any{}, tools)
 	listed := catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"lookup"}), "%s: hide listed %v", version, slices.Collect(maps.Keys(listed)))
-	// The gateway shares what it saw: a gateway that never listed the tool
-	// refuses calls to it within its refresh interval, and the change waits
-	// for review.
+	// The gateway shares what it saw: a gateway that never listed the tool,
+	// enforcing the same set, refuses calls to it within its refresh
+	// interval, and the change waits for review.
+	awaitPeerSet(readReport()["active"])
+	// The declaration is shared once; a later client version finds the one
+	// this run shared, which a gateway would not write again unchanged.
+	awaitSharedDeclaration("governed", "change", probeStarted)
 	time.Sleep(time.Second)
 	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
 	checkPendingChange("governed", "change")
@@ -120,4 +124,39 @@ func checkPendingChange(proxy, tool string) {
 			regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(entry.Fingerprint) &&
 			filepath.Base(file) == entry.Fingerprint+".json", "review entry %s: %s", file, data)
 	}
+}
+
+// probeStarted is when this probe run began, so declarations left by an
+// earlier run are not taken for ones this run caused.
+var probeStarted = time.Now()
+
+// awaitPeerSet waits until the peer gateway enforces a set.
+func awaitPeerSet(set any) {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var report map[string]any
+		if data, err := os.ReadFile("/peer-status/status.json"); err == nil && json.Unmarshal(data, &report) == nil && report["enforcing"] == set {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	panic(fmt.Sprintf("peer gateway did not enforce set %v", set))
+}
+
+// awaitSharedDeclaration waits until a gateway shares a declaration of a
+// tool seen after a time.
+func awaitSharedDeclaration(proxy, tool string, after time.Time) {
+	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "latest", encode(tool), "*.json"))
+		for _, file := range files {
+			var declared struct{ SeenAt time.Time }
+			if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &declared) == nil && !declared.SeenAt.Before(after.Add(-time.Second)) {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	panic(fmt.Sprintf("no declaration of %s on %s was shared after %v", tool, proxy, after))
 }

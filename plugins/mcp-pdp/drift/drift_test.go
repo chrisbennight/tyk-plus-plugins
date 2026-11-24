@@ -1,8 +1,8 @@
 package drift
 
 import (
-	"github.com/go-json-experiment/json/jsontext"
 	"encoding/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"io"
 	"reflect"
 	"strings"
@@ -168,10 +168,15 @@ func TestStreamedEventsAreRewritten(t *testing.T) {
 	if strings.Contains(text, "Delete everything") || !strings.Contains(text, "Find a record") {
 		t.Fatalf("stream: %q", text)
 	}
-	for _, want := range []string{"event: message\n", "id: 1\n", ": note\n", "event: ping\n\n"} {
+	for _, want := range []string{"event: message\n", ": note\n", "event: ping\n\n"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("lost %q in %q", want, text)
 		}
+	}
+	// Without an event ID, a client cannot resume the list on a request whose
+	// reply is not checked.
+	if strings.Contains(text, "id: 1") {
+		t.Errorf("passed an event ID in %q", text)
 	}
 }
 
@@ -559,5 +564,54 @@ func TestToolsThatLoseApprovalCountAgainstTheLimit(t *testing.T) {
 	o.Record("governed", o.Received(), []Observation{{Tool: "a"}}, 1)
 	if _, ok := o.Latest("governed", "a"); ok || o.Complete("governed") {
 		t.Fatal("a tool that lost its approval did not count against the limit")
+	}
+}
+
+func TestGatewayErrorsAnswerTheRequest(t *testing.T) {
+	for name, message := range map[string]string{
+		"unreadable":            `{`,
+		"error for another ID":  `{"jsonrpc":"2.0","id":99,"error":{"code":-32000,"message":"no"}}`,
+		"invalid result":        `{"jsonrpc":"2.0","id":99,"result":{}}`,
+		"request with bad name": `{"jsonrpc":"2.0","id":5,"method":5}`,
+	} {
+		out := FilterToolsList([]byte(message), view(t, `{}`), testLimits, jsontext.Value(`7`), func(string, string, bool) {})
+		if !strings.Contains(string(out), `"id":7`) || !strings.Contains(string(out), "could not be checked") {
+			t.Errorf("%s: sent %s", name, out)
+		}
+	}
+}
+
+func TestEndedStreamsStopAfterTheCurrentEvent(t *testing.T) {
+	stream := "data: first\n\ndata: second\n\n"
+	var rewriter *EventRewriter
+	rewriter = NewEventRewriter(io.NopCloser(strings.NewReader(stream)), 1<<20, nil, func(b []byte) []byte {
+		rewriter.End()
+		return b
+	})
+	out, err := io.ReadAll(rewriter)
+	if err != nil || string(out) != "data: first\n\n" {
+		t.Fatalf("sent %q, %v", out, err)
+	}
+}
+
+func TestAMixedEnvelopeIsSentAsAReply(t *testing.T) {
+	// The response hook ends a stream at the first message it sends that is
+	// not a request or notification, so a result is never sent with a method.
+	message := `{"jsonrpc":"2.0","id":7,"method":"notifications/message","result":{"tools":[]}}`
+	out := FilterToolsList([]byte(message), view(t, `{}`), testLimits, jsontext.Value(`7`), func(string, string, bool) {})
+	if CarriesMethod(out) {
+		t.Fatalf("sent %s", out)
+	}
+}
+
+func TestPrimingEventsPassUnchecked(t *testing.T) {
+	stream := "id: 1\ndata:\n\ndata: reply\n\n"
+	var transformed []string
+	out, err := io.ReadAll(NewEventRewriter(io.NopCloser(strings.NewReader(stream)), 1<<20, nil, func(b []byte) []byte {
+		transformed = append(transformed, string(b))
+		return b
+	}))
+	if err != nil || string(out) != "data:\n\ndata: reply\n\n" || len(transformed) != 1 {
+		t.Fatalf("sent %q, transformed %q, %v", out, transformed, err)
 	}
 }

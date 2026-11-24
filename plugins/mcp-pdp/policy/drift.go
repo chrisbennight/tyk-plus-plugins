@@ -59,6 +59,7 @@ func (d *driftSettings) validate(proxy string) error {
 // DriftView is what a gateway needs to enforce drift review on one proxy.
 type DriftView struct {
 	settings *driftSettings
+	upstream string
 	tools    map[string]*tool
 }
 
@@ -69,7 +70,7 @@ func (s *Snapshot) Drift(proxy string) (DriftView, bool) {
 	if !ok || inv.Drift == nil {
 		return DriftView{}, false
 	}
-	return DriftView{settings: inv.Drift, tools: inv.Tools}, true
+	return DriftView{settings: inv.Drift, upstream: inv.Upstream, tools: inv.Tools}, true
 }
 
 // Approved returns a tool's approved definition and its fingerprint. A tool
@@ -81,6 +82,10 @@ func (v DriftView) Approved(name string) (fingerprint string, definition json.Ra
 	}
 	return t.Definition.fingerprint, t.Definition.raw, true
 }
+
+// Upstream is the upstream URL the proxy's tools were reviewed for. Another
+// upstream's declarations say nothing about those tools.
+func (v DriftView) Upstream() string { return v.upstream }
 
 // Rejected reports whether a reviewer rejected this definition of a tool.
 func (v DriftView) Rejected(name, fingerprint string) bool {

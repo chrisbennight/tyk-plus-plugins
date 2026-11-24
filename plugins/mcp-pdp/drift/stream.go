@@ -51,7 +51,7 @@ func (r *EventRewriter) Read(p []byte) (int, error) {
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
-		r.done = err == io.EOF
+		r.done = r.done || err == io.EOF
 		r.pending = event
 	}
 	n := copy(p, r.pending)
@@ -97,8 +97,8 @@ func (r *EventRewriter) readLine(size *int) ([]byte, error) {
 
 // readEvent reads lines up to and including the blank line that ends an
 // event, and returns the event with its data transformed. Only the fields the
-// event-stream format defines are passed on, and comments; clients ignore any
-// other field, so dropping it changes nothing for them and no line the
+// event-stream format defines are passed on, except event IDs, and comments;
+// clients ignore any other field, so dropping it changes nothing for them and no line the
 // rewriter did not recognize reaches a client. A comment outside an event is
 // passed on at once, so keepalives are not held back.
 func (r *EventRewriter) readEvent() ([]byte, error) {
@@ -120,8 +120,15 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			return out.Bytes(), io.EOF
 		}
 		if len(line) == 0 {
-			if data != nil {
-				out.Write(dataLines(r.transform(bytes.Join(data, []byte("\n")))))
+			switch joined := bytes.Join(data, []byte("\n")); {
+			case data == nil:
+			case len(joined) == 0:
+				// An event with empty data carries no message; servers send
+				// one to prime a stream for resumption, and clients skip it.
+				// Its ID is dropped like any other.
+				out.WriteString("data:\n")
+			default:
+				out.Write(dataLines(r.transform(joined)))
 			}
 			out.WriteString("\n")
 			return out.Bytes(), nil
@@ -136,9 +143,13 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			if data == nil && out.Len() == len(line)+1 {
 				return out.Bytes(), nil
 			}
-		case "event", "id", "retry":
+		case "event", "retry":
 			out.Write(line)
 			out.WriteString("\n")
+		case "id":
+			// Event IDs are dropped, so a client cannot resume a checked list
+			// on another request whose reply the gateway does not check. A
+			// client that loses the stream lists again, through the check.
 		}
 	}
 }
@@ -154,6 +165,9 @@ func dataLines(message []byte) []byte {
 	}
 	return out.Bytes()
 }
+
+// End makes the event being transformed the last one passed on.
+func (r *EventRewriter) End() { r.done = true }
 
 // Close closes the wrapped body.
 func (r *EventRewriter) Close() error { return r.body.Close() }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/TykTechnologies/tyk/ctx"
@@ -20,33 +21,61 @@ var observed drift.Observations
 // gateway reads to check it.
 const maxReply = 16 << 20
 
+// limits bound the work of checking lists. Both are configurable: an
+// operator may approve larger definitions or expect more unapproved tools.
+var limits = drift.Limits{
+	MaxDefinitionBytes:    positiveSetting("CEDAR_PENDING_MAX_DEFINITION_BYTES", 256<<10),
+	MaxUnapprovedPerProxy: positiveSetting("CEDAR_PENDING_MAX_PER_PROXY", 200),
+}
+
+func positiveSetting(variable string, fallback int) int {
+	value := os.Getenv(variable)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed <= 0 {
+		slog.Error("Invalid setting; using the default", "variable", variable, "value", value, "default", fallback)
+		return fallback
+	}
+	return parsed
+}
+
 // CheckResponse is a Tyk response hook. On a proxy under drift enforcement it
 // checks tools/list replies, plain or streamed, so only approved definitions
 // reach clients, and records what the upstream declared. Without a valid
 // policy set the gateway cannot tell what is approved, so it withholds the
 // list; calls are refused in that state anyway.
 func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request) {
-	if ctx.GetMCPMethod(req) != "tools/list" {
+	if ctx.GetMCPMethod(req) != "tools/list" || !underDriftReview(req) {
 		return
 	}
-	oas := ctx.GetOASDefinition(req)
-	if oas == nil || oas.GetTykExtension() == nil {
-		return
-	}
-	proxy := oas.GetTykExtension().Info.ID
-	transform := drift.CheckFailed
-	if state := current(); state != nil {
+	proxy := ctx.GetOASDefinition(req).GetTykExtension().Info.ID
+	// Each message is checked against the set active when it arrives, so a
+	// long stream follows set changes.
+	transform := func(message []byte) []byte {
+		state := current()
+		if state == nil {
+			return drift.CheckFailed(message)
+		}
 		view, enforcing := state.Drift(proxy)
 		if !enforcing {
-			return
+			// The proxy left drift review while the reply was streaming; its
+			// remaining messages pass as they would for any other proxy.
+			return message
 		}
-		transform = func(message []byte) []byte {
-			seen := map[string]string{}
-			out := drift.FilterToolsList(message, view, func(name, fingerprint string) { seen[name] = fingerprint })
-			observed.Record(proxy, seen)
-			return out
-		}
+		var declared []drift.Observation
+		out := drift.FilterToolsList(message, view, limits, func(tool, fingerprint string, approved bool) {
+			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+		})
+		observed.Record(proxy, declared, limits.MaxUnapprovedPerProxy)
+		return out
 	}
+	// The reply now depends on the gateway's approvals as well as the
+	// upstream, so upstream validators and freshness do not describe it.
+	res.Header.Del("ETag")
+	res.Header.Del("Last-Modified")
+	res.Header.Set("Cache-Control", "private, no-cache")
 	// Authorize asks for an uncompressed reply. One that is compressed anyway
 	// cannot be checked, so it is not passed on.
 	if res.Header.Get("Content-Encoding") != "" {

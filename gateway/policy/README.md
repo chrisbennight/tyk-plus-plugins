@@ -140,8 +140,15 @@ Under drift review:
 - `changedTools` decides what happens to an approved tool whose upstream definition changed: `hide` (the default) leaves it out of lists, and `serve-approved` lists the approved definition instead of the upstream's. Either way, calls to it are refused until you approve the new definition or the upstream returns to the approved one.
 - A call to a tool that is not approved, or whose upstream last listed a different definition, is refused with the same reply as any other denied call, before rules are evaluated.
 - Activation checks apply the same rule: a check that expects a permit for a tool without an approved definition rejects the set, and one that expects a denial passes.
-- Each gateway compares calls with the definitions it last saw in a `tools/list` reply. Until a gateway has seen a list for a proxy, it checks calls against approval alone.
-- A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error.
+- Each gateway compares calls with the definitions it last saw in a `tools/list` reply, including definitions of tools that were not approved when listed, so approving a definition the upstream no longer declares does not let calls through. Until a gateway has seen a tool in a list, it checks calls to it against approval alone.
+- A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error. Checked replies carry `Cache-Control: private, no-cache` and no upstream `ETag`, because they depend on your approvals as well as the upstream.
+
+Two settings bound the work of checking lists:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CEDAR_PENDING_MAX_DEFINITION_BYTES` | `262144` | The largest upstream tool definition the gateway fingerprints. A larger one counts as a changed definition, so raise this if you approve larger definitions. |
+| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy. Tools past the limit are checked against approval alone. |
 
 The `drift` object also accepts `changedInstructions` (`replace`, the default, or `strip`), `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). The gateway validates these fields; later releases act on them.
 

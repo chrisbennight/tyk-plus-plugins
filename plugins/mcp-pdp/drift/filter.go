@@ -5,6 +5,8 @@
 package drift
 
 import (
+	"encoding/json"
+
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 
@@ -32,16 +34,27 @@ func CallReason(view policy.DriftView, name, latest string, seen bool) string {
 	return ""
 }
 
+// Limits bound the work and memory of checking upstream lists.
+type Limits struct {
+	// MaxDefinitionBytes is the largest upstream definition the gateway
+	// fingerprints. A larger one counts as a changed definition.
+	MaxDefinitionBytes int
+	// MaxUnapprovedPerProxy bounds how many tools without approval the
+	// gateway remembers for each proxy.
+	MaxUnapprovedPerProxy int
+}
+
 // FilterToolsList checks one JSON-RPC message answering tools/list. A tool
 // whose upstream definition matches the approved one is sent as approved, so
 // even its unfingerprinted _meta is reviewed text. A changed tool is left
 // out, or shown with its approved definition when the proxy serves approved
 // definitions. New tools are left out, and each tool is listed at most once.
-// observe receives the fingerprint each approved tool's upstream declared, or
-// "" when one reply declared it more than once with different definitions. A
-// message that cannot be checked is replaced with an error, so unchecked
-// upstream text never reaches the client.
-func FilterToolsList(message []byte, view policy.DriftView, observe func(name, fingerprint string)) []byte {
+// observe receives the fingerprint the upstream declared for each tool, ""
+// when it cannot be fingerprinted or one reply declared it more than once
+// with different definitions, and whether the tool is approved. A message
+// that cannot be checked is replaced with an error, so unchecked upstream
+// text never reaches the client.
+func FilterToolsList(message []byte, view policy.DriftView, limits Limits, observe func(name, fingerprint string, approved bool)) []byte {
 	var envelope map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
 		return checkFailed(nil)
@@ -49,12 +62,19 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	// Every message passed on is rebuilt from the members JSON-RPC defines,
 	// spelled exactly, so a client that matches names loosely cannot find
 	// unchecked text under a variant spelling.
-	keep := func(names ...string) map[string]jsontext.Value {
+	keep := func(from map[string]jsontext.Value, names ...string) map[string]jsontext.Value {
 		out := map[string]jsontext.Value{}
 		for _, name := range names {
-			if value, ok := envelope[name]; ok {
+			if value, ok := from[name]; ok {
 				out[name] = value
 			}
+		}
+		return out
+	}
+	encode := func(rebuilt map[string]jsontext.Value) []byte {
+		out, err := jsonv2.Marshal(rebuilt, jsonv2.Deterministic(true))
+		if err != nil {
+			return checkFailed(envelope["id"])
 		}
 		return out
 	}
@@ -62,20 +82,24 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	if !ok {
 		// Error replies, and requests and notifications sharing the stream,
 		// carry no tool definitions. Anything else is not a valid message.
-		var rebuilt map[string]jsontext.Value
 		switch {
 		case envelope["error"] != nil:
-			rebuilt = keep("jsonrpc", "id", "error")
+			var failure struct {
+				Code    *int64          `json:"code"`
+				Message *string         `json:"message"`
+				Data    json.RawMessage `json:"data,omitempty"`
+			}
+			if jsonv2.Unmarshal(envelope["error"], &failure) != nil || failure.Code == nil || failure.Message == nil {
+				return checkFailed(envelope["id"])
+			}
+			rebuilt := keep(envelope, "jsonrpc", "id")
+			rebuilt["error"], _ = jsonv2.Marshal(failure)
+			return encode(rebuilt)
 		case envelope["method"] != nil:
-			rebuilt = keep("jsonrpc", "id", "method", "params")
+			return encode(keep(envelope, "jsonrpc", "id", "method", "params"))
 		default:
 			return checkFailed(envelope["id"])
 		}
-		out, err := jsonv2.Marshal(rebuilt)
-		if err != nil {
-			return checkFailed(envelope["id"])
-		}
-		return out
 	}
 	var result map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(raw, &result); err != nil {
@@ -90,6 +114,9 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	if err := jsonv2.Unmarshal(listed, &tools); err != nil {
 		return checkFailed(envelope["id"])
 	}
+	if cursor, ok := result["nextCursor"]; ok && (len(cursor) == 0 || cursor[0] != '"') {
+		return checkFailed(envelope["id"])
+	}
 	var order []string
 	declared := map[string]string{}
 	for _, definition := range tools {
@@ -100,12 +127,9 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 		if jsonv2.Unmarshal(definition, &named) != nil || named.Name == "" {
 			continue
 		}
-		if _, _, ok := view.Approved(named.Name); !ok {
-			continue
-		}
-		fingerprint, err := policy.DefinitionFingerprint(definition)
-		if err != nil {
-			fingerprint = ""
+		fingerprint := ""
+		if len(definition) <= limits.MaxDefinitionBytes {
+			fingerprint, _ = policy.DefinitionFingerprint(definition)
 		}
 		previous, repeated := declared[named.Name]
 		switch {
@@ -120,26 +144,19 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	kept := make([]jsontext.Value, 0, len(order))
 	for _, name := range order {
 		fingerprint := declared[name]
-		observe(name, fingerprint)
-		approved, approvedDefinition, _ := view.Approved(name)
-		if fingerprint == approved || view.ServeApproved() {
+		approved, approvedDefinition, ok := view.Approved(name)
+		observe(name, fingerprint, ok)
+		if ok && (fingerprint == approved || view.ServeApproved()) {
 			kept = append(kept, jsontext.Value(approvedDefinition))
 		}
 	}
-	rebuiltResult := map[string]jsontext.Value{}
-	for _, name := range []string{"nextCursor", "_meta"} {
-		if value, ok := result[name]; ok {
-			rebuiltResult[name] = value
-		}
-	}
+	// Result metadata is upstream text no one reviewed, so only the cursor
+	// that pages the list is kept.
+	rebuiltResult := keep(result, "nextCursor")
 	rebuiltResult["tools"], _ = jsonv2.Marshal(kept)
-	rebuilt := keep("jsonrpc", "id")
+	rebuilt := keep(envelope, "jsonrpc", "id")
 	rebuilt["result"], _ = jsonv2.Marshal(rebuiltResult)
-	out, err := jsonv2.Marshal(rebuilt)
-	if err != nil {
-		return checkFailed(envelope["id"])
-	}
-	return out
+	return encode(rebuilt)
 }
 
 // CheckFailed replaces a whole reply the gateway cannot check, keeping its

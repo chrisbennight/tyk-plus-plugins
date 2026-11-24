@@ -104,8 +104,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req))
 		}
 		var declared []drift.Observation
-		visible := state.VisibleTools(requestCaller(req), proxy, visibilityBatchThreshold)
-		out := drift.FilterToolsList(message, view, limits, requestID(req), func(tool string) bool { return visible[tool] }, func(tool, fingerprint string, approved bool) {
+		// Visibility is decided only when a list needs it, so errors and
+		// notifications on the stream cost nothing extra.
+		var visible map[string]bool
+		isVisible := func(tool string) bool {
+			if visible == nil {
+				visible = state.VisibleTools(requestCaller(req), proxy, visibilityBatchThreshold)
+			}
+			return visible[tool]
+		}
+		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
 		})
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)

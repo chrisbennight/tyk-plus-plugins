@@ -9,7 +9,11 @@ import (
 const visibilityTools = `{"p": {"upstream": "https://u.example/mcp", "tools": {
   "lookup": {"facts": {"readOnly": true, "risk": "low"}, "arguments": {"count": "long"}},
   "change": {"facts": {"readOnly": false, "risk": "high"}, "arguments": {"count": "long"}},
-  "hinted": {"definition": {"name": "hinted", "annotations": {"readOnlyHint": true}}}}}}`
+  "hinted": {"definition": {"name": "hinted", "annotations": {"readOnlyHint": true}}},
+  "report": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
+  "plain": {"facts": {"risk": "low"}},
+  "ordered": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
+  "split": {"facts": {"risk": "low"}, "arguments": {"count": "long"}}}}}`
 
 const visibilityRules = `
 @id("support-read") permit (principal, action, resource) when { principal.roles.contains("support") && resource.reviewed.flags.contains({name: "readOnly", value: true}) };
@@ -19,6 +23,10 @@ const visibilityRules = `
 @id("count-forbid") forbid (principal, action, resource) when { context.numbers.contains({name: "count", value: 9}) };
 @id("hint-only") permit (principal, action, resource) when { principal.roles.contains("hinter") && resource.upstreamAnnotations has readOnlyHint && resource.upstreamAnnotations.readOnlyHint };
 @id("unless-arg") permit (principal, action, resource) when { principal.roles.contains("auditor") && resource.name == "change" } unless { context.numbers.contains({name: "count", value: 1}) };
+@id("guest-report") permit (principal, action, resource) when { principal.roles.contains("guest") && resource.name == "report" && context.numbers.contains({name: "count", value: 3}) };
+@id("plain-count") permit (principal, action, resource) when { resource.name == "plain" && context.numbers.contains({name: "count", value: 3}) };
+@id("context-first") permit (principal, action, resource) when { context.numbers.contains({name: "count", value: 3}) && principal.roles.contains("guest") && resource.name == "ordered" };
+@id("two-clauses") permit (principal, action, resource) when { principal.roles.contains("guest") && resource.name == "split" } when { context.numbers.contains({name: "count", value: 3}) };
 @id("blocked") forbid (principal, action, resource) when { principal.roles.contains("blocked") };
 @id("blocked-read") permit (principal, action, resource) when { principal.roles.contains("blocked") && resource.name == "lookup" };
 `
@@ -46,6 +54,13 @@ var visibilityCases = []struct {
 	{"hinter", "hinted", false, "an upstream hint alone cannot grant"},
 	{"auditor", "change", true, "permit with an argument exception"},
 	{"blocked", "lookup", false, "a forbid with no argument condition overrides the permit"},
+	{"guest", "report", true, "a guest-only permit with an argument condition"},
+	{"nobody", "report", false, "only the role condition hides it: a guest-only permit must not leak"},
+	{"support", "plain", false, "a tool without declared arguments is called with no argument facts"},
+	{"guest", "ordered", true, "the argument condition comes first"},
+	{"nobody", "ordered", false, "an argument condition written first must not leak a guest-only permit"},
+	{"guest", "split", true, "role and argument conditions in separate clauses"},
+	{"nobody", "split", false, "a separate argument clause must not leak a guest-only permit"},
 }
 
 func TestVisibilityPrecision(t *testing.T) {
@@ -69,6 +84,11 @@ func TestBatchVisibilityNeverHidesUsableTools(t *testing.T) {
 		if c.want && !s.VisibleTools(who, "p", 0)[c.tool] {
 			t.Errorf("%s calling %s: the batch check hid a usable tool (%s)", c.role, c.tool, c.why)
 		}
+	}
+	// The batch check may show extra tools, but a permit limited to one role
+	// never reveals a tool to other callers.
+	if s.VisibleTools(Caller{Issuer: "i", Subject: "nobody", Roles: []string{"nobody"}}, "p", 0)["report"] {
+		t.Error("the batch check revealed a guest-only tool to another caller")
 	}
 }
 

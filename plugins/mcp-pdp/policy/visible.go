@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 
 	"github.com/cedar-policy/cedar-go"
+	cedarast "github.com/cedar-policy/cedar-go/ast"
+	"github.com/cedar-policy/cedar-go/x/exp/ast"
 	"github.com/cedar-policy/cedar-go/x/exp/batch"
 )
 
@@ -57,7 +59,9 @@ func (s *Snapshot) VisibleTools(who Caller, proxy string, batchThreshold int) ma
 		return entry.visible
 	}
 	inv := s.tools[proxy]
-	visible := make(map[string]bool, len(inv.Tools))
+	// Only the visible names are kept, so a caller who may see few tools
+	// costs little to cache however large the proxy.
+	visible := map[string]bool{}
 	if len(inv.Tools) > batchThreshold {
 		for name := range s.visibleInBatch(who, proxy) {
 			visible[name] = true
@@ -97,13 +101,19 @@ func (s *Snapshot) Visible(who Caller, proxy, name string) bool {
 	if !ok {
 		return false
 	}
+	if len(t.Arguments) == 0 {
+		// A tool whose arguments rules cannot read is always called with the
+		// same empty argument facts, so the call decision itself is exact.
+		outcome, _ := s.Decide(who, proxy, inv.Upstream, name, nil)
+		return outcome == "permitted"
+	}
 	principal, entities := callerEntity(who)
 	toolID, _ := json.Marshal([2]string{proxy, name})
 	resource := cedar.NewEntityUID("Tool", cedar.String(toolID))
 	allowed := func(stripAnnotations bool) bool {
 		entities[resource] = toolEntity(resource, proxy, inv.Upstream, name, t, stripAnnotations)
 		permitted := false
-		err := batch.Authorize(context.Background(), s.policies, entities, batch.Request{
+		err := batch.Authorize(context.Background(), s.visibilityPolicies, entities, batch.Request{
 			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"), Resource: resource, Context: batch.Ignore(),
 		}, func(r batch.Result) error {
 			permitted = permitted || r.Decision == cedar.Allow
@@ -124,8 +134,11 @@ func (s *Snapshot) Visible(who Caller, proxy, name string) bool {
 
 // visibleInBatch returns the tools on a proxy that some call arguments could
 // let this caller call, evaluating the whole proxy in one batch. It can
-// include tools Visible would leave out, but never leaves out one Visible
-// would include. An evaluation error shows every tool it covers.
+// include tools Visible would leave out. An evaluation error shows every tool
+// it covers. Every tool's entity is present during the batch, where a call
+// decision sees only its own; a rule could tell them apart only by naming
+// another tool's entity, which rules about tools have no reason to do, since
+// they match the requested tool through resource.
 func (s *Snapshot) visibleInBatch(who Caller, proxy string) map[string]bool {
 	inv := s.tools[proxy]
 	principal, _ := callerEntity(who)
@@ -141,7 +154,7 @@ func (s *Snapshot) visibleInBatch(who Caller, proxy string) map[string]bool {
 			byUID[uid] = name
 		}
 		allowed := make(map[string]bool, len(names))
-		err := batch.Authorize(context.Background(), s.policies, entities, batch.Request{
+		err := batch.Authorize(context.Background(), s.visibilityPolicies, entities, batch.Request{
 			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"),
 			Resource: batch.Variable("tool"), Context: batch.Ignore(),
 			Variables: batch.Variables{"tool": uids},
@@ -203,4 +216,42 @@ func toolEntity(uid cedar.EntityUID, proxy, upstream, name string, t *tool, stri
 		"proxy": cedar.String(proxy), "upstream": cedar.String(upstream), "name": cedar.String(name),
 		"reviewed": t.reviewed, "upstreamAnnotations": cedar.NewRecord(annotations),
 	})}
+}
+
+// visibilityPolicy rewrites a policy for deciding visibility. With the call's
+// arguments ignored, batch evaluation drops each permit condition that refers
+// to them: a whole when clause, including conditions on the caller or tool
+// that it also tests. Splitting a permit's when clauses at their top-level
+// "&&" keeps those other conditions, whatever order they are written in;
+// clauses in a policy must all hold, so the permit is unchanged. Only the
+// parts that test arguments are then dropped, so the permit may still apply,
+// but no longer to callers its other conditions exclude.
+//
+// Forbids are left as written: a forbid with a condition on arguments is set
+// aside whole, so a tool some arguments could call is never hidden. Unless
+// clauses are also left whole, since splitting one would not keep its meaning.
+func visibilityPolicy(p *cedar.Policy) *cedar.Policy {
+	original := (*ast.Policy)(p.AST())
+	if original.Effect != ast.EffectPermit {
+		return p
+	}
+	rewritten := *original
+	rewritten.Conditions = nil
+	var split func(node ast.IsNode)
+	split = func(node ast.IsNode) {
+		if and, ok := node.(ast.NodeTypeAnd); ok {
+			split(and.Left)
+			split(and.Right)
+			return
+		}
+		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: node})
+	}
+	for _, c := range original.Conditions {
+		if c.Condition == ast.ConditionWhen {
+			split(c.Body)
+		} else {
+			rewritten.Conditions = append(rewritten.Conditions, c)
+		}
+	}
+	return cedar.NewPolicyFromAST((*cedarast.Policy)(&rewritten))
 }

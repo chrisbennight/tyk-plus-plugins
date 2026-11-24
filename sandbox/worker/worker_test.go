@@ -172,6 +172,7 @@ func TestLimits(t *testing.T) {
 		{"console", `for (;;) console.log("x".repeat(1000));`, protocol.Limits{ConsoleBytes: 10_000}, protocol.KindLimit, "console"},
 		{"tool calls", `for (let i = 0; i < 5; i++) await connectors.governed.lookup({ count: i });`, protocol.Limits{Calls: 3}, protocol.KindLimit, "tool calls"},
 		{"result size", `return "x".repeat(2000);`, protocol.Limits{ValueBytes: 1000}, protocol.KindLimit, "result"},
+		{"argument size", `await connectors.governed.lookup({ pad: "x".repeat(2000) });`, protocol.Limits{ValueBytes: 1000}, protocol.KindLimit, "arguments"},
 		{"waits forever", `await new Promise(() => {});`, protocol.Limits{}, protocol.KindException, "never"},
 		{"throws", `throw new Error("boom");`, protocol.Limits{}, protocol.KindException, "boom"},
 		{"syntax error", `return (;`, protocol.Limits{}, protocol.KindException, "SyntaxError"},

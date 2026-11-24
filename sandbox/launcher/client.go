@@ -1,6 +1,7 @@
 package launcher
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,15 +37,20 @@ type Unavailable struct{ Reason string }
 
 func (u Unavailable) Error() string { return u.Reason }
 
-// Start asks the launcher at socket for a sandbox that may run for runMillis.
-func Start(socket string, runMillis int64) (*Run, error) {
+// Start asks the launcher at socket for a sandbox that may run for runMillis,
+// giving up when ctx ends or the launcher does not answer in time.
+func Start(ctx context.Context, socket string, runMillis int64) (*Run, error) {
 	c, err := dial(socket)
 	if err != nil {
 		return nil, Unavailable{"the launcher is unreachable: " + err.Error()}
 	}
 	// Starting a sandbox must answer promptly; the connection then stays open
 	// without a deadline for the run's lifetime.
-	c.SetDeadline(time.Now().Add(startWait))
+	deadline := time.Now().Add(startWait)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	c.SetDeadline(deadline)
 	if err := send(c, Request{Op: OpStart, RunMillis: runMillis}); err != nil {
 		c.Close()
 		return nil, err

@@ -41,6 +41,8 @@ const (
 	grace = 15 * time.Second
 	// sandboxUser is the unprivileged user programs run as.
 	sandboxUser = 65534
+	// cleanupWait bounds killing and deleting one sandbox.
+	cleanupWait = 30 * time.Second
 )
 
 // Config is the launcher's operator configuration.
@@ -270,19 +272,41 @@ func (l *Launcher) prepare(id string, args []string) (*exec.Cmd, error) {
 	return exec.Command(name, argv...), nil
 }
 
-// destroy kills and deletes run id's sandbox and removes its bundle. Killing
-// an already stopped sandbox fails harmlessly; a failed delete is logged, and
-// the health report's container count shows any sandbox left behind.
-func (l *Launcher) destroy(id string) {
+// destroy kills and deletes run id's sandbox and removes its bundle, and
+// reports whether the sandbox is gone. Killing an already stopped sandbox fails
+// harmlessly. A sandbox that could not be deleted keeps its bundle, is logged,
+// and still shows in the health report's container count.
+func (l *Launcher) destroy(id string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupWait)
+	defer cancel()
 	name, argv := RuntimeCommand(l.config.Backend, "kill", id)
-	_ = exec.Command(name, argv...).Run()
+	_ = exec.CommandContext(ctx, name, argv...).Run()
 	name, argv = RuntimeCommand(l.config.Backend, "delete", id)
-	if out, err := exec.Command(name, argv...).CombinedOutput(); err != nil {
-		slog.Warn("Deleting a sandbox failed", "run", id, "error", err, "output", strings.TrimSpace(string(out)))
+	if out, err := exec.CommandContext(ctx, name, argv...).CombinedOutput(); err != nil && l.listed(id) {
+		slog.Error("Deleting a sandbox failed; its slot stays in use", "run", id, "error", err, "output", strings.TrimSpace(string(out)))
+		return false
 	}
 	if err := os.RemoveAll(bundleDir(id)); err != nil {
 		slog.Warn("Removing a sandbox bundle failed", "run", id, "error", err)
 	}
+	return true
+}
+
+// listed reports whether the runtime still lists run id, or cannot say.
+func (l *Launcher) listed(id string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupWait)
+	defer cancel()
+	name, argv := RuntimeCommand(l.config.Backend, "list", "")
+	out, err := exec.CommandContext(ctx, name, argv...).Output()
+	if err != nil {
+		return true
+	}
+	for _, listed := range strings.Fields(string(out)) {
+		if listed == id {
+			return true
+		}
+	}
+	return false
 }
 
 // containers counts the containers the runtime reports.
@@ -357,13 +381,16 @@ func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
 		c.Write(append(data, '\n'))
 		return
 	}
-	// Reserve the slot before starting, so concurrent requests cannot exceed it.
+	// Reserve the slot before starting, so concurrent requests cannot exceed
+	// it. The slot is released only once the sandbox is confirmed gone.
 	l.active[id] = true
 	l.mu.Unlock()
 	defer func() {
-		l.mu.Lock()
-		delete(l.active, id)
-		l.mu.Unlock()
+		if l.destroy(id) {
+			l.mu.Lock()
+			delete(l.active, id)
+			l.mu.Unlock()
+		}
 	}()
 	cmd, err := l.prepare(id, []string{"/worker"})
 	if err != nil {
@@ -371,7 +398,6 @@ func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
 		c.Write(append(data, '\n'))
 		return
 	}
-	defer l.destroy(id)
 	inR, inW, err := os.Pipe()
 	if err != nil {
 		return

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"net"
 	"strings"
@@ -36,7 +37,10 @@ func testService(h *protocol.Health) (*Service, *int) {
 	launched := 0
 	s := &Service{config: Config{Capacity: 1, Max: protocol.DefaultLimits},
 		health: func() (*protocol.Health, error) { return h, nil },
-		launch: func(int64) (*launcher.Run, error) { launched++; return nil, errors.New("not in this test") },
+		launch: func(context.Context, int64) (*launcher.Run, error) {
+			launched++
+			return nil, errors.New("not in this test")
+		},
 	}
 	return s, &launched
 }

@@ -102,7 +102,7 @@ func (rt *Runtime) Run(ctx context.Context, start protocol.Message, send func(pr
 	if _, err := rand.Read(nonce); err != nil {
 		return protocol.Failed(protocol.KindUnavailable, "creating a nonce: %v", err)
 	}
-	b := &bridge{nonce: hex.EncodeToString(nonce), max: limits.MaxLine(), calls: limits.Calls}
+	b := &bridge{nonce: hex.EncodeToString(nonce), max: limits.MaxResultLine(), calls: limits.Calls, valueBytes: limits.ValueBytes}
 	stderr := &capped{max: 16 << 10}
 	// No stdin, file system, environment or arguments: the engine's standard
 	// library finds nothing to open.
@@ -299,15 +299,16 @@ func timeMillis(ms int64) time.Duration { return time.Duration(ms) * time.Millis
 // its WebAssembly memory by sending many in one turn: at most one per allowed
 // tool call plus the final message.
 type bridge struct {
-	nonce   string
-	max     int
-	calls   int
-	seen    int
-	mu      sync.Mutex
-	partial []byte
-	queue   []protocol.Message
-	failed  *protocol.Message
-	halt    context.CancelFunc
+	nonce      string
+	max        int
+	calls      int
+	valueBytes int
+	seen       int
+	mu         sync.Mutex
+	partial    []byte
+	queue      []protocol.Message
+	failed     *protocol.Message
+	halt       context.CancelFunc
 }
 
 func (b *bridge) Write(p []byte) (int, error) {
@@ -341,6 +342,11 @@ func (b *bridge) Write(p []byte) (int, error) {
 		}
 		if m.Type != protocol.TypeCall && m.Type != protocol.TypeDone && m.Type != protocol.TypeFailed {
 			b.fail(protocol.Failed(protocol.KindProtocol, "the bootstrap sent a %q message", m.Type))
+			continue
+		}
+		// Each queued call holds at most ValueBytes of arguments.
+		if m.Type == protocol.TypeCall && len(m.Arguments) > b.valueBytes {
+			b.fail(protocol.Failed(protocol.KindLimit, "tool call arguments exceed %d bytes", b.valueBytes))
 			continue
 		}
 		b.queue = append(b.queue, m)

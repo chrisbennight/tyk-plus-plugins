@@ -101,6 +101,14 @@ func (l Limits) MaxLine() int {
 	return 6*(l.ProgramBytes+l.ValueBytes+l.ConsoleBytes) + 64<<10
 }
 
+// MaxResultLine is the longest message a program can need to send: a final
+// result with its console output, escaped, plus room for the surrounding
+// fields. Tool calls are smaller, since their arguments are bounded by
+// ValueBytes alone.
+func (l Limits) MaxResultLine() int {
+	return 6*(l.ValueBytes+l.ConsoleBytes) + 64<<10
+}
+
 // Error is a refused or failed tool call, as a direct caller would see it.
 type Error struct {
 	Code    int    `json:"code"`

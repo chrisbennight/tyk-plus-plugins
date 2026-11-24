@@ -41,6 +41,10 @@ type Config struct {
 // count against a run's own time.
 const startAllowance = 10 * time.Second
 
+// handshakeWait bounds the TLS handshake, which happens before a client is
+// authenticated and so holds a connection slot for anyone who can connect.
+const handshakeWait = 5 * time.Second
+
 // firstMessageWait bounds how long a gateway may take to send its first
 // message after connecting.
 const firstMessageWait = 30 * time.Second
@@ -69,7 +73,7 @@ type Service struct {
 	config Config
 	active atomic.Int64
 	// launch starts a sandbox; tests replace it.
-	launch func(runMillis int64) (*launcher.Run, error)
+	launch func(ctx context.Context, runMillis int64) (*launcher.Run, error)
 	health func() (*protocol.Health, error)
 
 	// cached is the launcher's last health report, reused briefly so that
@@ -101,7 +105,9 @@ func (s *Service) launcherHealth(fresh bool) (*protocol.Health, error) {
 // New returns a service that uses the launcher at cfg.LauncherSocket.
 func New(cfg Config) *Service {
 	return &Service{config: cfg,
-		launch: func(ms int64) (*launcher.Run, error) { return launcher.Start(cfg.LauncherSocket, ms) },
+		launch: func(ctx context.Context, ms int64) (*launcher.Run, error) {
+			return launcher.Start(ctx, cfg.LauncherSocket, ms)
+		},
 		health: func() (*protocol.Health, error) { return launcher.QueryHealth(cfg.LauncherSocket) },
 	}
 }
@@ -156,7 +162,7 @@ func (s *Service) Handle(c net.Conn) {
 	defer c.Close()
 	client := &lockedWriter{w: c}
 	if t, ok := c.(*tls.Conn); ok {
-		c.SetDeadline(time.Now().Add(firstMessageWait))
+		c.SetDeadline(time.Now().Add(handshakeWait))
 		if err := t.Handshake(); err != nil {
 			slog.Warn("Refused a connection", "remote", c.RemoteAddr().String(), "error", err)
 			return
@@ -227,7 +233,7 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 	// stops responding.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(limits.RunMillis)*time.Millisecond+startAllowance)
 	defer cancel()
-	run, err := s.launch(limits.RunMillis)
+	run, err := s.launch(ctx, limits.RunMillis)
 	if err != nil {
 		return protocol.Failed(protocol.KindUnavailable, "no sandbox: %v", err)
 	}
@@ -336,6 +342,10 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 			} else {
 				if m.Error == nil {
 					finish(protocol.Failed(protocol.KindProtocol, "an error reply has no error"))
+					return
+				}
+				if len(m.Error.Message) > limits.ValueBytes {
+					finish(protocol.Failed(protocol.KindLimit, "tool call %d returned an error of more than %d bytes", m.ID, limits.ValueBytes))
 					return
 				}
 				reply.Error = m.Error

@@ -81,7 +81,10 @@ docker compose -f sandbox/compose.yaml -f sandbox/compose.runc.yaml up -d
 
 At scale, run sandbox hosts on their own machines behind a load balancer.
 Publish the sandbox service's port (8443) only to gateways, both in the
-firewall and through the client authority. A host at capacity refuses a run with
+firewall and through the client authority. The service bounds how many
+connections it holds and how long a TLS handshake may take, but anyone who can
+reach the port can occupy those connection slots before authenticating, so the
+firewall is part of the design. A host at capacity refuses a run with
 `busy`; spreading runs across hosts is the load balancer's job.
 
 Keep the host kernel and the gVisor release in `Dockerfile` up to date. Any

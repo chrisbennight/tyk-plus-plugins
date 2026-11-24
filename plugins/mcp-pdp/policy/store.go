@@ -345,7 +345,17 @@ func createDir(dir string, mode os.FileMode) error {
 		return err
 	}
 	defer os.Remove(prepared)
-	if err := os.Chmod(prepared, mode); err != nil {
+	// The mode is changed through a descriptor that refuses a link, so if
+	// someone else can write to the parent, they cannot redirect it.
+	handle, err := os.OpenFile(prepared, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return err
+	}
+	err = handle.Chmod(mode)
+	if closeErr := handle.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		return err
 	}
 	if err := renameNew(os.Rename(prepared, dir)); err != nil {
@@ -400,7 +410,12 @@ func tempName(prefix string) string {
 // crash, sees it with a mode the umask chose, then syncs its parent. An
 // existing directory is left as it is, since only its owner may change it.
 func (s *store) makeDir(name string, mode os.FileMode) error {
-	if _, err := s.dir.Lstat(name); err == nil {
+	if info, err := s.dir.Lstat(name); err == nil {
+		// A link in its place could lead outside the store, where sets would
+		// be read and published but never stored.
+		if !info.IsDir() {
+			return fmt.Errorf("%s in the policy store is not a directory", name)
+		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
@@ -466,10 +481,10 @@ func (s *store) activate(set string, now func() time.Time) error {
 	}
 	// The pointer is replaced by renaming a completed, synced file over it.
 	prepared := tempName("." + pointerFile + "-")
+	defer s.dir.Remove(prepared)
 	if err := s.writeFile(prepared, append(data, '\n'), s.fileMode); err != nil {
 		return err
 	}
-	defer s.dir.Remove(prepared)
 	if err := s.dir.Rename(prepared, pointerFile); err != nil {
 		return err
 	}
@@ -484,10 +499,10 @@ func (s *store) activate(set string, now func() time.Time) error {
 func (s *store) lock() (func(), error) {
 	if _, err := s.dir.Lstat(lockFile); errors.Is(err, os.ErrNotExist) {
 		prepared := tempName(".lock-new-")
-		if err := s.writeFile(prepared, nil, s.fileMode); err != nil {
-			return nil, err
+		err := s.writeFile(prepared, nil, s.fileMode)
+		if err == nil {
+			err = s.dir.Link(prepared, lockFile)
 		}
-		err := s.dir.Link(prepared, lockFile)
 		s.dir.Remove(prepared)
 		if err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err

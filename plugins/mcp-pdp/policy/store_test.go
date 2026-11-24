@@ -305,11 +305,27 @@ func TestPublishingNeverWritesOutsideTheStore(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(store, setsDir)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch); err == nil {
+	source := writeSource(t, "", "{}", "[]")
+	if _, err := Promote(store, source, "", epoch); err == nil {
 		t.Fatal("published through a link leading outside the store")
 	}
 	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
 		t.Fatalf("wrote outside the store: %v", entries)
+	}
+	// Even a matching set outside the store is not reused and activated.
+	real := t.TempDir()
+	set, err := Promote(real, source, "", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(real, setsDir, set), filepath.Join(elsewhere, set)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Promote(store, source, "", epoch); err == nil {
+		t.Fatal("activated a set kept outside the store")
+	}
+	if _, err := ReadPointer(store); err == nil {
+		t.Fatal("active names a set outside the store")
 	}
 }
 

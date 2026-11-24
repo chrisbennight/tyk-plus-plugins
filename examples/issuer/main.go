@@ -36,6 +36,7 @@ import (
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 func main() {
@@ -143,8 +144,10 @@ type deck struct {
 	Issuer   string `json:"issuer"`
 	Audience string `json:"audience"`
 	// LifetimeSeconds is how long a person's token stays valid.
-	LifetimeSeconds int64                     `json:"lifetimeSeconds"`
-	People          map[string]map[string]any `json:"people"`
+	LifetimeSeconds int64 `json:"lifetimeSeconds"`
+	// People keeps each claim as written, so a token carries exactly the value
+	// the deck sets, numbers included.
+	People map[string]map[string]jsontext.Value `json:"people"`
 }
 
 var personName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -190,7 +193,8 @@ func loadDeck(path string) (*deck, error) {
 			}
 		}
 		if sub, ok := claims["sub"]; ok {
-			if s, isString := sub.(string); !isString || s == "" {
+			var s string
+			if jsonv2.Unmarshal(sub, &s) != nil || s == "" {
 				return nil, fmt.Errorf("person %q: sub must be a non-empty string", name)
 			}
 		}
@@ -267,7 +271,7 @@ func (s *server) signPerson(w http.ResponseWriter, r *http.Request) {
 	claims["aud"] = s.deck.Audience
 	claims["iat"] = now.Unix()
 	claims["exp"] = now.Unix() + s.deck.LifetimeSeconds
-	body, err := json.Marshal(claims)
+	body, err := jsonv2.Marshal(claims)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

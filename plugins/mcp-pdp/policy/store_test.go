@@ -209,8 +209,8 @@ func TestAFailedRepairKeepsTheDamagedSet(t *testing.T) {
 	if err := os.Remove(filepath.Join(store, setsDir, set, "rules.cedar")); err != nil {
 		t.Fatal(err)
 	}
-	renameSet = func(string, string) error { return errors.New("injected failure") }
-	defer func() { renameSet = os.Rename }()
+	renameSet = func(*os.Root, string, string) error { return errors.New("injected failure") }
+	defer func() { renameSet = (*os.Root).Rename }()
 	if _, err := Promote(store, source, "", epoch); err == nil {
 		t.Fatal("the replacement did not fail")
 	}
@@ -298,20 +298,18 @@ func TestAnExistingSetsDirectoryIsLeftAsItIs(t *testing.T) {
 	}
 }
 
-func TestPublishedFilesAreNeverWrittenThroughALink(t *testing.T) {
-	dir := t.TempDir()
-	target := filepath.Join(dir, "elsewhere")
-	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+func TestPublishingNeverWritesOutsideTheStore(t *testing.T) {
+	// A member of a shared store replaces sets with a link to a directory
+	// elsewhere; another publisher must not write there.
+	store, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(store, setsDir)); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(dir, "rules.cedar")); err != nil {
-		t.Fatal(err)
+	if _, err := Promote(store, writeSource(t, "", "{}", "[]"), "", epoch); err == nil {
+		t.Fatal("published through a link leading outside the store")
 	}
-	if err := writeFileSynced(filepath.Join(dir, "rules.cedar"), []byte("changed"), 0o644); err == nil {
-		t.Fatal("wrote through a link")
-	}
-	if data, _ := os.ReadFile(target); string(data) != "keep" {
-		t.Fatalf("target changed to %q", data)
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Fatalf("wrote outside the store: %v", entries)
 	}
 }
 
@@ -326,14 +324,14 @@ func TestARepairThatMayNotBeDurableKeepsTheDamagedSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	renamed := false
-	renameSet = func(from, to string) error { renamed = true; return os.Rename(from, to) }
+	renameSet = func(dir *os.Root, from, to string) error { renamed = true; return dir.Rename(from, to) }
 	syncDir = func(dir string) error {
 		if renamed && dir == filepath.Join(store, setsDir) {
 			return errors.New("injected sync failure")
 		}
 		return syncDirectory(dir)
 	}
-	defer func() { renameSet, syncDir = os.Rename, syncDirectory }()
+	defer func() { renameSet, syncDir = (*os.Root).Rename, syncDirectory }()
 	if _, err := Promote(store, source, "", epoch); err == nil {
 		t.Fatal("the sync failure was not reported")
 	}

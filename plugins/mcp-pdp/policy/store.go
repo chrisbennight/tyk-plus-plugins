@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,7 @@ import (
 // from those hashes, so the name proves which content it holds.
 const (
 	setsDir      = "sets"
+	lockFile     = ".lock"
 	pointerFile  = "active"
 	manifestFile = "manifest.json"
 	// FormatVersion is the set layout Promote writes. Gateways also load
@@ -275,49 +277,81 @@ func Activate(root, set string, now func() time.Time) error {
 // keep the store's group, and a publisher changes the mode only of what it
 // created, since only an owner may.
 type store struct {
-	root     string
+	root string
+	// dir confines every change to the store: names are resolved inside it
+	// and never through a link that leads outside, so no member of a shared
+	// store can redirect another publisher's writes to files elsewhere.
+	dir      *os.Root
 	dirMode  os.FileMode
 	fileMode os.FileMode
 	unlock   func()
 }
 
 func openStore(root string) (*store, error) {
+	root = filepath.Clean(root)
 	if err := createDir(root, 0o755); err != nil {
 		return nil, err
 	}
 	// The root's own entry is synced on every publish, so a publish that
 	// follows a failed or concurrent creation cannot report success before
-	// the new store is durable.
-	if err := syncDir(filepath.Dir(root)); err != nil {
+	// the new store is durable. A parent the publisher may search but not
+	// read is the operator's to make durable.
+	if err := syncDir(filepath.Dir(root)); err != nil && !errors.Is(err, os.ErrPermission) {
 		return nil, err
 	}
-	info, err := os.Stat(root)
+	dir, err := os.OpenRoot(root)
 	if err != nil {
+		return nil, err
+	}
+	info, err := dir.Stat(".")
+	if err != nil {
+		dir.Close()
 		return nil, err
 	}
 	s := &store{
 		root:     root,
+		dir:      dir,
 		dirMode:  info.Mode().Perm() | info.Mode()&os.ModeSetgid,
 		fileMode: info.Mode().Perm() &^ 0o111,
 	}
-	if s.unlock, err = lockStore(root, s.fileMode); err != nil {
+	unlock, err := s.lock()
+	if err != nil {
+		dir.Close()
 		return nil, err
+	}
+	s.unlock = func() {
+		unlock()
+		dir.Close()
 	}
 	return s, nil
 }
 
 // createDir creates dir and any missing parents, with dir given the mode
-// whatever the umask. An existing dir is left as it is.
+// whatever the umask, by renaming a prepared directory into place, so no one
+// sees it with a mode the umask chose. An existing dir is left as it is. It
+// creates the store root itself, outside any store.
 func createDir(dir string, mode os.FileMode) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := makeParents(filepath.Dir(dir)); err != nil {
+	parent := filepath.Dir(dir)
+	if err := makeParents(parent); err != nil {
 		return err
 	}
-	return makeDir(dir, mode)
+	prepared, err := os.MkdirTemp(parent, "."+filepath.Base(dir)+"-new-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(prepared)
+	if err := os.Chmod(prepared, mode); err != nil {
+		return err
+	}
+	if err := renameNew(os.Rename(prepared, dir)); err != nil {
+		return err
+	}
+	return syncDir(parent)
 }
 
 // makeParents creates dir and any missing parents, following the umask as
@@ -343,25 +377,71 @@ func makeParents(dir string) error {
 	return syncDir(parent)
 }
 
-// makeDir creates dir with the given mode by renaming a prepared directory
-// into place, so no one, including a publisher after a crash, sees it with
-// a mode the umask chose. It then syncs the parent so a crash cannot lose it.
-// If another publisher creates dir at the same moment, both are new and
-// empty, so either one serves.
-func makeDir(dir string, mode os.FileMode) error {
-	parent := filepath.Dir(dir)
-	prepared, err := os.MkdirTemp(parent, "."+filepath.Base(dir)+"-new-")
+// renameNew accepts a failed rename of a new, empty directory onto one
+// another publisher created at the same moment: both are new and empty, so
+// either one serves.
+func renameNew(err error) error {
+	if err != nil && !errors.Is(err, os.ErrExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+		return err
+	}
+	return nil
+}
+
+// tempName returns an unpredictable name for a file or directory being
+// prepared in the store.
+func tempName(prefix string) string {
+	var random [8]byte
+	rand.Read(random[:])
+	return prefix + hex.EncodeToString(random[:])
+}
+
+// makeDir creates a directory in the store with the given mode by renaming a
+// prepared directory into place, so no one, including a publisher after a
+// crash, sees it with a mode the umask chose, then syncs its parent. An
+// existing directory is left as it is, since only its owner may change it.
+func (s *store) makeDir(name string, mode os.FileMode) error {
+	if _, err := s.dir.Lstat(name); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	prepared := filepath.Join(filepath.Dir(name), tempName("."+filepath.Base(name)+"-new-"))
+	if err := s.dir.Mkdir(prepared, 0o700); err != nil {
+		return err
+	}
+	defer s.dir.Remove(prepared)
+	if err := s.dir.Chmod(prepared, mode); err != nil {
+		return err
+	}
+	if err := renameNew(s.dir.Rename(prepared, name)); err != nil {
+		return err
+	}
+	return s.sync(filepath.Dir(name))
+}
+
+// sync makes a store directory's entries durable.
+func (s *store) sync(name string) error { return syncDir(filepath.Join(s.root, name)) }
+
+// writeFile creates a new file in the store, never opening an existing one,
+// writes it, gives it the mode whatever the umask, and syncs it.
+func (s *store) writeFile(name string, data []byte, mode os.FileMode) error {
+	file, err := s.dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(prepared)
-	if err := os.Chmod(prepared, mode); err != nil {
+	if _, err := file.Write(data); err != nil {
+		file.Close()
 		return err
 	}
-	if err := os.Rename(prepared, dir); err != nil && !errors.Is(err, os.ErrExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+	if err := file.Chmod(mode); err != nil {
+		file.Close()
 		return err
 	}
-	return syncDir(parent)
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 // activate validates a set and points active at it. The promotion time is
@@ -384,17 +464,32 @@ func (s *store) activate(set string, now func() time.Time) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomically(filepath.Join(s.root, pointerFile), append(data, '\n'), s.fileMode)
+	// The pointer is replaced by renaming a completed, synced file over it.
+	prepared := tempName("." + pointerFile + "-")
+	if err := s.writeFile(prepared, append(data, '\n'), s.fileMode); err != nil {
+		return err
+	}
+	defer s.dir.Remove(prepared)
+	if err := s.dir.Rename(prepared, pointerFile); err != nil {
+		return err
+	}
+	return s.sync(".")
 }
 
-// lockStore takes an exclusive lock on the store, released when the returned
-// function is called or the process exits. The publisher that creates the
-// lock file gives it the store's file mode, so its umask cannot keep other
-// publishers out.
-func lockStore(root string, mode os.FileMode) (func(), error) {
-	path := filepath.Join(root, ".lock")
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		if err := createLockFile(path, mode); err != nil {
+// lock takes an exclusive lock on the store, released when the returned
+// function is called or the process exits. The lock file is linked into
+// place already carrying the store's file mode, so no publisher ever sees it
+// with the creator's umask; if another publisher links one first, theirs is
+// kept.
+func (s *store) lock() (func(), error) {
+	if _, err := s.dir.Lstat(lockFile); errors.Is(err, os.ErrNotExist) {
+		prepared := tempName(".lock-new-")
+		if err := s.writeFile(prepared, nil, s.fileMode); err != nil {
+			return nil, err
+		}
+		err := s.dir.Link(prepared, lockFile)
+		s.dir.Remove(prepared)
+		if err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
 	} else if err != nil {
@@ -403,9 +498,9 @@ func lockStore(root string, mode os.FileMode) (func(), error) {
 	// Some file systems, such as NFS, grant an exclusive lock only on a
 	// writable descriptor; a member with only read access can still lock on
 	// a local file system.
-	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	file, err := s.dir.OpenFile(lockFile, os.O_RDWR, 0)
 	if errors.Is(err, os.ErrPermission) {
-		file, err = os.Open(path)
+		file, err = s.dir.Open(lockFile)
 	}
 	if err != nil {
 		return nil, err
@@ -420,86 +515,60 @@ func lockStore(root string, mode os.FileMode) (func(), error) {
 	}, nil
 }
 
-// createLockFile puts a lock file in place already carrying its mode, by
-// linking a prepared file, so no publisher ever sees it with the creator's
-// umask. If another publisher created it first, theirs is kept.
-func createLockFile(path string, mode os.FileMode) error {
-	prepared, err := os.CreateTemp(filepath.Dir(path), ".lock-new-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(prepared.Name())
-	err = prepared.Chmod(mode)
-	if closeErr := prepared.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	if err := os.Link(prepared.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	return nil
-}
-
 // writeSet stores a set by renaming a completed temporary directory into
 // place, so readers never see a partial set. An intact set with the same
 // fingerprint is reused. A damaged one is replaced, keeping the label it was
 // first published with; because writeSet runs under the store lock, a set
-// another publisher is writing can never be mistaken for a damaged one. If
-// the replacement fails, the damaged set is put back, so its readable files
-// and label are kept. The sets directory is synced on every path so a reused
-// or new set survives a crash before the pointer names it.
+// another publisher is writing can never be mistaken for a damaged one. The
+// damaged set is deleted only once its replacement is durable; if no
+// replacement is in place it is put back, and otherwise it is left beside
+// the replacement, so its readable files and label are kept. The sets
+// directory is synced on every path so a reused or new set survives a crash
+// before the pointer names it.
 func (s *store) writeSet(set string, manifest Manifest, contents map[string][]byte) (err error) {
-	sets := filepath.Join(s.root, setsDir)
-	// Another publisher may have created the sets directory; only its owner
-	// may change its mode, so an existing one is left as it is.
-	if err := createDir(sets, s.dirMode); err != nil {
+	if err := s.makeDir(setsDir, s.dirMode); err != nil {
 		return err
 	}
-	final := filepath.Join(sets, set)
-	if _, _, err := ReadSet(s.root, set); err == nil {
-		return syncDir(sets)
+	final := filepath.Join(setsDir, set)
+	if _, _, readErr := ReadSet(s.root, set); readErr == nil {
+		return s.sync(setsDir)
 	}
-	if _, statErr := os.Stat(final); statErr == nil {
-		if previous, readErr := readManifest(final); readErr == nil {
+	if _, statErr := s.dir.Lstat(final); statErr == nil {
+		if previous, readErr := readManifest(filepath.Join(s.root, final)); readErr == nil {
 			manifest.Label = previous.Label
 		}
-		damaged := filepath.Join(sets, fmt.Sprintf(".damaged-%s-%d", set, time.Now().UnixNano()))
-		if err := os.Rename(final, damaged); err != nil {
+		damaged := filepath.Join(setsDir, fmt.Sprintf(".damaged-%s-%d", set, time.Now().UnixNano()))
+		if err := s.dir.Rename(final, damaged); err != nil {
 			return err
 		}
 		defer func() {
-			// The damaged set is deleted only once its replacement is
-			// durable, restored if no replacement is in place, and otherwise
-			// left beside it.
 			if err == nil {
-				os.RemoveAll(damaged)
+				s.dir.RemoveAll(damaged)
 				return
 			}
-			if _, statErr := os.Stat(final); statErr == nil {
+			if _, statErr := s.dir.Lstat(final); statErr == nil {
 				return
 			}
-			if restoreErr := os.Rename(damaged, final); restoreErr != nil {
+			if restoreErr := s.dir.Rename(damaged, final); restoreErr != nil {
 				err = errors.Join(err, fmt.Errorf("damaged set left at %s: %w", damaged, restoreErr))
 			}
 		}()
 	}
-	staging, err := os.MkdirTemp(sets, ".staging-")
-	if err != nil {
+	// Until the set is complete only the publisher may change the staging
+	// directory, so no other member can place entries among the files being
+	// written. This mode is set explicitly, so a umask that removes the
+	// publisher's own search permission does not matter.
+	staging := filepath.Join(setsDir, tempName(".staging-"))
+	if err := s.dir.Mkdir(staging, 0o700); err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging)
-	// Until the set is complete only the publisher may change the staging
-	// directory, so no other member can place entries, such as links, among
-	// the files being written. This mode is set explicitly, so a umask that
-	// removes the publisher's own search permission does not matter.
-	if err := os.Chmod(staging, 0o700|s.dirMode&os.ModeSetgid); err != nil {
+	defer s.dir.RemoveAll(staging)
+	if err := s.dir.Chmod(staging, 0o700|s.dirMode&os.ModeSetgid); err != nil {
 		return err
 	}
 	files, _ := filesFor(manifest.Format)
 	for _, name := range files {
-		if err := writeFileSynced(filepath.Join(staging, name), contents[name], s.fileMode); err != nil {
+		if err := s.writeFile(filepath.Join(staging, name), contents[name], s.fileMode); err != nil {
 			return err
 		}
 	}
@@ -507,46 +576,24 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 	if err != nil {
 		return err
 	}
-	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n'), s.fileMode); err != nil {
+	if err := s.writeFile(filepath.Join(staging, manifestFile), append(data, '\n'), s.fileMode); err != nil {
 		return err
 	}
-	if err := os.Chmod(staging, s.dirMode); err != nil {
+	if err := s.dir.Chmod(staging, s.dirMode); err != nil {
 		return err
 	}
-	if err := syncDir(staging); err != nil {
+	if err := s.sync(staging); err != nil {
 		return err
 	}
-	if err := renameSet(staging, final); err != nil {
+	if err := renameSet(s.dir, staging, final); err != nil {
 		return err
 	}
-	return syncDir(sets)
+	return s.sync(setsDir)
 }
 
 // renameSet moves a completed set into place. Tests replace it to exercise a
 // failed replacement.
-var renameSet = os.Rename
-
-// writeFileSynced creates a new file; it never opens an existing one, so it
-// cannot follow a link to a file elsewhere.
-func writeFileSynced(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	if _, err := file.Write(data); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Chmod(mode); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	return file.Close()
-}
+var renameSet = (*os.Root).Rename
 
 // syncDir makes a directory's entries durable. Tests replace it to observe
 // which directories are synced.

@@ -20,9 +20,7 @@ services:
       UPSTREAM_STREAM: ${UPSTREAM_STREAM:-}
       UPSTREAM_SESSIONS: ${UPSTREAM_SESSIONS:-}
   issuer:
-    build:
-      context: ./tests
-      target: issuer
+    build: ./examples/issuer
   probe:
     build:
       context: ./tests

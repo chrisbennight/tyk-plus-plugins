@@ -3,6 +3,7 @@ package drift
 import (
 	"encoding/json"
 	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -246,7 +247,8 @@ func TestMessagesWithLineBreaksStayWhole(t *testing.T) {
 		}
 		joined = append(joined, value)
 	}
-	if strings.Join(joined, "\n") != message {
+	var got, want any
+	if json.Unmarshal([]byte(strings.Join(joined, "\n")), &got) != nil || json.Unmarshal([]byte(message), &want) != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("%q", out)
 	}
 }
@@ -313,5 +315,42 @@ func TestRepeatedNamesAreListedOnce(t *testing.T) {
 	}
 	if CallReason(view(t, `{}`), "lookup", seen["lookup"], true) != "" {
 		t.Fatalf("observed %v", seen)
+	}
+}
+
+func TestOnlyExactMembersArePassedOn(t *testing.T) {
+	v := view(t, `{}`)
+	hidden := `"Result":{"tools":[` + newTool + `]},"Tools":[` + newTool + `]`
+	for _, message := range []string{
+		`{"jsonrpc":"2.0","id":7,"error":{"code":1,"message":"no"},` + hidden + `}`,
+		`{"jsonrpc":"2.0","method":"notifications/message","params":{},` + hidden + `}`,
+		`{"jsonrpc":"2.0","id":7,"result":{"tools":[` + approvedLookup + `],` + hidden + `},` + hidden + `}`,
+	} {
+		if out := FilterToolsList([]byte(message), v, func(string, string) {}); strings.Contains(string(out), "Delete everything") {
+			t.Errorf("%s became %s", message, out)
+		}
+	}
+	// A null tool list is not a list.
+	if out := FilterToolsList([]byte(`{"jsonrpc":"2.0","id":7,"result":{"tools":null}}`), v, func(string, string) {}); !strings.Contains(string(out), "could not be checked") {
+		t.Errorf("null tools became %s", out)
+	}
+}
+
+func TestCarriageReturnEventsAreNotHeldBack(t *testing.T) {
+	source, sink := io.Pipe()
+	defer sink.Close()
+	rewriter := NewEventRewriter(source, 1<<20, func(data []byte) []byte { return data })
+	go sink.Write([]byte("data: x\r\r"))
+	buf := make([]byte, 64)
+	n, err := rewriter.Read(buf)
+	if err != nil || string(buf[:n]) != "data: x\n\n" {
+		t.Fatalf("%q %v", buf[:n], err)
+	}
+	// A CRLF split across writes is still one line ending.
+	go sink.Write([]byte("data: y\r"))
+	go func() { sink.Write([]byte("\n\r\n")) }()
+	n, err = rewriter.Read(buf)
+	if err != nil || string(buf[:n]) != "data: y\n\n" {
+		t.Fatalf("%q %v", buf[:n], err)
 	}
 }

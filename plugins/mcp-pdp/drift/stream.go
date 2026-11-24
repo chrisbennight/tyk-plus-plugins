@@ -21,6 +21,7 @@ type EventRewriter struct {
 	limit     int
 	pending   []byte
 	started   bool
+	afterCR   bool
 	done      bool
 }
 
@@ -64,6 +65,12 @@ func (r *EventRewriter) readLine(size *int) ([]byte, error) {
 			}
 			return line, err
 		}
+		if r.afterCR {
+			r.afterCR = false
+			if b == '\n' {
+				continue
+			}
+		}
 		*size++
 		if *size > r.limit {
 			return nil, errEventTooLarge
@@ -72,9 +79,10 @@ func (r *EventRewriter) readLine(size *int) ([]byte, error) {
 		case '\n':
 			return line, nil
 		case '\r':
-			if next, err := r.source.Peek(1); err == nil && next[0] == '\n' {
-				r.source.ReadByte()
-			}
+			// A following LF belongs to this line ending; it is skipped when
+			// it arrives rather than waited for, so a CR-ended event is not
+			// held back.
+			r.afterCR = true
 			return line, nil
 		}
 		line = append(line, b)

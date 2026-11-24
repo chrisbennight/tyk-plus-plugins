@@ -46,25 +46,44 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
 		return checkFailed(nil)
 	}
+	// Every message passed on is rebuilt from the members JSON-RPC defines,
+	// spelled exactly, so a client that matches names loosely cannot find
+	// unchecked text under a variant spelling.
+	keep := func(names ...string) map[string]jsontext.Value {
+		out := map[string]jsontext.Value{}
+		for _, name := range names {
+			if value, ok := envelope[name]; ok {
+				out[name] = value
+			}
+		}
+		return out
+	}
 	raw, ok := envelope["result"]
 	if !ok {
 		// Error replies, and requests and notifications sharing the stream,
 		// carry no tool definitions. Anything else is not a valid message.
-		if _, isError := envelope["error"]; isError {
-			return message
+		var rebuilt map[string]jsontext.Value
+		switch {
+		case envelope["error"] != nil:
+			rebuilt = keep("jsonrpc", "id", "error")
+		case envelope["method"] != nil:
+			rebuilt = keep("jsonrpc", "id", "method", "params")
+		default:
+			return checkFailed(envelope["id"])
 		}
-		if _, isRequest := envelope["method"]; isRequest {
-			return message
+		out, err := jsonv2.Marshal(rebuilt)
+		if err != nil {
+			return checkFailed(envelope["id"])
 		}
-		return checkFailed(envelope["id"])
+		return out
 	}
 	var result map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(raw, &result); err != nil {
 		return checkFailed(envelope["id"])
 	}
 	listed, ok := result["tools"]
-	if !ok {
-		// A tools/list result must carry its tools.
+	if !ok || len(listed) == 0 || listed[0] != '[' {
+		// A tools/list result must carry its tools as an array.
 		return checkFailed(envelope["id"])
 	}
 	var tools []jsontext.Value
@@ -107,9 +126,16 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 			kept = append(kept, jsontext.Value(approvedDefinition))
 		}
 	}
-	result["tools"], _ = jsonv2.Marshal(kept)
-	envelope["result"], _ = jsonv2.Marshal(result)
-	out, err := jsonv2.Marshal(envelope)
+	rebuiltResult := map[string]jsontext.Value{}
+	for _, name := range []string{"nextCursor", "_meta"} {
+		if value, ok := result[name]; ok {
+			rebuiltResult[name] = value
+		}
+	}
+	rebuiltResult["tools"], _ = jsonv2.Marshal(kept)
+	rebuilt := keep("jsonrpc", "id")
+	rebuilt["result"], _ = jsonv2.Marshal(rebuiltResult)
+	out, err := jsonv2.Marshal(rebuilt)
 	if err != nil {
 		return checkFailed(envelope["id"])
 	}

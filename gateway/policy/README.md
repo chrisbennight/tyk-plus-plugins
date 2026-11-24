@@ -139,7 +139,7 @@ Under drift review:
 - `tools/list` replies, plain or streamed, contain only tools whose upstream definition has the same fingerprint as the approved one, and those tools are sent as their approved definition, so a top-level `_meta` member is the approved one too. Tools the upstream added and tools without an approved definition are left out. Each tool is listed at most once, and a reply that declares one tool with conflicting definitions counts as a changed definition.
 - `changedTools` decides what happens to an approved tool whose upstream definition changed: `hide` (the default) leaves it out of lists, and `serve-approved` lists the approved definition instead of the upstream's. Either way, calls to it are refused until you approve the new definition or the upstream returns to the approved one.
 - A call to a tool that is not approved, or whose upstream last listed a different definition, is refused with the same reply as any other denied call, before rules are evaluated.
-- Activation checks apply the same rule, so a check that expects a permit for a tool without an approved definition rejects the set.
+- Activation checks apply the same rule: a check that expects a permit for a tool without an approved definition rejects the set, and one that expects a denial passes.
 - Each gateway compares calls with the definitions it last saw in a `tools/list` reply. Until a gateway has seen a list for a proxy, it checks calls against approval alone.
 - A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error.
 

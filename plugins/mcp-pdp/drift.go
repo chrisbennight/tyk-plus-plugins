@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
-	"strings"
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
@@ -56,7 +56,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		slog.Warn("Drift check refused a compressed tools/list reply", "proxy", proxy)
 		return
 	}
-	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
+	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
 		res.Body = drift.NewEventRewriter(res.Body, maxReply, transform)
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1

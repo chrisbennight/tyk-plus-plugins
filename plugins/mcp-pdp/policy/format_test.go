@@ -270,17 +270,21 @@ func TestDriftSettingsAreValidated(t *testing.T) {
 }
 
 func TestActivationChecksApplyDriftReview(t *testing.T) {
-	compile := func(drift string) error {
+	compile := func(drift, expect string) error {
 		tools := `{"governed": {"upstream": "https://u.example/mcp"` + drift + `, "tools": {"lookup": {}}}}`
-		checks := `[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookup", "expect": "permitted"}]`
+		checks := `[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookup", "expect": "` + expect + `"}]`
 		_, err := Compile(Inputs{Rules: []byte(`permit (principal, action, resource);`), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte(checks)}, "v")
 		return err
 	}
-	if err := compile(""); err != nil {
+	if err := compile("", "permitted"); err != nil {
 		t.Fatal(err)
 	}
 	// Under drift review lookup has no approved definition, so it is refused.
-	if err := compile(`, "drift": {}`); err == nil || !strings.Contains(err.Error(), "unapproved_tool") {
+	if err := compile(`, "drift": {}`, "permitted"); err == nil || !strings.Contains(err.Error(), "unapproved_tool") {
 		t.Fatalf("accepted a permit for an unapproved tool: %v", err)
+	}
+	// A check that expects the denial passes.
+	if err := compile(`, "drift": {}`, "policy_denied"); err != nil {
+		t.Fatal(err)
 	}
 }

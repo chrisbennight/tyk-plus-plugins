@@ -4,23 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"hash/maphash"
+	"reflect"
 	"slices"
 	"sync/atomic"
 
 	"github.com/cedar-policy/cedar-go"
 	cedarast "github.com/cedar-policy/cedar-go/ast"
+	"github.com/cedar-policy/cedar-go/types"
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
 	"github.com/cedar-policy/cedar-go/x/exp/batch"
 )
 
 // Visibility decides which of a proxy's tools to show a caller. A tool is
 // left out only when Cedar shows that no call arguments could let the caller
-// call it; when that is unclear, the tool is shown. Call arguments are
-// treated as unknown: a permit that depends on them may apply, and a forbid
-// that depends on them is set aside.
+// call it; when that is unclear, the tool is shown. See visibilityPolicy for
+// how conditions on arguments are treated.
 //
-// The check relies on cedar-go's experimental batch package, so cedar-go is
-// pinned to an exact version and the accuracy tests run in CI.
+// Large proxies are checked with cedar-go's experimental batch package, so
+// cedar-go is pinned to an exact version and the accuracy tests run in CI.
 
 // DefaultVisibilityBatchThreshold is the number of tools on a proxy above
 // which VisibleTools checks the whole proxy in one batch instead of one tool
@@ -91,7 +92,7 @@ func visibilityKey(who Caller, proxy string) string {
 }
 
 // Visible reports whether some call arguments could let this caller call the
-// tool. It checks one tool exactly. An evaluation error shows the tool.
+// tool, checking one tool.
 func (s *Snapshot) Visible(who Caller, proxy, name string) bool {
 	inv, ok := s.tools[proxy]
 	if !ok {
@@ -112,37 +113,43 @@ func (s *Snapshot) Visible(who Caller, proxy, name string) bool {
 	resource := cedar.NewEntityUID("Tool", cedar.String(toolID))
 	allowed := func(stripAnnotations bool) bool {
 		entities[resource] = toolEntity(resource, proxy, inv.Upstream, name, t, stripAnnotations)
-		permitted := false
-		err := batch.Authorize(context.Background(), s.visibilityPolicies, entities, batch.Request{
-			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"), Resource: resource, Context: batch.Ignore(),
-		}, func(r batch.Result) error {
-			permitted = permitted || r.Decision == cedar.Allow
-			return nil
+		outcome, _ := evaluateWith(s.visibilityPolicies, entities, cedar.Request{
+			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"), Resource: resource, Context: noArguments(),
 		})
-		return err != nil || permitted
-	}
-	if !allowed(false) {
-		return false
+		return outcome == "permitted"
 	}
 	// As for calls, upstream annotations may only narrow access: the call
 	// must also be permitted without them.
-	if t.Definition == nil || len(t.Definition.Annotations) == 0 {
-		return true
+	if !allowed(false) {
+		return false
 	}
-	return allowed(true)
+	return t.Definition == nil || len(t.Definition.Annotations) == 0 || allowed(true)
+}
+
+// noArguments is the argument facts of a call that supplies none.
+func noArguments() cedar.Record {
+	facts, _ := argumentFacts(nil, nil)
+	return facts
 }
 
 // visibleInBatch returns the tools on a proxy that some call arguments could
-// let this caller call, evaluating the whole proxy in one batch. It can
-// include tools Visible would leave out. An evaluation error shows every tool
-// it covers. Every tool's entity is present during the batch, where a call
-// decision sees only its own; a rule could tell them apart only by naming
-// another tool's entity, which rules about tools have no reason to do, since
-// they match the requested tool through resource.
+// let this caller call, evaluating the whole proxy in one batch per kind of
+// tool. It can include tools Visible would leave out. Every tool's entity is
+// present during the batch, where a call decision sees only its own; a rule
+// could tell them apart only by naming another tool's entity, which rules
+// about tools have no reason to do, since they match the requested tool
+// through resource.
 func (s *Snapshot) visibleInBatch(who Caller, proxy string) map[string]bool {
 	inv := s.tools[proxy]
 	principal, _ := callerEntity(who)
-	pass := func(names []string, stripAnnotations bool) map[string]bool {
+	// Tools without declared arguments are decided with the rules as
+	// written, as their calls would be; others with the rules rewritten for
+	// unknown arguments.
+	pass := func(policies *cedar.PolicySet, names []string, stripAnnotations bool) map[string]bool {
+		allowed := make(map[string]bool, len(names))
+		if len(names) == 0 {
+			return allowed
+		}
 		_, entities := callerEntity(who)
 		uids := make([]cedar.Value, 0, len(names))
 		byUID := make(map[cedar.EntityUID]string, len(names))
@@ -153,41 +160,53 @@ func (s *Snapshot) visibleInBatch(who Caller, proxy string) map[string]bool {
 			uids = append(uids, uid)
 			byUID[uid] = name
 		}
-		allowed := make(map[string]bool, len(names))
-		err := batch.Authorize(context.Background(), s.visibilityPolicies, entities, batch.Request{
+		err := batch.Authorize(context.Background(), policies, entities, batch.Request{
 			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"),
-			Resource: batch.Variable("tool"), Context: batch.Ignore(),
+			Resource: batch.Variable("tool"), Context: noArguments(),
 			Variables: batch.Variables{"tool": uids},
 		}, func(r batch.Result) error {
-			if r.Decision == cedar.Allow {
+			if outcomeOf(policies, r.Decision, r.Diagnostic) == "permitted" {
 				allowed[byUID[r.Request.Resource]] = true
 			}
 			return nil
 		})
 		if err != nil {
+			// The batch could not be evaluated, so every tool is shown.
 			for _, name := range names {
 				allowed[name] = true
 			}
 		}
 		return allowed
 	}
-	names := make([]string, 0, len(inv.Tools))
-	for name := range inv.Tools {
-		names = append(names, name)
-	}
-	visible := pass(names, false)
-	var recheck []string
-	for name := range visible {
-		if t := inv.Tools[name]; t.Definition != nil && len(t.Definition.Annotations) > 0 {
-			recheck = append(recheck, name)
+	var exact, unknown []string
+	for name, t := range inv.Tools {
+		if len(t.Arguments) == 0 {
+			exact = append(exact, name)
+		} else {
+			unknown = append(unknown, name)
 		}
 	}
-	if len(recheck) > 0 {
-		without := pass(recheck, true)
-		for _, name := range recheck {
-			if !without[name] {
-				delete(visible, name)
+	visible := pass(s.policies, exact, false)
+	for name := range pass(s.visibilityPolicies, unknown, false) {
+		visible[name] = true
+	}
+	var recheckExact, recheckUnknown []string
+	for name := range visible {
+		if t := inv.Tools[name]; t.Definition != nil && len(t.Definition.Annotations) > 0 {
+			if len(t.Arguments) == 0 {
+				recheckExact = append(recheckExact, name)
+			} else {
+				recheckUnknown = append(recheckUnknown, name)
 			}
+		}
+	}
+	without := pass(s.policies, recheckExact, true)
+	for name := range pass(s.visibilityPolicies, recheckUnknown, true) {
+		without[name] = true
+	}
+	for _, name := range append(recheckExact, recheckUnknown...) {
+		if !without[name] {
+			delete(visible, name)
 		}
 	}
 	return visible
@@ -218,50 +237,106 @@ func toolEntity(uid cedar.EntityUID, proxy, upstream, name string, t *tool, stri
 	})}
 }
 
-// visibilityPolicy rewrites a policy for deciding visibility. With the call's
-// arguments ignored, batch evaluation drops each permit condition that refers
-// to them: a whole when clause, including conditions on the caller or tool
-// that it also tests. Splitting a permit's when clauses at their top-level
-// "&&" keeps those other conditions, whatever order they are written in;
-// clauses in a policy must all hold, so the permit is unchanged. Only the
-// parts that test arguments are then dropped, so the permit may still apply,
-// but no longer to callers its other conditions exclude.
+// visibilityPolicy rewrites a policy so it decides whether some call
+// arguments could make it apply, without reading them. Each condition is
+// replaced by one of two versions in which every test that reads the call's
+// arguments is replaced by a constant:
 //
-// Forbids are left as written: a forbid with a condition on arguments is set
-// aside whole, so a tool some arguments could call is never hidden.
+//   - "possibly true", where such a test counts as true wherever that could
+//     make the condition hold, and
+//   - "necessarily true", where it counts as false wherever that could make
+//     the condition fail.
+//
+// The two are built together through "&&", "||", "!" and "if", so tests on
+// the caller and tool keep deciding the result wherever they are written:
+// a permit limited to one role still applies to no one else. A permit keeps
+// the "possibly true" version of its when clauses and the opposite of the
+// "necessarily true" version of its unless clauses, so it applies whenever
+// some arguments could make it apply. A forbid does the reverse, so it applies
+// only when every set of arguments would make it apply. A tool some arguments
+// could let the caller call is therefore never hidden.
 func visibilityPolicy(p *cedar.Policy) *cedar.Policy {
 	original := (*ast.Policy)(p.AST())
-	if original.Effect != ast.EffectPermit {
-		return p
-	}
 	rewritten := *original
-	rewritten.Conditions = nil
-	var split func(node ast.IsNode)
-	split = func(node ast.IsNode) {
-		if and, ok := node.(ast.NodeTypeAnd); ok {
-			split(and.Left)
-			split(and.Right)
-			return
-		}
-		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: node})
-	}
-	// "unless a || b" holds exactly when "!a" and "!b" both do, so an unless
-	// clause is split at its top-level "||" into when clauses too.
-	var splitUnless func(node ast.IsNode)
-	splitUnless = func(node ast.IsNode) {
-		if or, ok := node.(ast.NodeTypeOr); ok {
-			splitUnless(or.Left)
-			splitUnless(or.Right)
-			return
-		}
-		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: ast.NodeTypeNot{UnaryNode: ast.UnaryNode{Arg: node}}})
-	}
+	rewritten.Conditions = make([]ast.ConditionType, 0, len(original.Conditions))
+	permit := original.Effect == ast.EffectPermit
 	for _, c := range original.Conditions {
-		if c.Condition == ast.ConditionWhen {
-			split(c.Body)
-		} else {
-			splitUnless(c.Body)
+		possible, necessary := bounds(c.Body)
+		body := possible
+		switch {
+		case permit && c.Condition == ast.ConditionUnless:
+			body = not(necessary)
+		case !permit && c.Condition == ast.ConditionWhen:
+			body = necessary
+		case !permit && c.Condition == ast.ConditionUnless:
+			body = not(possible)
 		}
+		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: body})
 	}
 	return cedar.NewPolicyFromAST((*cedarast.Policy)(&rewritten))
+}
+
+// bounds returns the "possibly true" and "necessarily true" versions of a
+// condition; see visibilityPolicy.
+func bounds(node ast.IsNode) (possible, necessary ast.IsNode) {
+	switch n := node.(type) {
+	case ast.NodeTypeAnd:
+		lp, ln := bounds(n.Left)
+		rp, rn := bounds(n.Right)
+		return ast.NodeTypeAnd{BinaryNode: ast.BinaryNode{Left: lp, Right: rp}}, ast.NodeTypeAnd{BinaryNode: ast.BinaryNode{Left: ln, Right: rn}}
+	case ast.NodeTypeOr:
+		lp, ln := bounds(n.Left)
+		rp, rn := bounds(n.Right)
+		return ast.NodeTypeOr{BinaryNode: ast.BinaryNode{Left: lp, Right: rp}}, ast.NodeTypeOr{BinaryNode: ast.BinaryNode{Left: ln, Right: rn}}
+	case ast.NodeTypeNot:
+		p, nec := bounds(n.Arg)
+		return not(nec), not(p)
+	case ast.NodeTypeIfThenElse:
+		cp, cn := bounds(n.If)
+		tp, tn := bounds(n.Then)
+		ep, en := bounds(n.Else)
+		// When the condition is known, its branch decides. Otherwise either
+		// branch may be taken.
+		choose := func(then, otherwise, either ast.IsNode) ast.IsNode {
+			return ast.NodeTypeIfThenElse{If: cn, Then: then, Else: ast.NodeTypeIfThenElse{If: not(cp), Then: otherwise, Else: either}}
+		}
+		return choose(tp, ep, ast.NodeTypeOr{BinaryNode: ast.BinaryNode{Left: tp, Right: ep}}),
+			choose(tn, en, ast.NodeTypeAnd{BinaryNode: ast.BinaryNode{Left: tn, Right: en}})
+	}
+	if !readsArguments(reflect.ValueOf(node)) {
+		return node, node
+	}
+	return ast.NodeValue{Value: types.True}, ast.NodeValue{Value: types.False}
+}
+
+func not(node ast.IsNode) ast.IsNode { return ast.NodeTypeNot{UnaryNode: ast.UnaryNode{Arg: node}} }
+
+// readsArguments reports whether an expression reads the request context,
+// which holds the call's arguments. It walks every exported field of the
+// expression, so a kind of expression added to cedar-go later is still
+// searched.
+func readsArguments(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		return !v.IsNil() && readsArguments(v.Elem())
+	case reflect.Slice:
+		for i := range v.Len() {
+			if readsArguments(v.Index(i)) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		if variable, ok := v.Interface().(ast.NodeTypeVariable); ok {
+			return variable.Name == "context"
+		}
+		if _, ok := v.Interface().(ast.NodeValue); ok {
+			return false
+		}
+		for i := range v.NumField() {
+			if v.Type().Field(i).IsExported() && readsArguments(v.Field(i)) {
+				return true
+			}
+		}
+	}
+	return false
 }

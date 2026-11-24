@@ -14,7 +14,9 @@ const visibilityTools = `{"p": {"upstream": "https://u.example/mcp", "tools": {
   "plain": {"facts": {"risk": "low"}},
   "ordered": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
   "split": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
-  "excepted": {"facts": {"risk": "low"}, "arguments": {"count": "long"}}}}}`
+  "excepted": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
+  "branched": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
+  "forbidden": {"facts": {"risk": "low"}, "arguments": {"count": "long"}}}}}`
 
 const visibilityRules = `
 @id("support-read") permit (principal, action, resource) when { principal.roles.contains("support") && resource.reviewed.flags.contains({name: "readOnly", value: true}) };
@@ -29,6 +31,9 @@ const visibilityRules = `
 @id("context-first") permit (principal, action, resource) when { context.numbers.contains({name: "count", value: 3}) && principal.roles.contains("guest") && resource.name == "ordered" };
 @id("two-clauses") permit (principal, action, resource) when { principal.roles.contains("guest") && resource.name == "split" } when { context.numbers.contains({name: "count", value: 3}) };
 @id("unless-role") permit (principal, action, resource) when { resource.name == "excepted" } unless { context.numbers.contains({name: "count", value: 1}) || !principal.roles.contains("guest") };
+@id("if-role") permit (principal, action, resource) when { resource.name == "branched" && (if principal.roles.contains("operator") then context.numbers.contains({name: "count", value: 3}) else false) };
+@id("open-forbidden") permit (principal, action, resource) when { resource.name == "forbidden" };
+@id("forbid-unless-arg") forbid (principal, action, resource) when { resource.name == "forbidden" } unless { context.numbers.contains({name: "count", value: 5}) };
 @id("blocked") forbid (principal, action, resource) when { principal.roles.contains("blocked") };
 @id("blocked-read") permit (principal, action, resource) when { principal.roles.contains("blocked") && resource.name == "lookup" };
 `
@@ -65,6 +70,9 @@ var visibilityCases = []struct {
 	{"nobody", "split", false, "a separate argument clause must not leak a guest-only permit"},
 	{"guest", "excepted", true, "a role restriction inside an unless clause that also tests arguments"},
 	{"nobody", "excepted", false, "an unless clause mixing arguments and roles must not leak"},
+	{"operator", "branched", true, "a role test in the condition of an if, with an argument test in its branch"},
+	{"nobody", "branched", false, "a role test in the condition of an if must not leak"},
+	{"nobody", "forbidden", true, "a forbid that some arguments avoid does not hide the tool"},
 }
 
 func TestVisibilityPrecision(t *testing.T) {
@@ -90,9 +98,16 @@ func TestBatchVisibilityNeverHidesUsableTools(t *testing.T) {
 		}
 	}
 	// The batch check may show extra tools, but a permit limited to one role
-	// never reveals a tool to other callers.
-	if s.VisibleTools(Caller{Issuer: "i", Subject: "nobody", Roles: []string{"nobody"}}, "p", 0)["report"] {
-		t.Error("the batch check revealed a guest-only tool to another caller")
+	// never reveals a tool to other callers, and tools without declared
+	// arguments are decided exactly.
+	nobody := s.VisibleTools(Caller{Issuer: "i", Subject: "nobody", Roles: []string{"nobody"}}, "p", 0)
+	for _, tool := range []string{"report", "ordered", "split", "excepted", "branched"} {
+		if nobody[tool] {
+			t.Errorf("the batch check revealed the role-limited tool %s to another caller", tool)
+		}
+	}
+	if s.VisibleTools(Caller{Issuer: "i", Subject: "support", Roles: []string{"support"}}, "p", 0)["plain"] {
+		t.Error("the batch check showed a tool without arguments that no call can use")
 	}
 }
 

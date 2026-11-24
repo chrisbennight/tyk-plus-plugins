@@ -127,24 +127,54 @@ func (s *Snapshot) Decide(who Caller, proxy, upstream, name string, args json.Ra
 }
 
 func (s *Snapshot) evaluate(entities cedar.EntityMap, req cedar.Request) (string, []string) {
-	decision, diag := cedar.Authorize(s.policies, entities, req)
-	var ids []string
-	for _, reason := range diag.Reasons {
-		ids = append(ids, string(reason.PolicyID))
-	}
+	return evaluateWith(s.policies, entities, req)
+}
+
+// evaluateWith decides a request with a policy set. A forbid that fails to
+// evaluate denies the request.
+func evaluateWith(policies *cedar.PolicySet, entities cedar.EntityMap, req cedar.Request) (string, []string) {
+	decision, diag := cedar.Authorize(policies, entities, req)
+	return outcomeOf(policies, decision, diag), reasons(policies, diag)
+}
+
+// outcomeOf names a decision, treating a forbid that failed to evaluate as a
+// denial.
+func outcomeOf(policies *cedar.PolicySet, decision cedar.Decision, diag cedar.Diagnostic) string {
 	outcome := "policy_denied"
 	if decision == cedar.Allow {
 		outcome = "permitted"
 	}
 	for _, failure := range diag.Errors {
-		if s.policies.Get(failure.PolicyID).Effect() == cedar.Forbid {
-			if outcome == "permitted" {
-				ids = nil
-			}
+		if policies.Get(failure.PolicyID).Effect() == cedar.Forbid {
 			outcome = "forbid_error"
-			ids = append(ids, string(failure.PolicyID))
 		}
 	}
+	return outcome
+}
+
+// reasons lists the policies that decided a request: those that applied,
+// or every forbid that failed to evaluate.
+func reasons(policies *cedar.PolicySet, diag cedar.Diagnostic) []string {
+	var ids []string
+	for _, reason := range diag.Reasons {
+		ids = append(ids, string(reason.PolicyID))
+	}
+	var failed []string
+	for _, failure := range diag.Errors {
+		if policies.Get(failure.PolicyID).Effect() == cedar.Forbid {
+			failed = append(failed, string(failure.PolicyID))
+		}
+	}
+	if len(failed) > 0 {
+		// The permits that applied did not decide a request a forbid denied.
+		var forbids []string
+		for _, id := range ids {
+			if policies.Get(cedar.PolicyID(id)).Effect() == cedar.Forbid {
+				forbids = append(forbids, id)
+			}
+		}
+		ids = append(forbids, failed...)
+	}
 	slices.Sort(ids)
-	return outcome, ids
+	return ids
 }

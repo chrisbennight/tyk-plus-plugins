@@ -117,6 +117,33 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 {"governed": "Use lookup to find records before changing them."}
 ```
 
+## Drift review
+
+An upstream can change a tool's definition after you reviewed it, for example to add instructions to its description. Drift review makes the gateway pass on only the definitions you approved. It applies to a proxy once its entry in `approved_tools.json` has a `drift` object, so turning it on is a reviewed step:
+
+```json
+{
+  "governed": {
+    "upstream": "https://mcp.company.example/mcp",
+    "drift": {"changedTools": "hide"},
+    "tools": {
+      "lookup": {"definition": {"name": "lookup", "description": "Find a record", "inputSchema": {"type": "object"}}}
+    }
+  }
+}
+```
+
+Under drift review:
+
+- A tool is approved when its entry has a `definition`. A tool without one is treated as not approved.
+- `tools/list` replies, plain or streamed, contain only tools whose upstream definition has the same fingerprint as the approved one. Tools the upstream added and tools without an approved definition are left out.
+- `changedTools` decides what happens to an approved tool whose upstream definition changed: `hide` (the default) leaves it out of lists, and `serve-approved` lists the approved definition instead of the upstream's. Either way, calls to it are refused until you approve the new definition or the upstream returns to the approved one.
+- A call to a tool that is not approved, or whose upstream last listed a different definition, is refused with the same reply as any other denied call, before rules are evaluated.
+- Each gateway compares calls with the definitions it last saw in a `tools/list` reply. Until a gateway has seen a list for a proxy, it checks calls against approval alone.
+- A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error.
+
+The `drift` object also accepts `changedInstructions` (`replace`, the default, or `strip`), `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). The gateway validates these fields; later releases act on them.
+
 ## Deploying changes
 
 A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.

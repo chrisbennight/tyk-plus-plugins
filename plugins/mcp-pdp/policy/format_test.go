@@ -238,3 +238,24 @@ func TestDeeplyNestedDefinitionsFingerprintQuickly(t *testing.T) {
 		t.Fatalf("a %d-level definition took %s", depth, elapsed)
 	}
 }
+
+func TestDriftSettingsAreValidated(t *testing.T) {
+	compile := func(drift string) error {
+		tools := `{"governed": {"upstream": "https://u.example/mcp", "drift": ` + drift + `, "tools": {}}}`
+		_, err := Compile(Inputs{Rules: []byte(""), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
+		return err
+	}
+	fp := strings.Repeat("a", 64)
+	for _, good := range []string{`{}`, `{"changedTools": "serve-approved", "changedInstructions": "strip"}`,
+		`{"rejectedTools": {"lookup": ["` + fp + `"]}, "rejectedInstructions": ["` + fp + `"]}`} {
+		if err := compile(good); err != nil {
+			t.Errorf("%s: %v", good, err)
+		}
+	}
+	for _, bad := range []string{`{"changedTools": "show"}`, `{"changedInstructions": "keep"}`, `{"rejectedTools": {"lookup": ["abc"]}}`,
+		`{"rejectedInstructions": ["abc"]}`, `{"rejectedTools": {"": ["` + fp + `"]}}`, `{"unknown": true}`} {
+		if err := compile(bad); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}

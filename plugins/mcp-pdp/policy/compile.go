@@ -135,6 +135,7 @@ func (t *tool) prepare(name string) error {
 type inventory struct {
 	Upstream string           `json:"upstream"`
 	Tools    map[string]*tool `json:"tools"`
+	Drift    *driftSettings   `json:"drift"`
 }
 
 // Snapshot is a validated configuration ready to decide tool calls. Version
@@ -196,6 +197,11 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 	for proxy, inv := range s.tools {
 		if proxy == "" || inv.Upstream == "" || inv.Tools == nil {
 			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
+		}
+		if inv.Drift != nil {
+			if err := inv.Drift.validate(proxy); err != nil {
+				return nil, err
+			}
 		}
 		for name, t := range inv.Tools {
 			if name == "" || t == nil {

@@ -1,11 +1,13 @@
 // Package drift keeps unapproved upstream text away from clients. It checks
 // tools/list replies against the approved definitions in the active policy
-// set and decides whether a tool may be called given what the upstream last
-// declared for it.
+// set and server instructions against the approved instructions, and it
+// decides whether a tool may be called given what the upstream last declared
+// for it.
 package drift
 
 import (
 	"bytes"
+	"strings"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -63,6 +65,148 @@ type Limits struct {
 // refused and nothing it declares is recorded. The gateway's own errors then
 // answer the request, so the client is not left waiting.
 func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, observe func(name, fingerprint string, approved bool)) []byte {
+	return checkReply(message, request, "Upstream could not list tools", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
+		listed, ok := result["tools"]
+		if !ok || len(listed) == 0 || listed[0] != '[' {
+			// A tools/list result must carry its tools as an array.
+			return nil, false
+		}
+		var tools []jsontext.Value
+		if err := jsonv2.Unmarshal(listed, &tools); err != nil {
+			return nil, false
+		}
+		if cursor, ok := result["nextCursor"]; ok && (len(cursor) == 0 || cursor[0] != '"') {
+			return nil, false
+		}
+		var order []string
+		declared := map[string]string{}
+		for _, definition := range tools {
+			var named struct {
+				Name string `json:"name"`
+			}
+			// Names match exactly, as the policy set reads them.
+			if jsonv2.Unmarshal(definition, &named) != nil || named.Name == "" {
+				continue
+			}
+			fingerprint := ""
+			if len(definition) <= limits.MaxDefinitionBytes {
+				fingerprint, _ = policy.DefinitionFingerprint(definition)
+			}
+			previous, repeated := declared[named.Name]
+			switch {
+			case !repeated:
+				order = append(order, named.Name)
+				declared[named.Name] = fingerprint
+			case previous != fingerprint:
+				// Conflicting definitions of one tool match nothing.
+				declared[named.Name] = ""
+			}
+		}
+		kept := make([]jsontext.Value, 0, len(order))
+		for _, name := range order {
+			fingerprint := declared[name]
+			approved, approvedDefinition, ok := view.Approved(name)
+			observe(name, fingerprint, ok)
+			if ok && (fingerprint == approved || view.ServeApproved()) {
+				kept = append(kept, jsontext.Value(approvedDefinition))
+			}
+		}
+		// Result metadata is upstream text no one reviewed, so only the
+		// cursor that pages the list is kept.
+		rebuilt := keep(result, "nextCursor")
+		rebuilt["tools"], _ = jsonv2.Marshal(kept)
+		return rebuilt, true
+	})
+}
+
+// FilterInstructions checks one JSON-RPC message answering initialize or
+// server/discover, whose result may carry the server's instructions. The
+// instructions pass on only when they are the approved text. Otherwise they
+// are replaced with the approved text, or removed when strip is set or none
+// is approved; an empty approved text also means none. Other members of the
+// result pass unchanged. When discovery is set the message answers
+// server/discover, and a result the gateway changed is marked private with a
+// cache lifetime of at most a minute, so a client asks again soon after a
+// reviewer approves the upstream's text.
+//
+// request is the ID of the request being answered, when known, as for
+// FilterToolsList.
+func FilterInstructions(message []byte, approved string, strip, discovery bool, request jsontext.Value) []byte {
+	return checkReply(message, request, "Upstream could not start the session", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
+		changed := dropVariants(result, "instructions")
+		declared := ""
+		if raw, ok := result["instructions"]; ok {
+			if jsonv2.Unmarshal(raw, &declared) != nil {
+				return nil, false
+			}
+		}
+		if declared != approved {
+			changed = true
+			delete(result, "instructions")
+			if !strip && approved != "" {
+				result["instructions"], _ = jsonv2.Marshal(approved)
+			}
+		} else if declared == "" {
+			// Empty instructions are no instructions.
+			delete(result, "instructions")
+		}
+		if changed && discovery {
+			dropVariants(result, "ttlMs", "cacheScope")
+			ttl := float64(changedInstructionsTTL)
+			if raw, ok := result["ttlMs"]; ok {
+				var ms float64
+				if jsonv2.Unmarshal(raw, &ms) != nil || ms < 0 {
+					return nil, false
+				}
+				ttl = min(ms, ttl)
+			}
+			result["ttlMs"], _ = jsonv2.Marshal(ttl)
+			result["cacheScope"], _ = jsonv2.Marshal("private")
+		}
+		return result, true
+	})
+}
+
+// dropVariants removes members whose names differ from the given ones only
+// in case. Some clients match member names without regard to case, so a
+// variant would reach them in place of the checked member. It reports whether it removed any.
+func dropVariants(result map[string]jsontext.Value, names ...string) bool {
+	dropped := false
+	for member := range result {
+		for _, name := range names {
+			if member != name && strings.EqualFold(member, name) {
+				delete(result, member)
+				dropped = true
+			}
+		}
+	}
+	return dropped
+}
+
+// changedInstructionsTTL is the cache lifetime, in milliseconds, of a
+// server/discover result whose instructions the gateway changed.
+const changedInstructionsTTL = 60000
+
+// keep copies the named members, so a rebuilt message carries only members
+// spelled exactly as JSON-RPC and MCP define them, and a client that matches
+// names loosely cannot find unchecked text under a variant spelling.
+func keep(from map[string]jsontext.Value, names ...string) map[string]jsontext.Value {
+	out := map[string]jsontext.Value{}
+	for _, name := range names {
+		if value, ok := from[name]; ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+// checkReply checks one JSON-RPC message on a reply the gateway reads and
+// rebuilds it. check receives a result answering the request and returns the
+// result to send, or false when the result cannot be checked. An upstream
+// error keeps only its code, with errorText as its message. Requests and
+// notifications sharing a stream keep their method and params. A message
+// that cannot be checked is replaced with an error answering the request.
+func checkReply(message []byte, request jsontext.Value, errorText string, check func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool)) []byte {
 	var envelope map[string]jsontext.Value
 	failed := func() []byte {
 		if len(request) > 0 {
@@ -77,18 +221,6 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 	if string(envelope["jsonrpc"]) != `"2.0"` || !validID(envelope["id"]) {
 		return failed()
 	}
-	// Every message passed on is rebuilt from the members JSON-RPC defines,
-	// spelled exactly, so a client that matches names loosely cannot find
-	// unchecked text under a variant spelling.
-	keep := func(from map[string]jsontext.Value, names ...string) map[string]jsontext.Value {
-		out := map[string]jsontext.Value{}
-		for _, name := range names {
-			if value, ok := from[name]; ok {
-				out[name] = value
-			}
-		}
-		return out
-	}
 	encode := func(rebuilt map[string]jsontext.Value) []byte {
 		out, err := jsonv2.Marshal(rebuilt, jsonv2.Deterministic(true))
 		if err != nil {
@@ -99,7 +231,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 	raw, ok := envelope["result"]
 	if !ok {
 		// Error replies, and requests and notifications sharing the stream,
-		// carry no tool definitions. Anything else is not a valid message.
+		// carry no checked text. Anything else is not a valid message.
 		switch {
 		case envelope["error"] != nil:
 			if len(request) > 0 && !SameID(envelope["id"], request) {
@@ -115,7 +247,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 				return failed()
 			}
 			rebuilt := keep(envelope, "jsonrpc", "id")
-			rebuilt["error"], _ = jsonv2.Marshal(map[string]any{"code": *failure.Code, "message": "Upstream could not list tools"})
+			rebuilt["error"], _ = jsonv2.Marshal(map[string]any{"code": *failure.Code, "message": errorText})
 			return encode(rebuilt)
 		case envelope["method"] != nil:
 			if method := envelope["method"]; method[0] != '"' {
@@ -130,60 +262,15 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 		return failed()
 	}
 	var result map[string]jsontext.Value
-	if err := jsonv2.Unmarshal(raw, &result); err != nil {
+	if err := jsonv2.Unmarshal(raw, &result); err != nil || result == nil {
 		return failed()
 	}
-	listed, ok := result["tools"]
-	if !ok || len(listed) == 0 || listed[0] != '[' {
-		// A tools/list result must carry its tools as an array.
+	checked, ok := check(result)
+	if !ok {
 		return failed()
 	}
-	var tools []jsontext.Value
-	if err := jsonv2.Unmarshal(listed, &tools); err != nil {
-		return failed()
-	}
-	if cursor, ok := result["nextCursor"]; ok && (len(cursor) == 0 || cursor[0] != '"') {
-		return failed()
-	}
-	var order []string
-	declared := map[string]string{}
-	for _, definition := range tools {
-		var named struct {
-			Name string `json:"name"`
-		}
-		// Names match exactly, as the policy set reads them.
-		if jsonv2.Unmarshal(definition, &named) != nil || named.Name == "" {
-			continue
-		}
-		fingerprint := ""
-		if len(definition) <= limits.MaxDefinitionBytes {
-			fingerprint, _ = policy.DefinitionFingerprint(definition)
-		}
-		previous, repeated := declared[named.Name]
-		switch {
-		case !repeated:
-			order = append(order, named.Name)
-			declared[named.Name] = fingerprint
-		case previous != fingerprint:
-			// Conflicting definitions of one tool match nothing.
-			declared[named.Name] = ""
-		}
-	}
-	kept := make([]jsontext.Value, 0, len(order))
-	for _, name := range order {
-		fingerprint := declared[name]
-		approved, approvedDefinition, ok := view.Approved(name)
-		observe(name, fingerprint, ok)
-		if ok && (fingerprint == approved || view.ServeApproved()) {
-			kept = append(kept, jsontext.Value(approvedDefinition))
-		}
-	}
-	// Result metadata is upstream text no one reviewed, so only the cursor
-	// that pages the list is kept.
-	rebuiltResult := keep(result, "nextCursor")
-	rebuiltResult["tools"], _ = jsonv2.Marshal(kept)
 	rebuilt := keep(envelope, "jsonrpc", "id")
-	rebuilt["result"], _ = jsonv2.Marshal(rebuiltResult)
+	rebuilt["result"], _ = jsonv2.Marshal(checked, jsonv2.Deterministic(true))
 	return encode(rebuilt)
 }
 

@@ -8,7 +8,11 @@ import (
 )
 
 // driftSuite checks drift enforcement for one client version: only tools
-// whose upstream definition matches the approved one are listed or callable.
+// whose upstream definition matches the approved one are listed or callable,
+// and only approved instructions reach the client.
+// upstreamInstructions are the instructions the test upstream declares.
+const upstreamInstructions = "Use lookup for records."
+
 func driftSuite(k keys, version string) {
 	c := connect(k.operator, version)
 	// Later checks build on the staged set, so it is restored at the end.
@@ -19,6 +23,9 @@ func driftSuite(k keys, version string) {
 	publishInventory(map[string]any{}, upstream, "activated")
 	catalog := catalogOf(c, k.operator)
 	check(catalog["lookup"] != nil && catalog["change"] != nil, "%s: upstream listed %v", version, slices.Collect(maps.Keys(catalog)))
+	// So do its instructions.
+	declared := connect(k.operator, version)
+	check(declared.hasInstructions && declared.instructions == upstreamInstructions, "%s: upstream instructions %q", version, declared.instructions)
 
 	// The approved definition of change differs from what the upstream declares.
 	approvedChange := with(catalog["change"], "description", "An approved description the upstream no longer declares")
@@ -58,5 +65,19 @@ func driftSuite(k keys, version string) {
 	listed = catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"change"}), "%s: listed %v after removing lookup", version, slices.Collect(maps.Keys(listed)))
 	call(c, k.operator, "lookup", args("count", 1))
+
+	// Instructions that differ from the approved text are replaced with it,
+	// or removed when the proxy strips changed instructions.
+	publish("activated", map[string]string{"approved_instructions.json": `{"governed":"Approved instructions."}`})
+	inventory(map[string]any{}, tools)
+	handshake := connect(k.operator, version)
+	check(handshake.hasInstructions && handshake.instructions == "Approved instructions.", "%s: replaced instructions %q", version, handshake.instructions)
+	inventory(map[string]any{"changedInstructions": "strip"}, tools)
+	handshake = connect(k.operator, version)
+	check(!handshake.hasInstructions, "%s: stripped instructions %q", version, handshake.instructions)
+	// Approving what the upstream declares passes it on again.
+	publish("activated", map[string]string{"approved_instructions.json": `{"governed":"` + upstreamInstructions + `"}`})
+	handshake = connect(k.operator, version)
+	check(handshake.hasInstructions && handshake.instructions == upstreamInstructions, "%s: approved instructions %q", version, handshake.instructions)
 	fmt.Printf("Verified drift enforcement for a %s client.\n", version)
 }

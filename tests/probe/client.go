@@ -71,6 +71,10 @@ type conn struct {
 	// newer version was offered, only older versions were offered, or the
 	// method was not supported at all.
 	discovery string
+	// instructions holds the server instructions from the handshake that set
+	// up the connection, and hasInstructions whether there were any.
+	instructions    string
+	hasInstructions bool
 }
 
 const (
@@ -89,11 +93,13 @@ func connect(cred credential, version string) *conn {
 		if r.Status == http.StatusOK && r.Error == nil {
 			var discovered struct {
 				SupportedVersions []string `json:"supportedVersions"`
+				Instructions      *string  `json:"instructions"`
 			}
 			check(json.Unmarshal(r.Result, &discovered) == nil && len(discovered.SupportedVersions) > 0,
 				"server/discover succeeded without listing versions: %v", r)
 			if slices.Contains(discovered.SupportedVersions, newerProtocol) {
 				c.discovery = discoveryNewer
+				c.setInstructions(discovered.Instructions)
 				return c
 			}
 			check(slices.Contains(discovered.SupportedVersions, olderProtocol), "server/discover offered neither supported version: %v", discovered.SupportedVersions)
@@ -114,11 +120,20 @@ func connect(cred credential, version string) *conn {
 	var initialized struct {
 		ProtocolVersion string                `json:"protocolVersion"`
 		ServerInfo      struct{ Name string } `json:"serverInfo"`
+		Instructions    *string               `json:"instructions"`
 	}
 	check(r.Status == http.StatusOK && r.Error == nil && json.Unmarshal(r.Result, &initialized) == nil &&
 		initialized.ServerInfo.Name == "test-upstream" && initialized.ProtocolVersion == olderProtocol, "initialize failed: %v", r)
+	c.setInstructions(initialized.Instructions)
 	c.notify(cred, "notifications/initialized")
 	return c
+}
+
+func (c *conn) setInstructions(text *string) {
+	c.hasInstructions = text != nil
+	if text != nil {
+		c.instructions = *text
+	}
 }
 
 func (c *conn) headers(cred credential, method, name string) http.Header {

@@ -16,7 +16,10 @@ type arguments struct {
 }
 
 func main() {
-	server := mcp.NewServer(&mcp.Implementation{Name: "test-upstream", Version: "1"}, nil)
+	// The server declares instructions, so the gateway's check of them can be
+	// tested against approved text that differs.
+	server := mcp.NewServer(&mcp.Implementation{Name: "test-upstream", Version: "1"},
+		&mcp.ServerOptions{Instructions: "Use lookup for records."})
 	var lastArgs atomic.Pointer[arguments]
 	for name, reply := range map[string]string{"lookup": "found", "change": "updated"} {
 		tool := &mcp.Tool{Name: name, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}

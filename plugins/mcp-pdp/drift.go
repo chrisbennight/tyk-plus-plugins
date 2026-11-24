@@ -20,7 +20,7 @@ import (
 // as seen by this gateway.
 var observed drift.Observations
 
-// maxReply bounds a plain tools/list reply, or one streamed event, that the
+// maxReply bounds a plain reply, or one streamed event, that the
 // gateway reads to check it.
 const maxReply = 16 << 20
 
@@ -44,13 +44,19 @@ func positiveSetting(variable string, fallback int) int {
 	return parsed
 }
 
+// checkedMethods are the methods whose replies CheckResponse reads: tool
+// lists, and the handshakes that carry the server's instructions.
+var checkedMethods = map[string]bool{"tools/list": true, "initialize": true, "server/discover": true}
+
 // CheckResponse is a Tyk response hook. On a proxy under drift enforcement it
-// checks tools/list replies, plain or streamed, so only approved definitions
-// reach clients, and records what the upstream declared. Without a valid
-// policy set the gateway cannot tell what is approved, so it withholds the
-// list; calls are refused in that state anyway.
+// checks tools/list, initialize and server/discover replies, plain or
+// streamed, so only approved definitions and instructions reach clients, and
+// records what the upstream declared for its tools. Without a valid policy
+// set the gateway cannot tell what is approved, so it withholds lists and
+// removes instructions; calls are refused in that state anyway.
 func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request) {
-	if ctx.GetMCPMethod(req) != "tools/list" {
+	method := ctx.GetMCPMethod(req)
+	if !checkedMethods[method] {
 		return
 	}
 	if !underDriftReview(req) {
@@ -69,8 +75,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// headers arrive, a streamed event when it is complete.
 	check := func(received uint64, message []byte) []byte {
 		state := current()
+		// Without approvals to compare with, a list is withheld and
+		// instructions are removed, so the session can still start.
+		unchecked := func() []byte {
+			if method == "tools/list" {
+				return drift.Failed(requestID(req))
+			}
+			return drift.FilterInstructions(message, "", true, requestID(req))
+		}
 		if state == nil {
-			return drift.Failed(listRequestID(req))
+			return unchecked()
 		}
 		view, enforcing := state.Drift(proxy)
 		if !enforcing {
@@ -80,12 +94,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		if view.Upstream() != upstream {
 			// The proxy now targets an upstream other than the one reviewed;
-			// calls to it are refused, so its list is withheld and its
-			// declarations are not recorded against the reviewed tools.
-			return drift.Failed(listRequestID(req))
+			// calls to it are refused, so nothing it declares is passed on or
+			// recorded against the reviewed tools.
+			return unchecked()
+		}
+		if method != "tools/list" {
+			approved, _ := state.Instructions(proxy)
+			return drift.FilterInstructions(message, approved, view.StripInstructions(), requestID(req))
 		}
 		var declared []drift.Observation
-		out := drift.FilterToolsList(message, view, limits, listRequestID(req), func(tool, fingerprint string, approved bool) {
+		out := drift.FilterToolsList(message, view, limits, requestID(req), func(tool, fingerprint string, approved bool) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
 		})
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
@@ -101,9 +119,9 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// cannot be checked, so it is not passed on.
 	if res.Header.Get("Content-Encoding") != "" {
 		res.Body.Close()
-		replaceBody(res, drift.Failed(listRequestID(req)))
+		replaceBody(res, drift.Failed(requestID(req)))
 		res.Header.Del("Content-Encoding")
-		slog.Warn("Drift check refused a compressed tools/list reply", "proxy", proxy)
+		slog.Warn("Drift check refused a compressed reply", "proxy", proxy, "method", method)
 		return
 	}
 	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
@@ -112,7 +130,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		// the gateway sends is classified rather than what it received: a
 		// rebuilt message is either a request or notification, or a reply.
 		var stream *drift.EventRewriter
-		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(listRequestID(req)), func(message []byte) []byte {
+		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(requestID(req)), func(message []byte) []byte {
 			out := check(observed.Received(), message)
 			if !drift.CarriesMethod(out) {
 				stream.End()
@@ -129,7 +147,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// A plain reply answers the request; only a stream may also carry the
 	// upstream's own requests and notifications.
 	if err != nil || len(body) > maxReply || drift.CarriesMethod(body) {
-		replaceBody(res, drift.Failed(listRequestID(req)))
+		replaceBody(res, drift.Failed(requestID(req)))
 		return
 	}
 	replaceBody(res, check(plainReceived, body))
@@ -158,15 +176,15 @@ func underDriftReview(req *http.Request) bool {
 	return enforcing
 }
 
-// listRequestKey keys the JSON-RPC ID of a tools/list request in its context,
-// so the response hook can answer for that request and check that a result
-// answers it.
-type listRequestKey struct{}
+// requestIDKey keys the JSON-RPC ID of a request whose reply CheckResponse
+// reads, so the response hook can answer for that request and check that a
+// result answers it.
+type requestIDKey struct{}
 
-// rememberListRequest records the request's JSON-RPC ID for CheckResponse. Tyk
+// rememberRequestID records the request's JSON-RPC ID for CheckResponse. Tyk
 // passes response hooks the request its middleware updated, so the request is
 // replaced in place as Tyk's own context helpers do.
-func rememberListRequest(r *http.Request) {
+func rememberRequestID(r *http.Request) {
 	body, err := readBody(r)
 	if err != nil {
 		return
@@ -177,11 +195,11 @@ func rememberListRequest(r *http.Request) {
 	if jsonv2.Unmarshal(body, &envelope) != nil || len(envelope.ID) == 0 {
 		return
 	}
-	*r = *r.WithContext(context.WithValue(r.Context(), listRequestKey{}, envelope.ID))
+	*r = *r.WithContext(context.WithValue(r.Context(), requestIDKey{}, envelope.ID))
 }
 
-// listRequestID returns the ID rememberListRequest recorded, or nil.
-func listRequestID(r *http.Request) jsontext.Value {
-	id, _ := r.Context().Value(listRequestKey{}).(jsontext.Value)
+// requestID returns the ID rememberRequestID recorded, or nil.
+func requestID(r *http.Request) jsontext.Value {
+	id, _ := r.Context().Value(requestIDKey{}).(jsontext.Value)
 	return id
 }

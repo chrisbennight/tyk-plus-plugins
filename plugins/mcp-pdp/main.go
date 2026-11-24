@@ -37,14 +37,15 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			refuse(w, envelope.ID, "Caller not identified")
 			return
 		}
-		// CheckResponse reads tools/list replies on proxies under drift
+		// CheckResponse reads some replies on proxies under drift
 		// review, so there the client's request for compression is not
 		// passed upstream. A Go HTTP client that asks for compression on its
 		// own also decompresses the reply itself.
-		if ctx.GetMCPMethod(r) == "tools/list" {
-			// Drift review can start before the reply arrives, so every
-			// list request's ID is kept for the gateway's own errors.
-			rememberListRequest(r)
+		if checkedMethods[ctx.GetMCPMethod(r)] {
+			// Drift review can start before the reply arrives, so the ID of
+			// every request whose reply may be checked is kept for the
+			// gateway's own errors.
+			rememberRequestID(r)
 			if underDriftReview(r) {
 				r.Header.Del("Accept-Encoding")
 			}

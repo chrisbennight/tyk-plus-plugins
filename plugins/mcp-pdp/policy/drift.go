@@ -92,6 +92,10 @@ func (v DriftView) Rejected(name, fingerprint string) bool {
 	return slices.Contains(v.settings.RejectedTools[name], fingerprint)
 }
 
+// StripInstructions reports whether changed instructions are removed rather
+// than replaced with the approved text.
+func (v DriftView) StripInstructions() bool { return v.settings.ChangedInstructions == "strip" }
+
 // ServeApproved reports whether a changed tool is shown with its approved
 // definition rather than hidden.
 func (v DriftView) ServeApproved() bool { return v.settings.ChangedTools == "serve-approved" }

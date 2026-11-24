@@ -1,0 +1,8 @@
+github.com/aperturerobotics/go-quickjs-wasi-reactor v0.15.2-0.20261120061749-69a91b9bfdb9 h1:0ISY/kmWzcrMmAD01r4N4OQml+GamZaP4yxNLp3REs4=
+github.com/aperturerobotics/go-quickjs-wasi-reactor v0.15.2-0.20261120061749-69a91b9bfdb9/go.mod h1:tv9gTeRdrIQIsLeXQK+bsc7VrN5YHepfWsQ++/sALRQ=
+github.com/aperturerobotics/go-quickjs-wasi-reactor/wazero-quickjs v0.0.0-20261120061749-69a91b9bfdb9 h1:WthlsYyR/jLCOk2Ba+GsZ/aqCdQYDADWOl9YjsVAA9U=
+github.com/aperturerobotics/go-quickjs-wasi-reactor/wazero-quickjs v0.0.0-20261120061749-69a91b9bfdb9/go.mod h1:VvkKY0t7PItY//OEWikR4lThBhQXjy7/Nk4mKRHXLsc=
+github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=
+github.com/tetratelabs/wazero v1.12.0/go.mod h1:LvKtzl2RqO4gyF27BiXU+nKAjcV8f38U+kP/q2vgxh0=
+golang.org/x/sys v0.44.0 h1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=
+golang.org/x/sys v0.44.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=

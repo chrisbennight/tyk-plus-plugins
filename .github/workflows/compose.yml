@@ -53,3 +53,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Publish into a shared policy store as several users
         run: docker run --rm -v "$PWD":/w -w /w golang:1.26.10-bookworm bash tests/shared-store.sh
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The Code Mode sandbox host with its production gVisor backend, launched
+    # without --privileged, and with the runc development backend.
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [gvisor, runc]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Verify the sandbox host
+        env:
+          SANDBOX_BACKEND: ${{ matrix.backend }}
+        run: |
+          # The sandbox stack starts no gateway; Compose still requires its secrets to be set.
+          export TYK_GW_SECRET=unused TYK_GW_NODESECRET=unused COMPOSE_PROFILES=codemode
+          export COMPOSE_FILE=compose.yaml:tests/sandbox.compose.yaml
+          if [ "$SANDBOX_BACKEND" = runc ]; then COMPOSE_FILE="$COMPOSE_FILE:sandbox/compose.runc.yaml"; fi
+          trap 'docker compose logs sandbox-launcher sandbox; docker compose down -v' EXIT
+          docker compose build sandbox-launcher sandbox sandbox-certs sandbox-probe
+          docker compose up -d sandbox-launcher sandbox
+          docker compose run --rm sandbox-probe

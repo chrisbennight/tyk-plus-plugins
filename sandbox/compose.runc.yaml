@@ -1,0 +1,8 @@
+# Development backend for hosts without gVisor, such as Docker Desktop on
+# macOS. runc needs writable cgroups, so the launcher runs privileged; do not
+# use this file in production.
+services:
+  sandbox-launcher:
+    privileged: true
+    environment:
+      SANDBOX_BACKEND: runc

@@ -32,3 +32,51 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+  # Code Mode sandbox host, started with `--profile codemode`. In production it
+  # runs on its own hosts; see sandbox/README.md.
+  sandbox-launcher:
+    profiles: [codemode]
+    build: ./sandbox
+    image: tyk-plus-plugins-sandbox
+    entrypoint: ["/usr/local/bin/sandbox-launcher"]
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /run/sandbox
+      - /tmp
+    # gVisor needs exactly these capabilities, and Docker's seccomp and
+    # AppArmor profiles off, to create sandboxes without --privileged.
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SETUID, SETGID, SETFCAP]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - no-new-privileges:true
+    environment:
+      SANDBOX_BACKEND: ${SANDBOX_BACKEND:-gvisor}
+      SANDBOX_SERVICE_UID: "10001"
+    volumes:
+      - sandbox-socket:/run/sandbox-launcher
+    # All sandboxes on this host share these limits.
+    mem_limit: ${SANDBOX_HOST_MEMORY:-4g}
+    pids_limit: 2048
+  sandbox:
+    profiles: [codemode]
+    build: ./sandbox
+    image: tyk-plus-plugins-sandbox
+    entrypoint: ["/usr/local/bin/sandbox-service"]
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      SANDBOX_CAPACITY: ${SANDBOX_CAPACITY:-8}
+    volumes:
+      - sandbox-socket:/run/sandbox-launcher
+      - ${SANDBOX_TLS_DIR:-./sandbox/tls}:/etc/sandbox/tls:ro
+    depends_on:
+      - sandbox-launcher
+volumes:
+  sandbox-socket:

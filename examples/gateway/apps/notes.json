@@ -1,0 +1,64 @@
+{
+  "name": "Notes",
+  "api_id": "notes",
+  "org_id": "default",
+  "is_oas": true,
+  "application_protocol": "mcp",
+  "json_rpc_version": "2.0",
+  "auth_configs": {
+    "authToken": {
+      "auth_header_name": "X-API-Key",
+      "name": "key"
+    },
+    "jwt": {
+      "auth_header_name": "Authorization",
+      "name": "token"
+    }
+  },
+  "strip_auth_data": true,
+  "version_data": {
+    "not_versioned": true,
+    "versions": {
+      "Default": {
+        "name": "Default",
+        "use_extended_paths": true
+      }
+    }
+  },
+  "proxy": {
+    "listen_path": "/notes/",
+    "target_url": "http://notes:8000/mcp",
+    "strip_listen_path": true
+  },
+  "custom_middleware": {
+    "driver": "goplugin",
+    "post": [
+      {
+        "name": "Authorize",
+        "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+      }
+    ]
+  },
+  "enable_jwt": true,
+  "use_standard_auth": true,
+  "jwt_signing_method": "rsa",
+  "jwt_identity_base_field": "sub",
+  "jwt_jwks_uris": [
+    {
+      "url": "env://MCP_TOKEN_JWKS_URL",
+      "cache_timeout": "5m"
+    }
+  ],
+  "jwt_default_policies": [
+    "example-tokens"
+  ],
+  "security_requirements": [
+    [
+      "key"
+    ],
+    [
+      "token"
+    ]
+  ],
+  "enable_context_vars": true
+}

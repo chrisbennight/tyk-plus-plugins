@@ -1,0 +1,668 @@
+{
+  "directory": {
+    "upstream": "http://directory:8000/mcp",
+    "tools": {
+      "search": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "description": "Find people whose name contains the query.",
+          "inputSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "search",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Search"
+        }
+      },
+      "get_person": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "description": "Read one person's record.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "get_person",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Get Person"
+        }
+      },
+      "update_person": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "description": "Change a person's name.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "update_person",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Update Person"
+        }
+      },
+      "delete_person": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "directory",
+          "destructive"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "description": "Delete a person's record.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "delete_person",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Delete Person"
+        }
+      },
+      "export_directory": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "description": "Write every record to a file at the destination.",
+          "inputSchema": {
+            "properties": {
+              "destination": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "destination"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "export_directory",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Export Directory"
+        }
+      }
+    }
+  },
+  "payments": {
+    "upstream": "http://payments:8000/mcp",
+    "tools": {
+      "get_balance": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "payments"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "description": "Read an account's balance.",
+          "inputSchema": {
+            "properties": {
+              "account": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "account"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "get_balance",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Get Balance"
+        }
+      },
+      "refund": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "payments"
+        ],
+        "arguments": {
+          "amount": "long",
+          "environment": "string"
+        },
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "description": "Refund an amount in the test or production environment.",
+          "inputSchema": {
+            "properties": {
+              "amount": {
+                "type": "integer"
+              },
+              "environment": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "environment"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "refund",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Refund"
+        }
+      },
+      "transfer": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "payments"
+        ],
+        "arguments": {
+          "amount": "long",
+          "environment": "string"
+        },
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "description": "Move an amount between accounts in the test or production environment.",
+          "inputSchema": {
+            "properties": {
+              "amount": {
+                "type": "integer"
+              },
+              "environment": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "amount",
+              "environment"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "transfer",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Transfer"
+        }
+      }
+    }
+  },
+  "notes": {
+    "upstream": "http://notes:8000/mcp",
+    "tools": {
+      "search": {
+        "tags": [
+          "notes"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "description": "Find notes containing the query. Declares nothing about itself.",
+          "inputSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "search",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Search"
+        }
+      },
+      "purge": {
+        "tags": [
+          "notes"
+        ],
+        "definition": {
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "description": "Delete the oldest notes, while claiming to be read-only.",
+          "inputSchema": {
+            "properties": {
+              "count": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "count"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "purge",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Purge"
+        }
+      },
+      "export": {
+        "facts": {
+          "sensitivity": "internal"
+        },
+        "tags": [
+          "notes",
+          "export"
+        ],
+        "definition": {
+          "_meta": {
+            "sensitivity": "internal",
+            "readOnly": true,
+            "fastmcp": {
+              "tags": [
+                "export"
+              ]
+            }
+          },
+          "description": "Export all notes. Describes itself only through _meta.",
+          "inputSchema": {
+            "properties": {
+              "format": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "format"
+            ],
+            "type": "object",
+            "additionalProperties": false
+          },
+          "name": "export",
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "title": "Export"
+        }
+      }
+    }
+  },
+  "older": {
+    "upstream": "http://older:8000/mcp",
+    "tools": {
+      "search": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "name": "search",
+          "description": "Find people whose name contains the query.",
+          "inputSchema": {
+            "properties": {
+              "query": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "type": "object"
+          },
+          "outputSchema": {
+            "description": "Generic wrapper for non-object return types.",
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "_meta": {
+            "_fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      },
+      "get_person": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "name": "get_person",
+          "description": "Read one person's record.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "outputSchema": {
+            "description": "Generic wrapper for non-object return types.",
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "_meta": {
+            "_fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      },
+      "update_person": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "directory"
+        ],
+        "definition": {
+          "name": "update_person",
+          "description": "Change a person's name.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ],
+            "type": "object"
+          },
+          "outputSchema": {
+            "description": "Generic wrapper for non-object return types.",
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "_meta": {
+            "_fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      }
+    }
+  }
+}

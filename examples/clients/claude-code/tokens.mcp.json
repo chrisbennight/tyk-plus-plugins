@@ -1,0 +1,60 @@
+{
+  "mcpServers": {
+    "directory-analyst": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
+      }
+    },
+    "payments-analyst": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/payments/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
+      }
+    },
+    "notes-analyst": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/notes/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
+      }
+    },
+    "older-analyst": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
+      }
+    },
+    "directory-admin": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
+      }
+    },
+    "payments-admin": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/payments/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
+      }
+    },
+    "notes-admin": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/notes/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
+      }
+    },
+    "older-admin": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
+      }
+    }
+  }
+}

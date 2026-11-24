@@ -1,0 +1,125 @@
+# The examples: the gateway with the example policy, four mock MCP servers, a
+# token issuer and a runner. Every service starts on its own; services find
+# each other only through the URLs configured here. See README.md.
+name: tyk-plus-examples
+
+x-gateway-image: &gateway-image
+  image: tyk-plus-examples-gateway
+  build:
+    context: ../gateway
+    additional_contexts:
+      mcp-pdp: ../plugins/mcp-pdp
+
+services:
+  gateway:
+    <<: *gateway-image
+    environment:
+      CEDAR_REFRESH_INTERVAL: 2s
+      CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
+      # Plain HTTP is acceptable only because the issuer is on this local network.
+      MCP_TOKEN_JWKS_URL: http://issuer:8000/jwks
+      MCP_TOKEN_ISSUER: https://issuer.example
+      MCP_TOKEN_AUDIENCE: examples-gateway
+      TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
+      TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
+    volumes:
+      # These replace the image's own API definitions and token policy, so only
+      # the example proxies load.
+      - ./gateway/apps:/opt/tyk-gateway/mcp-apps:ro
+      - ./gateway/policies:/opt/tyk-gateway/policies:ro
+      - policy-store:/opt/tyk-gateway/cedar:ro
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    networks: [default, gateway-store]
+    depends_on:
+      redis:
+        condition: service_healthy
+      policy:
+        condition: service_completed_successfully
+
+  # Publishes the example policy set into the store the gateway reads, with the
+  # same validation the gateway applies, then exits.
+  policy:
+    <<: *gateway-image
+    user: "0"
+    entrypoint: ["/opt/tyk-gateway/bin/cedar-policy", "promote", "-store", "/store", "-label", "examples", "/policy"]
+    volumes:
+      - ./policy:/policy:ro
+      - policy-store:/store
+
+  # Redis holds Tyk's keys, so only the gateway can reach it.
+  redis:
+    image: redis:7.4-alpine
+    networks: [gateway-store]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  issuer:
+    build: ./issuer
+    environment:
+      ISSUER_DECK: /callers/people.json
+      ISSUER_KEY_FILE: /key/issuer.pem
+    volumes:
+      - ./callers:/callers:ro
+      - issuer-key:/key
+    ports:
+      - "127.0.0.1:${ISSUER_PORT:-8090}:8000"
+
+  directory:
+    build: ./servers
+    environment:
+      SERVER: directory
+
+  payments:
+    build: ./servers
+    environment:
+      SERVER: payments
+
+  notes:
+    build: ./servers
+    environment:
+      SERVER: notes
+      UPSTREAM_STREAM: "1"
+
+  # The directory tools on a FastMCP release that speaks only the older
+  # protocol, with sessions and streamed replies.
+  older:
+    build:
+      context: ./servers
+      args:
+        FASTMCP: fastmcp==2.14.7
+    environment:
+      SERVER: directory
+      UPSTREAM_SESSIONS: "1"
+      UPSTREAM_STREAM: "1"
+
+  # Runs expected.json against the gateway, or prints credentials for clients.
+  # It starts only when asked: docker compose run --build --rm runner
+  runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    profiles: [runner]
+    environment:
+      TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
+      # Set these in your shell to check another gateway; see README.md.
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      SERVER_URL: ${SERVER_URL:-}
+      CONTROL_URL: ${CONTROL_URL:-}
+      EXAMPLE_INDEXER_KEY: ${EXAMPLE_INDEXER_KEY:-}
+      EXAMPLE_DEPLOYER_KEY: ${EXAMPLE_DEPLOYER_KEY:-}
+      EXAMPLE_KEY_WITHOUT_METADATA_KEY: ${EXAMPLE_KEY_WITHOUT_METADATA_KEY:-}
+    volumes:
+      - .:/examples:ro
+
+networks:
+  default:
+  gateway-store:
+    internal: true
+
+volumes:
+  policy-store:
+  issuer-key:

@@ -1,0 +1,39 @@
+{
+  "id": "example-tokens",
+  "name": "Example token callers",
+  "org_id": "default",
+  "active": true,
+  "rate": 0,
+  "per": 0,
+  "quota_max": -1,
+  "access_rights": {
+    "directory": {
+      "api_id": "directory",
+      "api_name": "Directory",
+      "versions": [
+        "Default"
+      ]
+    },
+    "payments": {
+      "api_id": "payments",
+      "api_name": "Payments",
+      "versions": [
+        "Default"
+      ]
+    },
+    "notes": {
+      "api_id": "notes",
+      "api_name": "Notes",
+      "versions": [
+        "Default"
+      ]
+    },
+    "older": {
+      "api_id": "older",
+      "api_name": "Directory (older protocol)",
+      "versions": [
+        "Default"
+      ]
+    }
+  }
+}

@@ -1,0 +1,100 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Directory",
+    "version": "1.0"
+  },
+  "paths": {},
+  "components": {
+    "securitySchemes": {
+      "key": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      },
+      "token": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "security": [
+    {
+      "key": []
+    },
+    {
+      "token": []
+    }
+  ],
+  "x-tyk-api-gateway": {
+    "info": {
+      "id": "directory",
+      "orgId": "default",
+      "name": "Directory",
+      "state": {
+        "active": true
+      }
+    },
+    "server": {
+      "listenPath": {
+        "value": "/directory/",
+        "strip": true
+      },
+      "authentication": {
+        "enabled": true,
+        "stripAuthorizationData": true,
+        "securitySchemes": {
+          "key": {
+            "enabled": true
+          },
+          "token": {
+            "enabled": true,
+            "header": {
+              "enabled": true,
+              "name": "Authorization"
+            },
+            "jwksURIs": [
+              {
+                "url": "env://MCP_TOKEN_JWKS_URL",
+                "cacheTimeout": "5m"
+              }
+            ],
+            "signingMethod": "rsa",
+            "identityBaseField": "sub",
+            "defaultPolicies": [
+              "example-tokens"
+            ],
+            "allowedIssuers": [
+              "env://MCP_TOKEN_ISSUER"
+            ],
+            "allowedAudiences": [
+              "env://MCP_TOKEN_AUDIENCE"
+            ]
+          }
+        },
+        "securityProcessingMode": "compliant"
+      }
+    },
+    "upstream": {
+      "url": "http://directory:8000/mcp"
+    },
+    "middleware": {
+      "global": {
+        "pluginConfig": {
+          "driver": "goplugin"
+        },
+        "contextVariables": {
+          "enabled": true
+        },
+        "postPlugins": [
+          {
+            "enabled": true,
+            "functionName": "Authorize",
+            "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+          }
+        ]
+      }
+    }
+  }
+}

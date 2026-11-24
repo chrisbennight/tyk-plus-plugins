@@ -81,7 +81,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			if method == "tools/list" {
 				return drift.Failed(requestID(req))
 			}
-			return drift.FilterInstructions(message, "", true, requestID(req))
+			return drift.FilterInstructions(message, "", true, method == "server/discover", requestID(req))
 		}
 		if state == nil {
 			return unchecked()
@@ -100,7 +100,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		if method != "tools/list" {
 			approved, _ := state.Instructions(proxy)
-			return drift.FilterInstructions(message, approved, view.StripInstructions(), requestID(req))
+			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req))
 		}
 		var declared []drift.Observation
 		out := drift.FilterToolsList(message, view, limits, requestID(req), func(tool, fingerprint string, approved bool) {

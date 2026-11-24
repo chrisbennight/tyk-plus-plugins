@@ -124,35 +124,43 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 // instructions pass on only when they are the approved text. Otherwise they
 // are replaced with the approved text, or removed when strip is set or none
 // is approved; an empty approved text also means none. Other members of the
-// result pass unchanged. A server/discover result whose instructions were
-// changed is marked private with a short cache lifetime, so a client asks
-// again soon after a reviewer approves the upstream's text.
+// result pass unchanged. When discovery is set the message answers
+// server/discover, and a result the gateway changed is marked private with a
+// cache lifetime of at most a minute, so a client asks again soon after a
+// reviewer approves the upstream's text.
 //
 // request is the ID of the request being answered, when known, as for
 // FilterToolsList.
-func FilterInstructions(message []byte, approved string, strip bool, request jsontext.Value) []byte {
+func FilterInstructions(message []byte, approved string, strip, discovery bool, request jsontext.Value) []byte {
 	return checkReply(message, request, "Upstream could not start the session", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
-		dropVariants(result, "instructions")
+		changed := dropVariants(result, "instructions")
 		declared := ""
 		if raw, ok := result["instructions"]; ok {
 			if jsonv2.Unmarshal(raw, &declared) != nil {
 				return nil, false
 			}
 		}
-		if declared == approved {
-			return result, true
-		}
-		delete(result, "instructions")
-		if !strip && approved != "" {
-			result["instructions"], _ = jsonv2.Marshal(approved)
-		}
-		if ttl, ok := result["ttlMs"]; ok {
-			dropVariants(result, "ttlMs", "cacheScope")
-			var ms float64
-			if jsonv2.Unmarshal(ttl, &ms) != nil {
-				return nil, false
+		if declared != approved {
+			changed = true
+			delete(result, "instructions")
+			if !strip && approved != "" {
+				result["instructions"], _ = jsonv2.Marshal(approved)
 			}
-			result["ttlMs"], _ = jsonv2.Marshal(min(ms, changedInstructionsTTL))
+		} else if declared == "" {
+			// Empty instructions are no instructions.
+			delete(result, "instructions")
+		}
+		if changed && discovery {
+			dropVariants(result, "ttlMs", "cacheScope")
+			ttl := float64(changedInstructionsTTL)
+			if raw, ok := result["ttlMs"]; ok {
+				var ms float64
+				if jsonv2.Unmarshal(raw, &ms) != nil || ms < 0 {
+					return nil, false
+				}
+				ttl = min(ms, ttl)
+			}
+			result["ttlMs"], _ = jsonv2.Marshal(ttl)
 			result["cacheScope"], _ = jsonv2.Marshal("private")
 		}
 		return result, true
@@ -161,15 +169,18 @@ func FilterInstructions(message []byte, approved string, strip bool, request jso
 
 // dropVariants removes members whose names differ from the given ones only
 // in case. Some clients match member names without regard to case, so a
-// variant would reach them in place of the checked member.
-func dropVariants(result map[string]jsontext.Value, names ...string) {
+// variant would reach them in place of the checked member. It reports whether it removed any.
+func dropVariants(result map[string]jsontext.Value, names ...string) bool {
+	dropped := false
 	for member := range result {
 		for _, name := range names {
 			if member != name && strings.EqualFold(member, name) {
 				delete(result, member)
+				dropped = true
 			}
 		}
 	}
+	return dropped
 }
 
 // changedInstructionsTTL is the cache lifetime, in milliseconds, of a

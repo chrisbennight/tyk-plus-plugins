@@ -15,9 +15,11 @@ import (
 
 const usage = `Usage:
   cedar-policy promote -store DIR [-label TEXT] SOURCE_DIR
-      Validate rules.cedar, tools.json, and checks.json in SOURCE_DIR, store
-      them as a set, and make that set active. A set keeps the label it was
-      first published with.
+      Validate rules.cedar, approved_tools.json, approved_instructions.json
+      (optional) and checks.json in SOURCE_DIR, store
+      them as a set, and make that set active. A directory from an earlier
+      build with tools.json instead of approved_tools.json is also accepted.
+      A set keeps the label it was first published with.
   cedar-policy activate -store DIR SET
       Validate an existing set again and make it active, for example to roll
       back to the set the active pointer records as previous.

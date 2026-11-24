@@ -17,18 +17,51 @@ import (
 
 // A policy store holds immutable policy sets under sets/<fingerprint>/ and an
 // active pointer file naming the set gateways enforce. A set contains its
-// three policy files and a manifest of their hashes. Its fingerprint is
-// derived from those hashes, so the name proves which content it holds.
+// policy files and a manifest of their hashes. Its fingerprint is derived
+// from those hashes, so the name proves which content it holds.
 const (
 	setsDir      = "sets"
 	pointerFile  = "active"
 	manifestFile = "manifest.json"
-	// FormatVersion identifies the manifest layout.
-	FormatVersion = 1
+	// FormatVersion is the set layout Promote writes. Gateways also load
+	// format 1, which predates approved instructions.
+	FormatVersion = 2
+	legacyFormat  = 1
 )
 
-// Files lists the files of a policy set in fingerprint order.
-var Files = []string{"rules.cedar", "tools.json", "checks.json"}
+// Files lists the files of a format-2 policy set in fingerprint order.
+var Files = []string{"rules.cedar", "approved_tools.json", "approved_instructions.json", "checks.json"}
+
+// legacyFiles lists the files of a format-1 policy set in fingerprint order.
+var legacyFiles = []string{"rules.cedar", "tools.json", "checks.json"}
+
+// filesFor returns the files a set of the given format contains.
+func filesFor(format int) ([]string, bool) {
+	switch format {
+	case FormatVersion:
+		return Files, true
+	case legacyFormat:
+		return legacyFiles, true
+	}
+	return nil, false
+}
+
+// Inputs are a set's policy files in the roles Compile reads them. Format is
+// the set's format; zero means the current one. Instructions is nil for a
+// format-1 set, which has no approved instructions.
+type Inputs struct {
+	Rules, Tools, Instructions, Checks []byte
+	Format                             int
+}
+
+// InputsOf maps a set's files to their roles according to its format.
+func InputsOf(format int, contents map[string][]byte) Inputs {
+	if format == legacyFormat {
+		return Inputs{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"], Format: legacyFormat}
+	}
+	return Inputs{Rules: contents["rules.cedar"], Tools: contents["approved_tools.json"],
+		Instructions: contents["approved_instructions.json"], Checks: contents["checks.json"]}
+}
 
 var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -53,18 +86,20 @@ type NotReadyError struct{ Reason string }
 
 func (e *NotReadyError) Error() string { return "policy set not ready: " + e.Reason }
 
-// Fingerprint derives a set's identity from the SHA-256 hashes of its files.
-func Fingerprint(hashes map[string]string) string {
+// Fingerprint derives a set's identity from the SHA-256 hashes of the files
+// its format contains. Format-1 sets keep the names they were published with.
+func Fingerprint(format int, hashes map[string]string) string {
+	files, _ := filesFor(format)
 	sum := sha256.New()
-	for _, name := range Files {
+	for _, name := range files {
 		fmt.Fprintf(sum, "%s\n%s\n", name, hashes[name])
 	}
 	return hex.EncodeToString(sum.Sum(nil))
 }
 
-func hashFiles(contents map[string][]byte) map[string]string {
-	hashes := make(map[string]string, len(Files))
-	for _, name := range Files {
+func hashFiles(files []string, contents map[string][]byte) map[string]string {
+	hashes := make(map[string]string, len(files))
+	for _, name := range files {
 		sum := sha256.Sum256(contents[name])
 		hashes[name] = hex.EncodeToString(sum[:])
 	}
@@ -102,22 +137,23 @@ func ReadSet(root, set string) (Manifest, map[string][]byte, error) {
 	}
 	// An unexpected format, including a manifest still missing its fields, is
 	// retried rather than cached as a rejection.
-	if manifest.Format != FormatVersion {
+	files, known := filesFor(manifest.Format)
+	if !known {
 		return manifest, nil, &NotReadyError{Reason: fmt.Sprintf("unsupported policy set format %d", manifest.Format)}
 	}
-	contents := make(map[string][]byte, len(Files))
-	for _, name := range Files {
+	contents := make(map[string][]byte, len(files))
+	for _, name := range files {
 		if contents[name], err = os.ReadFile(filepath.Join(dir, name)); err != nil {
 			return manifest, nil, &NotReadyError{Reason: err.Error()}
 		}
 	}
-	hashes := hashFiles(contents)
-	for _, name := range Files {
+	hashes := hashFiles(files, contents)
+	for _, name := range files {
 		if manifest.Files[name] != hashes[name] {
 			return manifest, nil, &NotReadyError{Reason: name + " does not match the manifest"}
 		}
 	}
-	if Fingerprint(hashes) != set {
+	if Fingerprint(manifest.Format, hashes) != set {
 		return manifest, nil, &NotReadyError{Reason: "content does not match the set name"}
 	}
 	return manifest, contents, nil
@@ -142,7 +178,7 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 	if err != nil {
 		return nil, manifest, err
 	}
-	snapshot, err := Compile(contents["rules.cedar"], contents["tools.json"], contents["checks.json"], set)
+	snapshot, err := Compile(InputsOf(manifest.Format, contents), set)
 	if err != nil {
 		return nil, manifest, err
 	}
@@ -151,21 +187,17 @@ func LoadSet(root, set string) (*Snapshot, Manifest, error) {
 }
 
 // Promote validates the policy files in source, stores them as an immutable
-// set, and makes it active. A file that fails validation leaves the store's
-// active pointer unchanged. Publishing content that already exists keeps the
-// label it was first published with.
+// format-2 set, and makes it active. A file that fails validation leaves the
+// store's active pointer unchanged. Publishing content that already exists
+// keeps the label it was first published with.
 func Promote(root, source, label string, now func() time.Time) (string, error) {
-	contents := make(map[string][]byte, len(Files))
-	for _, name := range Files {
-		data, err := os.ReadFile(filepath.Join(source, name))
-		if err != nil {
-			return "", err
-		}
-		contents[name] = data
+	contents, err := readSource(source)
+	if err != nil {
+		return "", err
 	}
-	hashes := hashFiles(contents)
-	set := Fingerprint(hashes)
-	if _, err := Compile(contents["rules.cedar"], contents["tools.json"], contents["checks.json"], set); err != nil {
+	hashes := hashFiles(Files, contents)
+	set := Fingerprint(FormatVersion, hashes)
+	if _, err := Compile(InputsOf(FormatVersion, contents), set); err != nil {
 		return "", fmt.Errorf("policy set rejected: %w", err)
 	}
 	store, err := openStore(root)
@@ -177,6 +209,48 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 		return "", err
 	}
 	return set, store.activate(set, now)
+}
+
+// readSource reads policy files laid out as either format and returns them
+// as format-2 files. A format-1 directory has tools.json and no approved
+// instructions; approved_instructions.json is optional and defaults to none.
+// Presence is decided by name, so a broken link counts as present and fails
+// to read rather than being silently skipped.
+func readSource(source string) (map[string][]byte, error) {
+	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(source, name)) }
+	// Only "does not exist" means absent; any other lookup failure stops the
+	// publish rather than dropping a file the operator provided.
+	present := map[string]bool{}
+	for _, name := range []string{"approved_tools.json", "tools.json", "approved_instructions.json"} {
+		_, err := os.Lstat(filepath.Join(source, name))
+		switch {
+		case err == nil:
+			present[name] = true
+		case !errors.Is(err, os.ErrNotExist):
+			return nil, err
+		}
+	}
+	toolsFile := "approved_tools.json"
+	switch {
+	case present["approved_tools.json"] && present["tools.json"]:
+		return nil, errors.New("source has both tools.json and approved_tools.json; keep only approved_tools.json")
+	case present["tools.json"]:
+		toolsFile = "tools.json"
+	}
+	contents := map[string][]byte{}
+	var err error
+	for name, from := range map[string]string{"rules.cedar": "rules.cedar", "approved_tools.json": toolsFile, "checks.json": "checks.json"} {
+		if contents[name], err = read(from); err != nil {
+			return nil, err
+		}
+	}
+	contents["approved_instructions.json"] = []byte("{}\n")
+	if present["approved_instructions.json"] {
+		if contents["approved_instructions.json"], err = read("approved_instructions.json"); err != nil {
+			return nil, err
+		}
+	}
+	return contents, nil
 }
 
 // Activate makes an existing set active after validating it again, for example
@@ -296,7 +370,8 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 		return err
 	}
 	defer os.RemoveAll(staging)
-	for _, name := range Files {
+	files, _ := filesFor(manifest.Format)
+	for _, name := range files {
 		if err := writeFileSynced(filepath.Join(staging, name), contents[name], s.fileMode); err != nil {
 			return err
 		}

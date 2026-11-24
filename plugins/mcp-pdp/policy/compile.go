@@ -23,6 +23,10 @@ type toolDefinition struct {
 	Name        string                     `json:"name"`
 	Annotations map[string]json.RawMessage `json:"annotations"`
 	facts       cedar.RecordMap
+	// raw is the definition as published, kept to fingerprint it.
+	raw []byte
+	// fingerprint identifies the exact definition the operator approved.
+	fingerprint string
 }
 
 func (d *toolDefinition) UnmarshalJSON(data []byte) error {
@@ -30,13 +34,31 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	if err := jsonv2.Unmarshal(data, (*wire)(d)); err != nil {
 		return err
 	}
+	d.raw = append([]byte(nil), data...)
+	facts, err := annotationFacts(d.Annotations)
+	if err != nil {
+		return err
+	}
+	d.facts = facts
+	return nil
+}
+
+// annotationFacts turns upstream annotations into the facts rules read, from
+// each value as written: only an integer spelling is an integer fact, and
+// JSON null is never a fact. A definition's fingerprint keeps numbers as
+// written too, so a different spelling is a reviewed change.
+func annotationFacts(annotations map[string]json.RawMessage) (cedar.RecordMap, error) {
 	values := scalarFacts{}
-	for name, raw := range d.Annotations {
+	readOnly := json.RawMessage(nil)
+	for name, raw := range annotations {
+		if name == "readOnlyHint" {
+			readOnly = raw
+		}
 		switch raw[0] {
 		case '"':
 			var value string
 			if err := json.Unmarshal(raw, &value); err != nil {
-				return err
+				return nil, err
 			}
 			values.add("string", name, cedar.String(value))
 		case 't', 'f':
@@ -48,17 +70,17 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 			}
 		}
 	}
-	d.facts = values.fields()
-	if raw, ok := d.Annotations["readOnlyHint"]; ok {
+	facts := values.fields()
+	if readOnly != nil {
 		var hint *bool
-		if err := json.Unmarshal(raw, &hint); err != nil {
-			return err
+		if err := json.Unmarshal(readOnly, &hint); err != nil {
+			return nil, err
 		}
 		if hint != nil {
-			d.facts["readOnlyHint"] = cedar.Boolean(*hint)
+			facts["readOnlyHint"] = cedar.Boolean(*hint)
 		}
 	}
-	return nil
+	return facts, nil
 }
 
 // Operators choose the names of reviewed facts and tags. The plug-in gives
@@ -123,9 +145,22 @@ type Snapshot struct {
 	Label    string
 	policies *cedar.PolicySet
 	tools    map[string]inventory
+	// instructions holds each proxy's approved instructions. It is nil for a
+	// format-1 set, which approves none.
+	instructions map[string]string
 }
 
-func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, error) {
+// Instructions returns a proxy's approved instructions and whether the set
+// approves any for it. An empty string is an approved value.
+func (s *Snapshot) Instructions(proxy string) (string, bool) {
+	text, ok := s.instructions[proxy]
+	return text, ok
+}
+
+// Compile validates a set's policy files and builds the snapshot gateways
+// decide with. Version identifies the set.
+func Compile(in Inputs, version string) (*Snapshot, error) {
+	rules, inventoryData, checks := in.Rules, in.Tools, in.Checks
 	var schemaDoc schema.Schema
 	if err := schemaDoc.UnmarshalCedar(inputSchema); err != nil {
 		return nil, err
@@ -169,6 +204,29 @@ func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, er
 			if err := t.prepare(name); err != nil {
 				return nil, err
 			}
+			// Every approved definition has a fingerprint, so drift review can
+			// compare it exactly. Any definition that loads has one.
+			if t.Definition != nil {
+				if t.Definition.fingerprint, err = DefinitionFingerprint(t.Definition.raw); err != nil {
+					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
+				}
+			}
+		}
+	}
+	if in.Instructions != nil {
+		var approved map[string]*string
+		if err := jsonv2.Unmarshal(in.Instructions, &approved); err != nil {
+			return nil, fmt.Errorf("approved instructions: %w", err)
+		}
+		if approved == nil {
+			return nil, fmt.Errorf("approved instructions must be an object")
+		}
+		s.instructions = make(map[string]string, len(approved))
+		for proxy, text := range approved {
+			if proxy == "" || text == nil {
+				return nil, fmt.Errorf("approved instructions for proxy %q must be a string", proxy)
+			}
+			s.instructions[proxy] = *text
 		}
 	}
 	// Activation checks are optional. An operator adds them to test a candidate's

@@ -53,7 +53,7 @@ Give each service account a Tyk key with access to `governed`. Set the following
 
 ## Tools and reviewed facts
 
-Add reviewed tools to [tools.json](tools.json), keyed by proxy ID and exact upstream tool name. A tool that is not in the inventory is denied even if a rule broadly permits access.
+Add approved tools to [approved_tools.json](approved_tools.json), keyed by proxy ID and exact upstream tool name. A tool that is not in the inventory is denied even if a rule broadly permits access.
 
 ```json
 {
@@ -109,15 +109,25 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
   "hypotheticalTool": {}, "expect": "policy_denied"}]
 ```
 
+## Approved instructions
+
+[approved_instructions.json](approved_instructions.json) records, for each proxy, the server instructions an operator has approved, as a string. An empty string is an approved value meaning "no instructions". The file is optional when publishing; without it, no instructions are approved.
+
+```json
+{"governed": "Use lookup to find records before changing them."}
+```
+
 ## Deploying changes
 
-A policy set is the three files above, published together. They take effect as a whole or not at all, so a rule and the inventory it depends on never go live separately. When you have no rules, tools, or checks, use an empty `rules.cedar`, `{}`, and `[]` respectively.
+A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.
+
+Each approved tool definition has a fingerprint: the SHA-256 of its canonical JSON, ignoring the top-level `_meta` member. In the canonical form object keys are sorted, whitespace is removed, and strings are compared by their text rather than their escapes; numbers keep their exact written form, so `1` and `1.0` are different definitions. Any change other than key order, whitespace or string escapes changes the fingerprint. A definition that repeats a key is rejected. Rules read annotation values as written in every format: only an integer spelling is an integer fact, and `null` is never a number.
 
 ### The policy store
 
 The gateway reads a policy store at `/opt/tyk-gateway/cedar`:
 
-- `sets/<fingerprint>/` holds each published set: its three files and a `manifest.json` listing their SHA-256 hashes. The fingerprint is derived from those hashes, so a set's name identifies its content. Sets are never modified after publication.
+- `sets/<fingerprint>/` holds each published set: its policy files and a `manifest.json` recording the set's format and the files' SHA-256 hashes. The fingerprint is derived from those hashes, so a set's name identifies its content. Sets are never modified after publication.
 - `active` is a small JSON file naming the set gateways should enforce, the set it replaced, and when it was promoted.
 
 The image ships a store whose active set is the empty policy in this directory. To manage policy at run time, mount your own store at `/opt/tyk-gateway/cedar`.
@@ -125,6 +135,14 @@ The image ships a store whose active set is the empty policy in this directory. 
 ### Upgrading key callers
 
 Earlier builds read keys from the `Authorization` header. Keys now go in `X-API-Key`, and `Authorization` carries tokens only. Update clients that use keys before upgrading; a key sent in `Authorization` is refused. Every request now needs an identifiable caller, including `initialize` and `tools/list`, so give every key `cedar` metadata with an issuer and subject before upgrading.
+
+### Upgrading to approved tools
+
+Earlier builds published sets with `tools.json` instead of `approved_tools.json` and no approved instructions (format 1). Gateways still enforce those sets, so nothing breaks on upgrade. `cedar-policy promote` accepts a directory in either layout and always publishes the current format, so rename `tools.json` to `approved_tools.json` in your policy source when convenient. A directory containing both is refused as ambiguous.
+
+Upgrade every gateway that shares a store before publishing with the new `cedar-policy`, because it always publishes format 2 and older gateways cannot read it. Until upgraded, an older gateway treats a format-2 set as not ready: if it is running, it keeps enforcing its current set; if it restarts, it has no valid set and denies every tool call. To roll back while older gateways remain, activate the previous format-1 set with `cedar-policy activate`.
+
+Format-1 sets load and decide exactly as before, and converting one to format 2 changes no decision: both formats read definitions the same way.
 
 ### Upgrading from the three-file layout
 
@@ -140,7 +158,7 @@ cedar-policy show -store /path/to/store
 cedar-policy activate -store /path/to/store <previous fingerprint>
 ```
 
-`promote` validates the three files in a directory, stores them as a set, and switches `active` to it. A set keeps the label it was first published with. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Every change to the store, publishing a set or switching `active`, happens under a lock on the store, so concurrent publishers cannot interleave and the recorded previous set is the one actually replaced. Each switch replaces `active` by atomic rename. Published files and directories take their permissions from the store directory, so set its permissions so the gateway's user can read it; `promote` creates a new store directory readable by all users. `activate` also repairs an unreadable `active` file.
+`promote` validates the policy files in a directory, stores them as a set, and switches `active` to it. A set keeps the label it was first published with. A set that fails validation, including any activation check, is not activated. `activate` validates an existing set again and switches to it, which is how you roll back to the set `active` records as previous. Every change to the store, publishing a set or switching `active`, happens under a lock on the store, so concurrent publishers cannot interleave and the recorded previous set is the one actually replaced. Each switch replaces `active` by atomic rename. Published files and directories take their permissions from the store directory, so set its permissions so the gateway's user can read it; `promote` creates a new store directory readable by all users. `activate` also repairs an unreadable `active` file.
 
 ### What the gateway does
 

@@ -19,7 +19,7 @@ var small = Sizes{Proxies: 2, ToolsPerProxy: 10, Callers: 50, Rules: 120, Reques
 func TestSyntheticWorkloadsCompileAndRepeat(t *testing.T) {
 	for seed := range int64(5) {
 		rules, tools, vocab := Synthetic(seed, small)
-		snapshot, err := policy.Compile(rules, tools, []byte("[]"), "test")
+		snapshot, err := policy.Compile(policy.Inputs{Rules: rules, Tools: tools, Checks: []byte("[]")}, "test")
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
@@ -47,7 +47,7 @@ func TestSyntheticRulesUseEveryTemplate(t *testing.T) {
 
 func TestRunReachesTargetPermitShare(t *testing.T) {
 	rules, tools, vocab := Synthetic(3, small)
-	report, err := Run(Files{rules, tools, []byte("[]")}, "test", vocab, 3, small, 1)
+	report, err := Run(Files{Rules: rules, Tools: tools, Checks: []byte("[]")}, "test", vocab, 3, small, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ permit (principal, action == Action::"tools/call", resource) when {
   context.numbers.contains({name: "limit", value: 100})
 };`)
 	tools := []byte(`{"p": {"upstream": "https://u.example/mcp", "tools": {"t": {"arguments": {"team": "string", "limit": "long"}}}}}`)
-	snapshot, err := policy.Compile(rules, tools, []byte("[]"), "test")
+	snapshot, err := policy.Compile(policy.Inputs{Rules: rules, Tools: tools, Checks: []byte("[]")}, "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ permit (principal, action == Action::"tools/call", resource) when {
 
 func TestOneSidedSetStillGivesAFullRun(t *testing.T) {
 	rules, tools, vocab := []byte(""), []byte(`{"p": {"upstream": "https://u.example/mcp", "tools": {"t": {}}}}`), genericVocabulary(5)
-	report, err := Run(Files{rules, tools, []byte("[]")}, "test", vocab, 1, Sizes{Callers: 5, Requests: 50, PermitRatio: 1}, 1)
+	report, err := Run(Files{Rules: rules, Tools: tools, Checks: []byte("[]")}, "test", vocab, 1, Sizes{Callers: 5, Requests: 50, PermitRatio: 1}, 1)
 	if err != nil || report.Decisions.Count != 50 || report.Decisions.Outcomes["policy_denied"] != 50 {
 		t.Fatalf("got %+v %v", report.Decisions, err)
 	}

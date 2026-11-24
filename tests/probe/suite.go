@@ -84,18 +84,19 @@ func policySuite(k keys) {
 	for _, e := range setEntries {
 		setFiles = append(setFiles, e.Name())
 	}
-	check(slices.Equal(setFiles, []string{"checks.json", "manifest.json", "rules.cedar", "tools.json"}), "shipped set contents %v", setFiles)
+	check(slices.Equal(setFiles, []string{"approved_instructions.json", "approved_tools.json", "checks.json", "manifest.json", "rules.cedar"}), "shipped set contents %v", setFiles)
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(policyDir, "sets", shipped, name))
 		must(err)
 		staged[name] = string(data)
 	}
 	check(strings.TrimSpace(staged["rules.cedar"]) == "", "the gateway must ship without rules")
-	var shippedTools map[string]any
+	var shippedTools, shippedInstructions map[string]any
 	var shippedChecks []any
-	check(json.Unmarshal([]byte(staged["tools.json"]), &shippedTools) == nil && shippedTools != nil && len(shippedTools) == 0 &&
+	check(json.Unmarshal([]byte(staged["approved_tools.json"]), &shippedTools) == nil && shippedTools != nil && len(shippedTools) == 0 &&
+		json.Unmarshal([]byte(staged["approved_instructions.json"]), &shippedInstructions) == nil && shippedInstructions != nil && len(shippedInstructions) == 0 &&
 		json.Unmarshal([]byte(staged["checks.json"]), &shippedChecks) == nil && shippedChecks != nil && len(shippedChecks) == 0,
-		"the gateway must ship an empty inventory and no checks: %v", staged)
+		"the gateway must ship no approved tools, instructions or checks: %v", staged)
 	// The shipped pointer is checked as shipped, without rewriting it.
 	awaitReport(shipped, "activated")
 	call(c, k.operator, "lookup", args())
@@ -113,7 +114,7 @@ func policySuite(k keys) {
 	call(c, k.operator, "lookup", args())
 	publish("activated", map[string]string{"rules.cedar": exampleRules})
 	call(c, k.operator, "lookup", args(), "found")
-	publish("activated", map[string]string{"tools.json": "{}"})
+	publish("activated", map[string]string{"approved_tools.json": "{}"})
 	call(c, k.operator, "lookup", args())
 	publishInventory(inventory, upstream, "activated")
 	call(c, k.operator, "lookup", args(), "found")
@@ -229,6 +230,22 @@ permit (principal, action, resource) when {
 	pointTo(writeSet(mismatched, manifest), "not_ready")
 	call(c, k.guest, "lookup", args(), "found")
 	call(c, k.guest, "change", args())
+	// A format-1 set from an earlier build, with tools.json and no approved
+	// instructions, is still enforced with the same decisions.
+	// The legacy set copies the set the gateway is enforcing, not the staged
+	// files, which still hold a candidate rejected above.
+	enforcing := readReport()["enforcing"].(string)
+	good := map[string]string{}
+	for _, name := range files {
+		data, err := os.ReadFile(filepath.Join(policyDir, "sets", enforcing, name))
+		must(err)
+		good[name] = string(data)
+	}
+	legacy := map[string]string{"rules.cedar": good["rules.cedar"], "tools.json": good["approved_tools.json"], "checks.json": good["checks.json"]}
+	pointTo(writeSetFormat(1, legacyFiles, legacy, nil), "activated")
+	call(c, k.guest, "lookup", args(), "found")
+	call(c, k.guest, "change", args())
+	pointTo(enforcing, "activated")
 
 	// Callers can present a token instead of a key. Its issuer and subject identify
 	// the caller, and the claim the gateway is configured to read carries roles.

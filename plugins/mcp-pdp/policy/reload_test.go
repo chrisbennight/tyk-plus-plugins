@@ -12,9 +12,10 @@ import (
 // gateway would see after a pointer edit or a validation change.
 func publishRaw(t *testing.T, store, rules, previous string) string {
 	t.Helper()
-	contents := map[string][]byte{"rules.cedar": []byte(rules), "tools.json": []byte("{}"), "checks.json": []byte("[]")}
-	hashes := hashFiles(contents)
-	set := Fingerprint(hashes)
+	contents := map[string][]byte{"rules.cedar": []byte(rules), "approved_tools.json": []byte("{}"),
+		"approved_instructions.json": []byte("{}"), "checks.json": []byte("[]")}
+	hashes := hashFiles(Files, contents)
+	set := Fingerprint(FormatVersion, hashes)
 	s, err := openStore(store)
 	if err != nil {
 		t.Fatal(err)

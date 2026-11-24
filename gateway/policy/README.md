@@ -148,7 +148,7 @@ Two settings bound the work of checking lists:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CEDAR_PENDING_MAX_DEFINITION_BYTES` | `262144` | The largest upstream tool definition the gateway fingerprints. A larger one counts as a changed definition, so raise this if you approve larger definitions. |
-| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy. Tools past the limit are checked against approval alone. |
+| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy. Once a proxy passes the limit, or declares a tool name longer than 128 bytes, a call to a tool the gateway has not seen listed is refused until a list shows it. |
 
 The `drift` object also accepts `changedInstructions` (`replace`, the default, or `strip`), `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). The gateway validates these fields; later releases act on them.
 

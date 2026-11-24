@@ -23,12 +23,15 @@ const (
 // CallReason returns why a tool may not be called on a proxy under drift
 // enforcement, or "" if Cedar should decide. latest is the fingerprint of the
 // definition the upstream last declared for the tool, if any was seen.
-func CallReason(view policy.DriftView, name, latest string, seen bool) string {
+// complete reports whether the gateway records every tool the proxy's
+// upstream declares; when it does not, an unseen tool may have been dropped
+// at the limit, so it is refused until a list shows its definition.
+func CallReason(view policy.DriftView, name, latest string, seen, complete bool) string {
 	approved, _, ok := view.Approved(name)
 	switch {
 	case !ok:
 		return UnapprovedTool
-	case seen && latest != approved:
+	case seen && latest != approved, !seen && !complete:
 		return UnapprovedDefinition
 	}
 	return ""
@@ -96,6 +99,9 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, obser
 			rebuilt["error"], _ = jsonv2.Marshal(failure)
 			return encode(rebuilt)
 		case envelope["method"] != nil:
+			if method := envelope["method"]; method[0] != '"' {
+				return checkFailed(envelope["id"])
+			}
 			return encode(keep(envelope, "jsonrpc", "id", "method", "params"))
 		default:
 			return checkFailed(envelope["id"])

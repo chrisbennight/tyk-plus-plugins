@@ -106,6 +106,9 @@ func TestRepliesThatCannotBeCheckedAreReplaced(t *testing.T) {
 	if strings.Contains(string(out), "wrong") || !strings.Contains(string(out), `"id":null`) {
 		t.Errorf("became %s", out)
 	}
+	if out := FilterToolsList([]byte(`{"jsonrpc":"2.0","method":{"text":"wrong"}}`), v, testLimits, func(string, string, bool) {}); strings.Contains(string(out), "wrong") {
+		t.Errorf("a malformed method became %s", out)
+	}
 	// Errors and notifications carry no tool definitions.
 	for _, message := range []string{`{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"no"}}`, `{"jsonrpc":"2.0","method":"notifications/message","params":{}}`} {
 		var got, want any
@@ -130,7 +133,11 @@ func TestCallReasons(t *testing.T) {
 		{"change", changed, true, UnapprovedDefinition},
 		{"wipe", "", false, UnapprovedTool},
 	} {
-		if got := CallReason(v, c.name, c.latest, c.seen); got != c.want {
+		if got := CallReason(v, c.name, c.latest, c.seen, true); got != c.want {
+			t.Errorf("%+v: %q", c, got)
+		}
+		// When tools were dropped at the limit, an unseen tool is refused.
+		if got := CallReason(v, c.name, c.latest, c.seen, false); c.seen && got != c.want || !c.seen && got == "" {
 			t.Errorf("%+v: %q", c, got)
 		}
 	}
@@ -317,10 +324,10 @@ func TestRepeatedNamesAreListedOnce(t *testing.T) {
 		t.Fatalf("listed %v", names)
 	}
 	// Conflicting definitions of change match nothing, so calls are refused.
-	if seen["change"] != "" || CallReason(view(t, `{}`), "change", seen["change"], true) != UnapprovedDefinition {
+	if seen["change"] != "" || CallReason(view(t, `{}`), "change", seen["change"], true, true) != UnapprovedDefinition {
 		t.Fatalf("observed %v", seen)
 	}
-	if CallReason(view(t, `{}`), "lookup", seen["lookup"], true) != "" {
+	if CallReason(view(t, `{}`), "lookup", seen["lookup"], true, true) != "" {
 		t.Fatalf("observed %v", seen)
 	}
 }
@@ -388,6 +395,13 @@ func TestLimitsBoundTheCheck(t *testing.T) {
 	}
 	if _, ok := o.Latest("other", "c"); ok {
 		t.Fatal("limits are per proxy")
+	}
+	if o.Complete("governed") || !o.Complete("other") {
+		t.Fatal("a proxy past the limit must be marked incomplete")
+	}
+	o.Record("other", []Observation{{Tool: strings.Repeat("x", 129)}}, 10)
+	if _, ok := o.Latest("other", strings.Repeat("x", 129)); ok || o.Complete("other") {
+		t.Fatal("a long name was recorded")
 	}
 }
 

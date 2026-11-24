@@ -78,7 +78,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			// definition its upstream last declared must be the approved one.
 			if view, enforcing := state.Drift(proxy); enforcing {
 				latest, seen := observed.Latest(proxy, name)
-				reason = drift.CallReason(view, name, latest, seen)
+				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))
 			} else {
 				reason = ""
 			}

@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +318,43 @@ func TestADirectoryThatCannotOpenHoldsCallsUntilItDoes(t *testing.T) {
 	p.Refresh("v1", every)
 	if !p.Current("v1") {
 		t.Fatal("the directory was not opened once it existed")
+	}
+}
+
+func TestAGatewayKeepsWhatEachUpstreamDeclared(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	w := newWriter()
+	start := time.Now()
+	if err := p.writeDeclaration(w, declare(fingerprintA, start, true)); err != nil {
+		t.Fatal(err)
+	}
+	moved := declare(fingerprintB, start.Add(time.Minute), true)
+	moved.declared.Upstream = "https://new.example/mcp"
+	if err := p.writeDeclaration(w, moved); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh("v", every)
+	if d, ok := p.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != fingerprintA {
+		t.Fatalf("lost what the first upstream declared: %+v", d)
+	}
+}
+
+func TestTooManyDeclarationFilesHoldCalls(t *testing.T) {
+	dir := t.TempDir()
+	tool := filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"))
+	if err := os.MkdirAll(tool, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxGatewaysPerTool + 1 {
+		data := `{"fingerprint":"` + fingerprintA + `","seenAt":"2026-01-01T00:00:00Z","upstream":"` + testUpstream + `"}`
+		if err := os.WriteFile(filepath.Join(tool, fmt.Sprintf("g%d.json", i)), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := openTestPending(t, dir, "one")
+	p.Refresh("v", every)
+	if p.Current("v") {
+		t.Fatal("declarations read in part were current")
 	}
 }

@@ -2,6 +2,7 @@ package drift
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -21,7 +22,7 @@ import (
 // Pending shares what gateways see with each other and with reviewers,
 // through a directory every gateway can write:
 //
-//   - <proxy>/latest/<tool>/<gateway>.json holds the definition, by
+//   - <proxy>/latest/<tool>/<gateway>.<upstream>.json holds the definition, by
 //     fingerprint, that one gateway last saw an upstream declare for a tool,
 //     when, and from which upstream. Each gateway writes only its own file,
 //     in the order it saw the declarations, so no gateway can overwrite
@@ -115,7 +116,8 @@ const (
 const maxSharedName = 180
 
 // maxDeclarationFile bounds a declaration file the gateway reads, and
-// maxGatewaysPerTool the declaration files it reads for one tool.
+// maxGatewaysPerTool the declaration files, one per gateway and upstream, it
+// reads for one tool; past it the declarations are not current.
 const (
 	maxDeclarationFile = 4096
 	maxGatewaysPerTool = 256
@@ -156,6 +158,13 @@ func (p *Pending) open() bool {
 	p.root = root
 	go p.write()
 	return true
+}
+
+// declarationFile names a gateway's declaration file for one upstream. The
+// upstream is hashed, since URLs can be longer than a file name may be.
+func declarationFile(gateway, upstream string) string {
+	sum := sha256.Sum256([]byte(upstream))
+	return encodeName(gateway) + "." + hex.EncodeToString(sum[:8]) + ".json"
 }
 
 func encodeName(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
@@ -298,7 +307,9 @@ func (p *Pending) writeDeclaration(w *writer, d declaration) error {
 	if err != nil {
 		return err
 	}
-	if err := p.publish(dir, encodeName(p.gateway)+".json", data, true); err != nil {
+	// One file per gateway and upstream, so a gateway that moves to another
+	// upstream never overwrites what it saw from the previous one.
+	if err := p.publish(dir, declarationFile(p.gateway, d.declared.Upstream), data, true); err != nil {
 		return err
 	}
 	// A tool without approval counts against the limit once its file exists.
@@ -442,10 +453,14 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 				p.stale()
 				return
 			}
-			for i, file := range gateways {
-				if i >= maxGatewaysPerTool {
-					break
-				}
+			if len(gateways) > maxGatewaysPerTool {
+				// Reading only some could miss the newest; calls under drift
+				// review wait until the files are pruned.
+				slog.Error("Too many shared drift declarations for one tool; prune those of retired gateways", "proxy", proxy, "tool", tool, "files", len(gateways))
+				p.stale()
+				return
+			}
+			for _, file := range gateways {
 				var d Declared
 				switch err := p.readJSON(path.Join(encodedProxy, "latest", encodedTool, file), &d); {
 				case errors.Is(err, errNotDeclaration):

@@ -317,6 +317,12 @@ func restarted() {
 	guest := keyCred(key("guest"))
 	r := call(connect(guest, olderProtocol), guest, "lookup", args())
 	check(r.Error != nil && r.Error.Message == "Tool call denied", "refusal %+v", r)
+	// Without a valid set the gateway withholds every list with its own error.
+	// That error must answer the list request: rpc checks the reply echoes
+	// the request's ID, which the response hook learns from the request hook.
+	c := connect(guest, olderProtocol)
+	listed := c.rpc(guest, "tools/list", map[string]any{})
+	check(listed.Error != nil && listed.Error.Message == "Upstream reply could not be checked", "list with no valid set: %v", listed)
 	fmt.Println("Verified that a gateway with no valid set refuses tool calls before dispatch.")
 }
 

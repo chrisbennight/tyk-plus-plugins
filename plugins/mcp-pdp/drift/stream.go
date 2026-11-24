@@ -51,7 +51,7 @@ func (r *EventRewriter) Read(p []byte) (int, error) {
 		if err != nil && err != io.EOF {
 			return 0, err
 		}
-		r.done = err == io.EOF
+		r.done = r.done || err == io.EOF
 		r.pending = event
 	}
 	n := copy(p, r.pending)
@@ -154,6 +154,9 @@ func dataLines(message []byte) []byte {
 	}
 	return out.Bytes()
 }
+
+// End makes the event being transformed the last one passed on.
+func (r *EventRewriter) End() { r.done = true }
 
 // Close closes the wrapped body.
 func (r *EventRewriter) Close() error { return r.body.Close() }

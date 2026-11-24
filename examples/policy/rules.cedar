@@ -26,7 +26,8 @@ when { principal.scopes.contains("notes:read") && resource.proxy == "notes" && r
 permit (principal, action == Action::"tools/call", resource)
 when { principal.roles.contains("analyst") && resource.name == "refund" && context.strings.contains({name: "environment", value: "test"}) };
 
-// Only the indexing service may export.
+// The indexing service may export; it is the only key caller without the
+// admin role that may. Administrators may too, through admin-call.
 @id("indexer-export")
 permit (principal, action == Action::"tools/call", resource)
 when { principal.issuer == "examples" && principal.subject == "indexer" && resource.reviewed.tags.contains("export") };

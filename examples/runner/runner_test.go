@@ -100,7 +100,7 @@ func TestPermittedRowForUnapprovedToolIsAnError(t *testing.T) {
 
 func TestRefusalOfReadsBothErrorShapes(t *testing.T) {
 	transport := errors.New(`Error POSTing to endpoint: {"error":{"code":-32002,"message":"Tool call denied"},"id":4,"jsonrpc":"2.0"}`)
-	if r, ok := refusalOf(transport); !ok || *r != (rpcError{-32002, "Tool call denied"}) {
+	if r, ok := refusalOf(transport); !ok || *r != (rpcError{-32002, "Tool call denied", ""}) {
 		t.Fatalf("transport error: %v %v", r, ok)
 	}
 	if _, ok := refusalOf(errors.New("context deadline exceeded")); ok {
@@ -119,5 +119,30 @@ func TestCredentialTextRejectsShellSyntax(t *testing.T) {
 	}
 	if !credentialText.MatchString("eyJhbGciOi.eyJzdWIi.c2ln-_") {
 		t.Error("rejected a JWT")
+	}
+}
+
+func TestCallerNamesMustBeSafeShellNames(t *testing.T) {
+	for _, bad := range []string{"a;b", "$(id)", "A", "-x", "a b"} {
+		if callerName.MatchString(bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestRefusalsDifferingOnlyInDataDiffer(t *testing.T) {
+	a, _ := refusalOf(errors.New(`x: {"error":{"code":-32002,"message":"Tool call denied","data":{"reason":"unknown"}}}`))
+	b, _ := refusalOf(errors.New(`x: {"error":{"code":-32002,"message":"Tool call denied"}}`))
+	if a == nil || b == nil || *a == *b {
+		t.Fatalf("%v and %v compare equal", a, b)
+	}
+}
+
+func TestSameJSONComparesNumbersByValue(t *testing.T) {
+	if !sameJSON(map[string]any{"amount": json.Number("5"), "environment": "test"}, map[string]any{"environment": "test", "amount": float64(5)}) {
+		t.Fatal("equal arguments compared unequal")
+	}
+	if sameJSON(map[string]any{"environment": "test"}, map[string]any{"environment": "production"}) {
+		t.Fatal("different arguments compared equal")
 	}
 }

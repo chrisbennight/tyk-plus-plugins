@@ -126,6 +126,8 @@ func (r *runner) check(what, caller string, cred credential, version, server, to
 			r.fail(what, "the tool reported an error")
 		case reached != 1 || after.Tool == nil || *after.Tool != tool:
 			r.fail(what, fmt.Sprintf("the server received %d requests instead of one call to %s", reached, tool))
+		case !sameJSON(after.Arguments, args):
+			r.fail(what, fmt.Sprintf("the server received arguments %s, want %s", arguments(after.Arguments), arguments(args)))
 		case after.ProtocolVersion != r.wantVersion(server, version):
 			r.fail(what, fmt.Sprintf("the server was reached with protocol %q, want %q", after.ProtocolVersion, r.wantVersion(server, version)))
 		default:
@@ -160,11 +162,13 @@ func (r *runner) wantVersion(server, version string) string {
 	return version
 }
 
-// rpcError is the part of a JSON-RPC error that must be the same for every
+// rpcError is a JSON-RPC error, every part of which must be the same for every
 // refused tool call.
 type rpcError struct {
 	Code    int64
 	Message string
+	// Data is the error's data member as raw JSON, empty when absent.
+	Data string
 }
 
 // refusalOf extracts the JSON-RPC error from a failed call. The client reports
@@ -177,18 +181,19 @@ func refusalOf(err error) (*rpcError, bool) {
 	}
 	var wire *jsonrpc.Error
 	if errors.As(err, &wire) {
-		return &rpcError{wire.Code, wire.Message}, true
+		return &rpcError{wire.Code, wire.Message, string(wire.Data)}, true
 	}
 	text := err.Error()
 	for i := strings.Index(text, "{"); i >= 0; {
 		var body struct {
 			Error *struct {
-				Code    int64  `json:"code"`
-				Message string `json:"message"`
+				Code    int64           `json:"code"`
+				Message string          `json:"message"`
+				Data    json.RawMessage `json:"data"`
 			} `json:"error"`
 		}
 		if json.NewDecoder(strings.NewReader(text[i:])).Decode(&body) == nil && body.Error != nil {
-			return &rpcError{body.Error.Code, body.Error.Message}, true
+			return &rpcError{body.Error.Code, body.Error.Message, string(body.Error.Data)}, true
 		}
 		next := strings.Index(text[i+1:], "{")
 		if next < 0 {
@@ -247,9 +252,18 @@ func (h withHeaders) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // observed is what a mock server reports outside MCP.
 type observed struct {
-	Requests        int     `json:"requests"`
-	Tool            *string `json:"tool"`
-	ProtocolVersion string  `json:"protocolVersion"`
+	Requests        int            `json:"requests"`
+	Tool            *string        `json:"tool"`
+	Arguments       map[string]any `json:"arguments"`
+	ProtocolVersion string         `json:"protocolVersion"`
+}
+
+// sameJSON reports whether two argument maps encode to the same JSON, so a
+// number read from expected.json equals the same number the server reports.
+func sameJSON(a, b map[string]any) bool {
+	x, errX := json.Marshal(a)
+	y, errY := json.Marshal(b)
+	return errX == nil && errY == nil && bytes.Equal(x, y)
 }
 
 func observe(server string) (observed, error) {

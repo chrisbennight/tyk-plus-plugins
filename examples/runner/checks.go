@@ -24,10 +24,7 @@ type activationCheck struct {
 func (e *examples) checks() ([]byte, error) {
 	out := []activationCheck{}
 	for _, c := range e.expected.Calls {
-		inv, ok := e.tools[c.Server]
-		t, approved := inv.Tools[c.Tool]
-		evaluated := ok && approved && argumentsMatch(t.Arguments, c.Arguments)
-		if !evaluated {
+		if !e.approved(c.Server, c.Tool, c.Arguments) {
 			// The gateway refuses these before the policy sees them, so a row
 			// expecting them to be permitted contradicts the approved tools.
 			if c.Expect == "permitted" {
@@ -43,7 +40,7 @@ func (e *examples) checks() ([]byte, error) {
 		if c.Expect == "refused" {
 			expect = "policy_denied"
 		}
-		out = append(out, activationCheck{Caller: id, Proxy: c.Server, Upstream: inv.Upstream, Tool: c.Tool, Arguments: c.Arguments, Expect: expect})
+		out = append(out, activationCheck{Caller: id, Proxy: c.Server, Upstream: e.tools[c.Server].Upstream, Tool: c.Tool, Arguments: c.Arguments, Expect: expect})
 	}
 	var buf bytes.Buffer
 	buf.WriteString("[\n")

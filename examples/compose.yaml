@@ -105,6 +105,12 @@ services:
     profiles: [runner]
     environment:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
+      # Set these in your shell to check another gateway; see README.md.
+      GATEWAY_URL: ${GATEWAY_URL:-}
+      CONTROL_URL: ${CONTROL_URL:-}
+      EXAMPLE_INDEXER_KEY: ${EXAMPLE_INDEXER_KEY:-}
+      EXAMPLE_DEPLOYER_KEY: ${EXAMPLE_DEPLOYER_KEY:-}
+      EXAMPLE_KEY_WITHOUT_METADATA_KEY: ${EXAMPLE_KEY_WITHOUT_METADATA_KEY:-}
     volumes:
       - .:/examples:ro
 

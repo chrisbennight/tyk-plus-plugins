@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -100,6 +101,26 @@ func load(dir string) (*examples, error) {
 	if e.committedChecks, err = os.ReadFile(filepath.Join(dir, "policy/checks.json")); err != nil {
 		return nil, err
 	}
+	// Caller names become shell variable names in "runner env", so they must
+	// stay within the issuer's own rule for names.
+	for name := range e.deck.People {
+		if !callerName.MatchString(name) {
+			return nil, fmt.Errorf("callers/people.json: %q is not a valid caller name", name)
+		}
+	}
+	for name := range e.keys {
+		if !callerName.MatchString(name) {
+			return nil, fmt.Errorf("callers/keys.json: %q is not a valid caller name", name)
+		}
+	}
+	for i, k := range e.expected.KeyAndToken {
+		if k.Expect != "permitted" && k.Expect != "refused" {
+			return nil, fmt.Errorf("expected.json keyAndToken %d: expect must be permitted or refused", i)
+		}
+		if k.Expect == "permitted" && !e.approved(k.Server, k.Tool, k.Arguments) {
+			return nil, fmt.Errorf("expected.json keyAndToken %d expects %s.%s to be permitted, but that tool or its arguments are not approved", i, k.Server, k.Tool)
+		}
+	}
 	for i, c := range e.expected.Calls {
 		if c.Expect != "permitted" && c.Expect != "refused" {
 			return nil, fmt.Errorf("expected.json call %d: expect must be permitted or refused", i)
@@ -109,6 +130,17 @@ func load(dir string) (*examples, error) {
 		}
 	}
 	return &e, nil
+}
+
+// callerName is the issuer's rule for a person's name, applied to every caller.
+var callerName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// approved reports whether the policy evaluates a call to tool on server with
+// these arguments: the tool is approved and its arguments have their declared types.
+func (e *examples) approved(server, tool string, args map[string]any) bool {
+	inv, ok := e.tools[server]
+	t, approved := inv.Tools[tool]
+	return ok && approved && argumentsMatch(t.Arguments, args)
 }
 
 // identity returns how the policy sees a named caller: a person from the deck

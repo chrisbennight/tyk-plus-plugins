@@ -33,6 +33,12 @@ func baseline(k keys, version string) {
 	check(c.version == want, "%s client negotiated %s, want %s", version, c.version, want)
 	if version == newerProtocol {
 		check(c.discovery == discovery, "%s client saw discovery %q, want %q", version, c.discovery, discovery)
+		if discovery == discoveryUnsupported {
+			// Through Tyk the reason is reported as Tyk's own error, so confirm it
+			// at the source: the upstream itself rejects the newer version.
+			rejects, reply := upstreamRejectsNewer()
+			check(rejects, "%s: the upstream did not reject the newer version: %s", version, reply)
+		}
 	}
 	catalog := catalogOf(c, k.operator)
 	check(catalog["lookup"] != nil && catalog["change"] != nil, "%s client listed %v", version, catalog)
@@ -47,6 +53,8 @@ func baseline(k keys, version string) {
 
 	// Exact checks: where each call went and how it was refused.
 	call(c, k.support, "lookup", args("count", 1), "found")
+	// The gateway speaks to the upstream in the version the client negotiated.
+	check(upstreamVersion() == want, "%s client: the gateway used %q upstream, want %q", version, upstreamVersion(), want)
 	denied := call(c, k.support, "change", args("count", 2))
 	unknown := call(c, k.support, "unknown", args("count", 2))
 	check(sameRefusal(denied, unknown), "%s: hidden %v, unknown %v", version, denied, unknown)
@@ -59,8 +67,17 @@ func baseline(k keys, version string) {
 	// A caller that cannot be identified is refused on every method.
 	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
 	call(c, unidentified, "lookup", args())
+	before, _ := observed()
 	r := c.rpc(unidentified, "tools/list", map[string]any{})
-	check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified", "%s: unidentified caller listed tools: %v", version, r)
+	after, _ := observed()
+	check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified" && after == before,
+		"%s: unidentified caller listed tools: %v (requests %d -> %d)", version, r, before, after)
+	if c.version == olderProtocol {
+		before, _ = observed()
+		status := c.notifyStatus(unidentified, "notifications/initialized")
+		after, _ = observed()
+		check(status == http.StatusForbidden && after == before, "%s: unidentified caller's notification got %d (requests %d -> %d)", version, status, before, after)
+	}
 	// Neither handshake lets an unidentified caller reach the upstream.
 	for _, handshake := range []struct{ version, method string }{{olderProtocol, "initialize"}, {newerProtocol, "server/discover"}} {
 		before, _ := observed()

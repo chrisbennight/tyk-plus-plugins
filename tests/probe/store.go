@@ -212,3 +212,36 @@ func must(err error) {
 		panic(err)
 	}
 }
+
+// upstreamVersion reports the protocol version the gateway sent upstream on
+// the last request that reached it.
+func upstreamVersion() string {
+	res, err := httpClient.Get("http://upstream:8000/requests")
+	check(err == nil, "upstream: %v", err)
+	defer res.Body.Close()
+	var body struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	check(json.NewDecoder(res.Body).Decode(&body) == nil, "upstream reply")
+	return body.ProtocolVersion
+}
+
+// upstreamRejectsNewer asks the upstream directly, bypassing the gateway,
+// whether it refuses the newer protocol version: an older-only server
+// rejects the request and lists only older versions.
+func upstreamRejectsNewer() (bool, string) {
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": "server/discover", "params": map[string]any{"_meta": map[string]any{
+		"io.modelcontextprotocol/protocolVersion": newerProtocol, "io.modelcontextprotocol/clientCapabilities": map[string]any{}}}})
+	req, _ := http.NewRequest(http.MethodPost, upstream, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("MCP-Protocol-Version", newerProtocol)
+	req.Header.Set("Mcp-Method", "server/discover")
+	res, err := httpClient.Do(req)
+	check(err == nil, "upstream discovery: %v", err)
+	defer res.Body.Close()
+	data, _ := io.ReadAll(res.Body)
+	text := string(data)
+	return res.StatusCode == http.StatusBadRequest && strings.Contains(text, "Unsupported protocol version") &&
+		strings.Contains(text, olderProtocol) && !strings.Contains(text, newerProtocol), text
+}

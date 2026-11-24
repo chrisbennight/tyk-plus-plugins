@@ -99,9 +99,10 @@ func connect(cred credential, version string) *conn {
 			check(slices.Contains(discovered.SupportedVersions, olderProtocol), "server/discover offered neither supported version: %v", discovered.SupportedVersions)
 			c.discovery = discoveryOlderOnly
 		} else {
-			// An upstream that does not know the newer protocol answers "method
-			// not found". Tyk replaces that answer with its own error saying the
-			// upstream's discovery response is invalid; clients fall back on either.
+			// A server that does not know the newer protocol answers "method not
+			// found" or rejects the version outright. Tyk reports an upstream's
+			// rejection as its own error saying the discovery response is invalid;
+			// clients fall back on either.
 			check(r.Error != nil && (r.Error.Code == methodNotFound || r.Error.Code == tykInvalidDiscovery),
 				"server/discover failed for another reason: %v", r)
 			c.discovery = discoveryUnsupported
@@ -180,6 +181,11 @@ func (c *conn) rpc(cred credential, method string, params map[string]any) respon
 }
 
 func (c *conn) notify(cred credential, method string) {
+	check(c.notifyStatus(cred, method) < 300, "%s was refused", method)
+}
+
+// notifyStatus sends a notification and returns the HTTP status.
+func (c *conn) notifyStatus(cred credential, method string) int {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": c.params(map[string]any{})})
 	req, _ := http.NewRequest(http.MethodPost, gateway, bytes.NewReader(body))
 	req.Header = c.headers(cred, method, "")
@@ -187,6 +193,7 @@ func (c *conn) notify(cred credential, method string) {
 	check(err == nil, "%s: %v", method, err)
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
+	return res.StatusCode
 }
 
 // decode reads a plain JSON reply, or the message in a stream that answers

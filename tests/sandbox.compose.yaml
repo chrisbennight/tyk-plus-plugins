@@ -1,0 +1,32 @@
+# Test stack for the Code Mode sandbox host. Use after sandbox/compose.yaml,
+# which makes sandbox/ the project directory; add sandbox/compose.runc.yaml to
+# test the runc backend.
+services:
+  sandbox-certs:
+    build:
+      context: ../tests
+      target: sandbox-probe
+    command: ["certs", "/certs"]
+    volumes:
+      - sandbox-tls:/certs
+  sandbox:
+    environment:
+      SANDBOX_CAPACITY: "2"
+    volumes:
+      - sandbox-tls:/etc/sandbox/tls:ro
+    depends_on:
+      sandbox-certs:
+        condition: service_completed_successfully
+  sandbox-probe:
+    build:
+      context: ../tests
+      target: sandbox-probe
+    # A user other than the sandbox service's, to show the launcher refuses it.
+    user: "10002:10002"
+    environment:
+      EXPECT_BACKEND: ${SANDBOX_BACKEND:-gvisor}
+    volumes:
+      - sandbox-tls:/certs:ro
+      - sandbox-socket:/run/sandbox-launcher
+volumes:
+  sandbox-tls:

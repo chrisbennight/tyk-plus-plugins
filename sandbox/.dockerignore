@@ -1,0 +1,10 @@
+# Send only the sources the image needs, so certificates and keys kept
+# anywhere under this directory never reach the image builder.
+*
+!go.mod
+!go.sum
+!cmd/
+!launcher/
+!protocol/
+!service/
+!worker/

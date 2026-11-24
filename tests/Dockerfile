@@ -27,3 +27,12 @@ ENTRYPOINT ["/upstream"]
 FROM scratch AS probe
 COPY --from=probe-build /probe /probe
 ENTRYPOINT ["/probe"]
+
+FROM golang:1.26.10-bookworm AS sandbox-probe-build
+WORKDIR /src
+COPY sandbox-probe/ .
+RUN CGO_ENABLED=0 go build -mod=readonly -o /sandbox-probe .
+
+FROM scratch AS sandbox-probe
+COPY --from=sandbox-probe-build /sandbox-probe /sandbox-probe
+ENTRYPOINT ["/sandbox-probe"]

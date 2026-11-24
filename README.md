@@ -20,6 +20,10 @@ In the same shell, stop the stack with `docker compose down`.
 
 To see the gateway working with example policy, mock MCP servers, and Claude Code or Codex, run the [examples](examples/README.md).
 
+## Code Mode sandbox host
+
+Code Mode programs run on a separate [sandbox host](sandbox/README.md): one gVisor sandbox per run, reached from gateways over mutual TLS. Start it with `docker compose -f sandbox/compose.yaml up -d` after providing its certificates. Gateways do not call it yet.
+
 ## Supported MCP versions
 
 The gateway supports MCP clients and upstream servers using protocol version `2025-11-25` (with `initialize` and sessions) or `2026-07-28` (stateless, with `server/discover`). A client that asks for `2026-07-28` uses it when the upstream supports it and otherwise falls back to `2025-11-25`, as the MCP specification requires. CI runs both client versions against an upstream that speaks both protocol versions, with plain and streamed replies; the same upstream keeping sessions; and an upstream that speaks only `2025-11-25`, with plain and streamed replies.

@@ -300,40 +300,62 @@ func openStore(root string) (*store, error) {
 	return s, nil
 }
 
-// createDir creates dir and any missing parents, gives dir the mode whatever
-// the umask, and syncs the parent of each directory it creates, so a crash
-// cannot lose a new store. Parents follow the umask, as with mkdir -p. An
-// existing dir is left as it is.
+// createDir creates dir and any missing parents, with dir given the mode
+// whatever the umask. An existing dir is left as it is.
 func createDir(dir string, mode os.FileMode) error {
-	created, err := makeDirs(dir)
-	if err != nil || !created {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Chmod(dir, mode)
+	if err := makeParents(filepath.Dir(dir)); err != nil {
+		return err
+	}
+	return makeDir(dir, mode)
 }
 
-// makeDirs creates dir and any missing parents and syncs the parent of each
-// directory it creates. It reports whether dir was created.
-func makeDirs(dir string) (bool, error) {
+// makeParents creates dir and any missing parents, following the umask as
+// mkdir -p does, and syncs the parent of each directory it creates, so a
+// crash cannot lose them.
+func makeParents(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
-		return false, nil
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, err
+		return err
 	}
 	parent := filepath.Dir(dir)
 	if parent != dir {
-		if _, err := makeDirs(parent); err != nil {
-			return false, err
+		if err := makeParents(parent); err != nil {
+			return err
 		}
 	}
-	// Another publisher may create the same new store at the same moment,
-	// before either holds its lock; then neither changes the other's work.
 	if err := os.Mkdir(dir, 0o755); errors.Is(err, os.ErrExist) {
-		return false, nil
+		return nil
 	} else if err != nil {
-		return false, err
+		return err
 	}
-	return true, syncDir(parent)
+	return syncDir(parent)
+}
+
+// makeDir creates dir with the given mode by renaming a prepared directory
+// into place, so no one, including a publisher after a crash, sees it with
+// a mode the umask chose. It then syncs the parent so a crash cannot lose it.
+// If another publisher creates dir at the same moment, both are new and
+// empty, so either one serves.
+func makeDir(dir string, mode os.FileMode) error {
+	parent := filepath.Dir(dir)
+	prepared, err := os.MkdirTemp(parent, "."+filepath.Base(dir)+"-new-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(prepared)
+	if err := os.Chmod(prepared, mode); err != nil {
+		return err
+	}
+	if err := os.Rename(prepared, dir); err != nil && !errors.Is(err, os.ErrExist) && !errors.Is(err, syscall.ENOTEMPTY) {
+		return err
+	}
+	return syncDir(parent)
 }
 
 // activate validates a set and points active at it. The promotion time is
@@ -365,19 +387,15 @@ func (s *store) activate(set string, now func() time.Time) error {
 // publishers out. A shared lock needs only read access.
 func lockStore(root string, mode os.FileMode) (func(), error) {
 	path := filepath.Join(root, ".lock")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDONLY, mode)
-	switch {
-	case err == nil:
-		if err := file.Chmod(mode); err != nil {
-			file.Close()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := createLockFile(path, mode); err != nil {
 			return nil, err
 		}
-	case errors.Is(err, os.ErrExist):
-		file, err = os.Open(path)
-		if err != nil {
-			return nil, err
-		}
-	default:
+	} else if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
 		return nil, err
 	}
 	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
@@ -388,6 +406,28 @@ func lockStore(root string, mode os.FileMode) (func(), error) {
 		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		file.Close()
 	}, nil
+}
+
+// createLockFile puts a lock file in place already carrying its mode, by
+// linking a prepared file, so no publisher ever sees it with the creator's
+// umask. If another publisher created it first, theirs is kept.
+func createLockFile(path string, mode os.FileMode) error {
+	prepared, err := os.CreateTemp(filepath.Dir(path), ".lock-new-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(prepared.Name())
+	err = prepared.Chmod(mode)
+	if closeErr := prepared.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := os.Link(prepared.Name(), path); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return nil
 }
 
 // writeSet stores a set by renaming a completed temporary directory into
@@ -402,14 +442,7 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 	sets := filepath.Join(s.root, setsDir)
 	// Another publisher may have created the sets directory; only its owner
 	// may change its mode, so an existing one is left as it is.
-	if err := os.Mkdir(sets, s.dirMode); err == nil {
-		if err := os.Chmod(sets, s.dirMode); err != nil {
-			return err
-		}
-		if err := syncDir(s.root); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, os.ErrExist) {
+	if err := createDir(sets, s.dirMode); err != nil {
 		return err
 	}
 	final := filepath.Join(sets, set)
@@ -439,6 +472,11 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 		return err
 	}
 	defer os.RemoveAll(staging)
+	// The final mode is set before writing, so a publisher whose umask
+	// removes its own search permission can still write the files.
+	if err := os.Chmod(staging, s.dirMode); err != nil {
+		return err
+	}
 	files, _ := filesFor(manifest.Format)
 	for _, name := range files {
 		if err := writeFileSynced(filepath.Join(staging, name), contents[name], s.fileMode); err != nil {
@@ -450,9 +488,6 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 		return err
 	}
 	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n'), s.fileMode); err != nil {
-		return err
-	}
-	if err := os.Chmod(staging, s.dirMode); err != nil {
 		return err
 	}
 	if err := syncDir(staging); err != nil {

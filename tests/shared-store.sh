@@ -47,7 +47,7 @@ second=$(source_dir '// second')
 
 # The first publisher's restrictive umask must not lock anyone else out.
 set_a=$(as alice 077 cedar-policy promote -store "$store" -label first "$first") || fail "alice could not publish into a new store"
-set_b=$(as bob 022 cedar-policy promote -store "$store" -label second "$second") || fail "bob could not publish after alice"
+set_b=$(as bob 0177 cedar-policy promote -store "$store" -label second "$second") || fail "bob could not publish after alice"
 as alice 077 cedar-policy activate -store "$store" "$set_a" >/dev/null || fail "alice could not roll back"
 as bob 022 cedar-policy activate -store "$store" "$set_b" >/dev/null || fail "bob could not roll back"
 
@@ -61,7 +61,9 @@ grep -q '"label": "first"' "$store/sets/$set_a/manifest.json" || fail "the repai
 wrong=$(find "$store" ! -group policy -printf '%p %g\n')
 [ -z "$wrong" ] || fail "published outside the store's group: $wrong"
 for set in "$set_a" "$set_b"; do
-  as reader 022 cat "$store/sets/$set/manifest.json" "$store/sets/$set/rules.cedar" >/dev/null || fail "reader cannot read set $set"
+  for file in manifest.json rules.cedar approved_tools.json approved_instructions.json checks.json; do
+    as reader 022 cat "$store/sets/$set/$file" >/dev/null || fail "reader cannot read $file in set $set"
+  done
 done
 as reader 022 cat "$store/active" >/dev/null || fail "reader cannot read the active pointer"
 

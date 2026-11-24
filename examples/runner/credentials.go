@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-var httpClient = &http.Client{Timeout: 15 * time.Second}
+// The runner never follows redirects, so a caller's credential is only ever
+// sent to the address it was configured for.
+var httpClient = &http.Client{Timeout: 15 * time.Second, CheckRedirect: noRedirects}
+
+func noRedirects(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // credential is the set of request headers that identify a caller.
 type credential map[string]string

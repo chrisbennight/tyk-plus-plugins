@@ -3,13 +3,17 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 )
 
 // The policy's activation checks are generated from expected.json, so the
 // policy cannot be published while it disagrees with the expected outcomes.
-// Regenerate with: docker compose run --rm runner checks > policy/checks.json
+// Regenerate as examples/README.md describes.
 func TestCommittedChecksMatchExpected(t *testing.T) {
 	e, err := load("..")
 	if err != nil {
@@ -78,5 +82,42 @@ func TestListAcceptsTheGatewaysClaimShapes(t *testing.T) {
 	}
 	if got := list(map[string]any{"a": true}); got != nil {
 		t.Errorf("object: %v", got)
+	}
+}
+
+// A row expecting a call to be permitted that the policy never evaluates
+// contradicts the approved tools, so generating checks must fail.
+func TestPermittedRowForUnapprovedToolIsAnError(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.expected.Calls = append(e.expected.Calls, call{Caller: "admin", Server: "notes", Tool: "archive", Arguments: map[string]any{"id": "1"}, Expect: "permitted"})
+	if _, err := e.checks(); err == nil {
+		t.Fatal("a permitted call to an unapproved tool was accepted")
+	}
+}
+
+func TestRefusalOfReadsBothErrorShapes(t *testing.T) {
+	transport := errors.New(`Error POSTing to endpoint: {"error":{"code":-32002,"message":"Tool call denied"},"id":4,"jsonrpc":"2.0"}`)
+	if r, ok := refusalOf(transport); !ok || *r != (rpcError{-32002, "Tool call denied"}) {
+		t.Fatalf("transport error: %v %v", r, ok)
+	}
+	if _, ok := refusalOf(errors.New("context deadline exceeded")); ok {
+		t.Fatal("a timeout counted as a refusal")
+	}
+	if _, ok := refusalOf(fmt.Errorf("wrapped: %w", &jsonrpc.Error{Code: -32002, Message: "Tool call denied"})); !ok {
+		t.Fatal("a JSON-RPC error was not read")
+	}
+}
+
+func TestCredentialTextRejectsShellSyntax(t *testing.T) {
+	for _, bad := range []string{"a'b", "a;b", "$(x)", "a b", "", "a\nb"} {
+		if credentialText.MatchString(bad) {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+	if !credentialText.MatchString("eyJhbGciOi.eyJzdWIi.c2ln-_") {
+		t.Error("rejected a JWT")
 	}
 }

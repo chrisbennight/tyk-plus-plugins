@@ -15,12 +15,15 @@
 //	TYK_GW_SECRET the secret for Tyk's control API
 //
 // To check a gateway other than Tyk, set EXAMPLE_<NAME>_KEY for each key caller
-// in callers/keys.json; the runner then uses those keys instead of creating them.
+// in callers/keys.json, and EXAMPLE_KEY_WITHOUT_METADATA_KEY for a key your
+// gateway recognizes but that carries no identity; the runner then uses those
+// keys instead of creating them through Tyk.
 package main
 
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -51,6 +54,9 @@ func main() {
 		fail(fmt.Errorf("unknown command %q; use run, env or checks", command))
 	}
 }
+
+// credentialText is the alphabet of JWTs and Tyk keys.
+var credentialText = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func setting(name, fallback string) string {
 	if v := os.Getenv(name); v != "" {
@@ -91,10 +97,15 @@ func printEnv(e *examples) {
 		if err != nil {
 			fail(err)
 		}
+		kind, value := "TOKEN", strings.TrimPrefix(c["Authorization"], "Bearer ")
 		if key := c["X-API-Key"]; key != "" {
-			fmt.Printf("export EXAMPLE_%s_KEY=%s\n", envName(name), key)
-		} else {
-			fmt.Printf("export EXAMPLE_%s_TOKEN=%s\n", envName(name), strings.TrimPrefix(c["Authorization"], "Bearer "))
+			kind, value = "KEY", key
 		}
+		// The output is meant for eval, so a value from the issuer or the
+		// control API must be plain token characters before it is printed.
+		if !credentialText.MatchString(value) {
+			fail(fmt.Errorf("the %s for %s contains characters a token or key never has; refusing to print it", strings.ToLower(kind), name))
+		}
+		fmt.Printf("export EXAMPLE_%s_%s='%s'\n", envName(name), kind, value)
 	}
 }

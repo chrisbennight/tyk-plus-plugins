@@ -1,4 +1,5 @@
 {
+  "olderProtocolOnly": ["older"],
   "calls": [
     {"caller": "analyst", "server": "directory", "tool": "search", "arguments": {"query": "ada"}, "expect": "permitted", "why": "read-only by operator fact"},
     {"caller": "analyst", "server": "directory", "tool": "get_person", "arguments": {"id": "7"}, "expect": "permitted", "why": "read-only by operator fact"},
@@ -23,7 +24,7 @@
     {"caller": "scoped", "server": "notes", "tool": "search", "arguments": {"query": "plan"}, "expect": "permitted", "why": "the notes:read scope grants search"},
     {"caller": "scoped", "server": "notes", "tool": "purge", "arguments": {"count": 1}, "expect": "refused", "why": "the scope grants search only"},
     {"caller": "analyst", "server": "notes", "tool": "purge", "arguments": {"count": 1}, "expect": "refused", "why": "claims to be read-only; the claim grants nothing"},
-    {"caller": "indexer", "server": "notes", "tool": "export", "arguments": {"format": "csv"}, "expect": "permitted", "why": "only the indexing service may export"},
+    {"caller": "indexer", "server": "notes", "tool": "export", "arguments": {"format": "csv"}, "expect": "permitted", "why": "the indexing service may export; analysts may not"},
     {"caller": "analyst", "server": "notes", "tool": "export", "arguments": {"format": "csv"}, "expect": "refused", "why": "_meta says read-only, but only operator facts count"},
     {"caller": "admin", "server": "notes", "tool": "archive", "arguments": {"id": "1"}, "expect": "refused", "why": "never approved: refused like a tool that does not exist"},
     {"caller": "admin", "server": "notes", "tool": "no_such_tool", "arguments": {}, "expect": "refused", "why": "a tool that does not exist"},
@@ -32,5 +33,8 @@
     {"caller": "admin", "server": "older", "tool": "delete_person", "arguments": {"id": "7"}, "expect": "refused", "why": "never approved on this proxy"}
   ],
   "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata"],
-  "keyIdentifiesFirst": {"key": "deployer", "token": "finance", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "permitted", "why": "a request carrying both is identified by its key: the deployer key may change records, the finance token may not"}
+  "keyAndToken": [
+    {"key": "deployer", "token": "finance", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "permitted", "why": "a request carrying both is identified by its key: the deployer key may change records, the finance token may not"},
+    {"key": "indexer", "token": "admin", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused", "why": "the reverse: the indexer key may not change records while the admin token could, so the key decides"}
+  ]
 }

@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
-// refusedCallers checks that callers the gateway cannot identify are refused
-// on every MCP method, and that none of their requests reach a server.
+// refusedCallers checks that callers the gateway cannot identify cannot
+// connect in either protocol version, are refused on each method a client sends
+// first (initialize, its notification, server/discover, tools/list and
+// tools/call), and that none of their requests reach a server.
 func (r *runner) refusedCallers() {
 	const server = "directory"
 	for _, name := range r.e.expected.RefusedCallers {
@@ -32,9 +36,12 @@ func (r *runner) refusedCallers() {
 				r.pass(what)
 			}
 		}
-		for _, method := range []string{"tools/list", "tools/call"} {
-			what := fmt.Sprintf("%s is refused on %s", name, method)
-			if status, err := rawRequest(cred, server, method); err != nil {
+		for _, req := range []struct{ version, method string }{
+			{versions[0], "initialize"}, {versions[0], "notifications/initialized"}, {versions[0], "tools/list"}, {versions[0], "tools/call"},
+			{versions[1], "server/discover"}, {versions[1], "tools/list"}, {versions[1], "tools/call"},
+		} {
+			what := fmt.Sprintf("%s is refused on %s (%s)", name, req.method, req.version)
+			if status, err := rawRequest(cred, server, req.version, req.method); err != nil {
 				r.fail(what, err.Error())
 			} else if status != http.StatusUnauthorized && status != http.StatusForbidden {
 				r.fail(what, fmt.Sprintf("answered %d", status))
@@ -76,9 +83,12 @@ func (r *runner) refusedCredential(name string) (credential, error) {
 	case "unpublished-key-token":
 		return signed(claims, true)
 	case "key-without-metadata":
-		key, err := createKey(r.e.proxies(), map[string]any{})
-		if err != nil {
-			return nil, err
+		key := os.Getenv("EXAMPLE_KEY_WITHOUT_METADATA_KEY")
+		if key == "" {
+			var err error
+			if key, err = createKey(r.e.proxies(), map[string]any{}); err != nil {
+				return nil, err
+			}
 		}
 		return credential{"X-API-Key": key}, nil
 	default:
@@ -87,26 +97,42 @@ func (r *runner) refusedCredential(name string) (credential, error) {
 	return signed(claims, false)
 }
 
-// rawRequest sends one newer-protocol request without a client library, so a
-// refusal is seen exactly as the gateway sends it.
-func rawRequest(cred credential, server, method string) (int, error) {
-	params := map[string]any{"_meta": map[string]any{
-		"io.modelcontextprotocol/protocolVersion":    versions[1],
-		"io.modelcontextprotocol/clientCapabilities": map[string]any{},
-		"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "examples-runner", "version": "1"},
-	}}
-	if method == "tools/call" {
+// rawRequest sends one request without a client library, so a refusal is seen
+// exactly as the gateway sends it.
+func rawRequest(cred credential, server, version, method string) (int, error) {
+	params := map[string]any{}
+	if version == versions[1] {
+		params["_meta"] = map[string]any{
+			"io.modelcontextprotocol/protocolVersion":    version,
+			"io.modelcontextprotocol/clientCapabilities": map[string]any{},
+			"io.modelcontextprotocol/clientInfo":         map[string]any{"name": "examples-runner", "version": "1"},
+		}
+	}
+	switch method {
+	case "initialize":
+		params["protocolVersion"] = version
+		params["capabilities"] = map[string]any{}
+		params["clientInfo"] = map[string]any{"name": "examples-runner", "version": "1"}
+	case "tools/call":
 		params["name"] = "search"
 		params["arguments"] = map[string]any{"query": "x"}
 	}
-	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+	message := map[string]any{"jsonrpc": "2.0", "method": method, "params": params}
+	if !strings.HasPrefix(method, "notifications/") {
+		message["id"] = 1
+	}
+	body, _ := json.Marshal(message)
 	req, _ := http.NewRequest(http.MethodPost, endpoint(server), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("MCP-Protocol-Version", versions[1])
-	req.Header.Set("Mcp-Method", method)
-	if method == "tools/call" {
-		req.Header.Set("Mcp-Name", "search")
+	if method != "initialize" {
+		req.Header.Set("MCP-Protocol-Version", version)
+	}
+	if version == versions[1] {
+		req.Header.Set("Mcp-Method", method)
+		if method == "tools/call" {
+			req.Header.Set("Mcp-Name", "search")
+		}
 	}
 	for k, v := range cred {
 		req.Header.Set(k, v)

@@ -20,7 +20,7 @@ cd examples
 export TYK_GW_SECRET="$(openssl rand -hex 32)"
 export TYK_GW_NODESECRET="$(openssl rand -hex 32)"
 docker compose up --build -d
-docker compose run --rm runner
+docker compose run --build --rm runner
 ```
 
 `up` starts these services:
@@ -29,7 +29,7 @@ docker compose run --rm runner
 - the mock servers `directory`, `payments`, `notes` and `older`;
 - `policy`, which publishes the example policy set into the gateway's store and exits.
 
-The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms both what the client sees and whether the call reached the server. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
+The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
 
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
@@ -61,8 +61,9 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 - **People** are in the issuer's deck, [`callers/people.json`](callers/people.json). See the [issuer guide](issuer/README.md).
 - **Services** are Tyk keys whose metadata is in [`callers/keys.json`](callers/keys.json). The runner creates the keys through Tyk's control API.
-- **Refused callers.** The runner also checks that seven callers are refused on every method with no request reaching a server: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, and a key without metadata.
-- **Key and token together.** A request carrying both a key and a token is identified by the key.
+- **Refused callers.** The runner also checks seven callers that must be refused: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, and a key without metadata. Each must fail to connect in both protocol versions and be refused on the methods a client sends first, with no request reaching a server. Those methods are `initialize`, `notifications/initialized`, `server/discover`, `tools/list` and `tools/call`.
+- **Every refusal looks the same.** Every refused tool call must return the same JSON-RPC error, so a caller cannot tell a tool it may not call from one that was never approved or does not exist.
+- **Key and token together.** A request carrying both a key and a token is identified by the key. Two cases show it: a strong key with a weak token is permitted, and a weak key with a strong token is refused.
 
 ## Policy
 
@@ -70,22 +71,21 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 The approved tool definitions are copied from each server's `tools/list`.
 
-The activation checks are generated from `expected.json`, so the policy cannot be published while it disagrees with the expected outcomes. After changing `expected.json`, regenerate them:
+The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`, so the policy the gateway enforces always agrees with the expected outcomes. After changing `expected.json`, regenerate the checks and publish again:
 
 ```sh
-docker compose run --rm runner checks > policy/checks.json
+docker compose run --build --rm runner checks > checks.new && mv checks.new policy/checks.json
+docker compose up -d --force-recreate policy gateway
 ```
-
-The runner's tests fail when the committed checks are out of date.
 
 Argument rules match exact values only, such as an environment name. A rule cannot compare an argument with a limit, such as a refund under 100, because the policy sees arguments as sets of name and value pairs.
 
 ## Connect Claude Code or Codex
 
-Print credentials for every example caller into your shell. Tokens expire after an hour; run it again for fresh ones.
+Print credentials for every example caller into your shell. Tokens expire after an hour; run it again for fresh ones. The runner prints only values made of token and key characters, each quoted, so the output is safe to `eval`.
 
 ```sh
-eval "$(docker compose run --rm runner env)"
+eval "$(docker compose run --build --rm runner env)"
 ```
 
 The configurations name two callers with different access side by side, so the difference is visible:
@@ -110,6 +110,6 @@ Check in each client:
 
 | To check | Do this |
 | --- | --- |
-| Another gateway | Configure it with an equivalent policy. Run the runner against it with `GATEWAY_URL`, and set `EXAMPLE_INDEXER_KEY` and `EXAMPLE_DEPLOYER_KEY` to credentials your gateway accepts for those callers. `expected.json` states every outcome without naming Cedar. The key-without-metadata check creates a Tyk key, so it fails against other gateways. |
+| Another gateway | Configure it with an equivalent policy. Run the runner against it with `GATEWAY_URL`, and set `EXAMPLE_INDEXER_KEY` and `EXAMPLE_DEPLOYER_KEY` to credentials your gateway accepts for those callers, and `EXAMPLE_KEY_WITHOUT_METADATA_KEY` to a key it recognizes that carries no identity. `expected.json` states every outcome without naming Cedar. |
 | Another MCP server | Replace a mock server's service in `compose.yaml` and point that proxy's API definition in `gateway/apps/` at it. Approve its tools in `policy/approved_tools.json`. |
 | Another MCP client | Connect it to `http://127.0.0.1:8080/<server>/` with a key in `X-API-Key` or a token in `Authorization: Bearer`, and compare what it shows with `expected.json`. |

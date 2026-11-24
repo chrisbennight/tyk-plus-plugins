@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 // activationCheck is one entry of the policy set's checks.json.
@@ -15,19 +16,23 @@ type activationCheck struct {
 	Expect    string         `json:"expect"`
 }
 
-// checks derives the policy set's activation checks from expected.json, so the
-// policy cannot be published while it disagrees with the expected outcomes.
+// checks derives the policy set's activation checks from expected.json. The
+// runner refuses to run while the committed checks differ from these, so the
+// checks the gateway enforces at publication always match the expected outcomes.
 // Calls the policy never evaluates are left out: tools that were never
 // approved, and arguments of the wrong type, which the gateway refuses first.
 func (e *examples) checks() ([]byte, error) {
 	out := []activationCheck{}
 	for _, c := range e.expected.Calls {
 		inv, ok := e.tools[c.Server]
-		if !ok {
-			continue
-		}
-		t, ok := inv.Tools[c.Tool]
-		if !ok || !argumentsMatch(t.Arguments, c.Arguments) {
+		t, approved := inv.Tools[c.Tool]
+		evaluated := ok && approved && argumentsMatch(t.Arguments, c.Arguments)
+		if !evaluated {
+			// The gateway refuses these before the policy sees them, so a row
+			// expecting them to be permitted contradicts the approved tools.
+			if c.Expect == "permitted" {
+				return nil, fmt.Errorf("expected.json expects %s to call %s.%s, but that tool or its arguments are not approved", c.Caller, c.Server, c.Tool)
+			}
 			continue
 		}
 		id, err := e.identity(c.Caller)
@@ -86,4 +91,17 @@ func argumentsMatch(declared map[string]string, args map[string]any) bool {
 		}
 	}
 	return true
+}
+
+// checksCurrent reports an error when policy/checks.json differs from the
+// checks expected.json generates.
+func (e *examples) checksCurrent() error {
+	want, err := e.checks()
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(e.committedChecks, want) {
+		return fmt.Errorf("policy/checks.json does not match expected.json; regenerate it as examples/README.md describes")
+	}
+	return nil
 }

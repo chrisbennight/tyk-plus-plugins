@@ -13,9 +13,15 @@ import (
 // example caller. It names callers, servers and tools only, so it can describe
 // another gateway under an equivalent policy.
 type expectations struct {
-	Calls              []call   `json:"calls"`
-	RefusedCallers     []string `json:"refusedCallers"`
-	KeyIdentifiesFirst struct {
+	// OlderProtocolOnly lists servers that speak only the older protocol
+	// version; every other server must be reached with the version the
+	// client asks for.
+	OlderProtocolOnly []string `json:"olderProtocolOnly"`
+	Calls             []call   `json:"calls"`
+	RefusedCallers    []string `json:"refusedCallers"`
+	// KeyAndToken lists requests carrying both a key and a token. The key
+	// identifies the caller, so each expectation follows the key's access.
+	KeyAndToken []struct {
 		Key       string         `json:"key"`
 		Token     string         `json:"token"`
 		Server    string         `json:"server"`
@@ -23,7 +29,7 @@ type expectations struct {
 		Arguments map[string]any `json:"arguments"`
 		Expect    string         `json:"expect"`
 		Why       string         `json:"why"`
-	} `json:"keyIdentifiesFirst"`
+	} `json:"keyAndToken"`
 }
 
 type call struct {
@@ -65,6 +71,8 @@ type examples struct {
 	deck     deck
 	keys     map[string]identity
 	tools    approvedTools
+	// committedChecks is policy/checks.json as committed.
+	committedChecks []byte
 }
 
 func load(dir string) (*examples, error) {
@@ -87,6 +95,10 @@ func load(dir string) (*examples, error) {
 		if err := dec.Decode(f.into); err != nil {
 			return nil, fmt.Errorf("%s: %w", f.path, err)
 		}
+	}
+	var err error
+	if e.committedChecks, err = os.ReadFile(filepath.Join(dir, "policy/checks.json")); err != nil {
+		return nil, err
 	}
 	for i, c := range e.expected.Calls {
 		if c.Expect != "permitted" && c.Expect != "refused" {

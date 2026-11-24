@@ -30,6 +30,7 @@ services:
       - policy-store:/opt/tyk-gateway/cedar:ro
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    networks: [default, gateway-store]
     depends_on:
       redis:
         condition: service_healthy
@@ -46,8 +47,10 @@ services:
       - ./policy:/policy:ro
       - policy-store:/store
 
+  # Redis holds Tyk's keys, so only the gateway can reach it.
   redis:
     image: redis:7.4-alpine
+    networks: [gateway-store]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -94,7 +97,7 @@ services:
       UPSTREAM_STREAM: "1"
 
   # Runs expected.json against the gateway, or prints credentials for clients.
-  # It starts only when asked: docker compose run --rm runner
+  # It starts only when asked: docker compose run --build --rm runner
   runner:
     build:
       context: .
@@ -104,6 +107,11 @@ services:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
     volumes:
       - .:/examples:ro
+
+networks:
+  default:
+  gateway-store:
+    internal: true
 
 volumes:
   policy-store:

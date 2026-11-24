@@ -13,15 +13,24 @@ import (
 // definition the upstream is not declaring is caught, but only up to a
 // per-proxy limit so an upstream cannot grow the record without bound.
 type Observations struct {
-	current atomic.Pointer[observed]
+	current  atomic.Pointer[observed]
+	sequence atomic.Uint64
 }
 
 type observed struct {
-	latest map[string]string
-	// unapproved counts, per proxy, the tools recorded without approval.
+	latest map[string]entry
+	// unapproved counts, per proxy, the recorded tools charged to its limit.
 	unapproved map[string]int
 	// incomplete marks proxies with a tool left unrecorded at the limit.
 	incomplete map[string]bool
+}
+
+type entry struct {
+	fingerprint string
+	// sequence orders declarations by when the gateway received them.
+	sequence uint64
+	// charged is set while the tool counts against the proxy's limit.
+	charged bool
 }
 
 // maxToolName is the longest tool name the MCP specification recommends. A
@@ -37,17 +46,22 @@ type Observation struct {
 
 func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 
-// Record stores what one reply declared. A tool without approval that is
-// not yet recorded is added only while the proxy has fewer than
+// Received numbers a reply as the gateway receives it, before checking it,
+// so a reply checked later cannot overwrite what a newer reply declared.
+func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
+
+// Record stores what one reply, numbered by Received, declared. A tool is
+// updated only by a reply newer than the one it was last recorded from. A
+// tool without approval is added only while the proxy has fewer than
 // maxUnapproved such tools and its name is not unusually long; otherwise the
-// proxy is marked incomplete.
-func (o *Observations) Record(proxy string, declared []Observation, maxUnapproved int) {
+// proxy is marked incomplete. A tool stops counting once it is approved.
+func (o *Observations) Record(proxy string, received uint64, declared []Observation, maxUnapproved int) {
 	if len(declared) == 0 {
 		return
 	}
 	for {
 		previous := o.current.Load()
-		next := &observed{latest: map[string]string{}, unapproved: map[string]int{}, incomplete: map[string]bool{}}
+		next := &observed{latest: map[string]entry{}, unapproved: map[string]int{}, incomplete: map[string]bool{}}
 		if previous != nil {
 			next.latest = maps.Clone(previous.latest)
 			next.unapproved = maps.Clone(previous.unapproved)
@@ -55,14 +69,24 @@ func (o *Observations) Record(proxy string, declared []Observation, maxUnapprove
 		}
 		for _, d := range declared {
 			key := observationKey(proxy, d.Tool)
-			if _, known := next.latest[key]; !known && !d.Approved {
+			old, known := next.latest[key]
+			if known && old.sequence > received {
+				continue
+			}
+			charged := known && old.charged
+			switch {
+			case d.Approved && charged:
+				next.unapproved[proxy]--
+				charged = false
+			case !d.Approved && !charged:
 				if next.unapproved[proxy] >= maxUnapproved || len(d.Tool) > maxToolName {
 					next.incomplete[proxy] = true
 					continue
 				}
 				next.unapproved[proxy]++
+				charged = true
 			}
-			next.latest[key] = d.Fingerprint
+			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: received, charged: charged}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return
@@ -76,8 +100,8 @@ func (o *Observations) Latest(proxy, tool string) (string, bool) {
 	if current == nil {
 		return "", false
 	}
-	fingerprint, ok := current.latest[observationKey(proxy, tool)]
-	return fingerprint, ok
+	seen, ok := current.latest[observationKey(proxy, tool)]
+	return seen.fingerprint, ok
 }
 
 // Complete reports whether every tool the proxy's upstream declared to this

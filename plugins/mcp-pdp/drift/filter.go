@@ -165,6 +165,13 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, obser
 	return encode(rebuilt)
 }
 
+// CarriesMethod reports whether a message is a request or notification
+// rather than a reply.
+func CarriesMethod(message []byte) bool {
+	var envelope map[string]jsontext.Value
+	return jsonv2.Unmarshal(message, &envelope) == nil && envelope["method"] != nil
+}
+
 // CheckFailed replaces a whole reply the gateway cannot check, keeping its
 // request ID when the reply is readable enough to have one.
 func CheckFailed(message []byte) []byte {

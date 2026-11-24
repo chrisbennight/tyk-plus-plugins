@@ -54,6 +54,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// Each message is checked against the set active when it arrives, so a
 	// long stream follows set changes.
 	transform := func(message []byte) []byte {
+		received := observed.Received()
 		state := current()
 		if state == nil {
 			return drift.CheckFailed(message)
@@ -68,7 +69,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		out := drift.FilterToolsList(message, view, limits, func(tool, fingerprint string, approved bool) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
 		})
-		observed.Record(proxy, declared, limits.MaxUnapprovedPerProxy)
+		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
 		return out
 	}
 	// The reply now depends on the gateway's approvals as well as the
@@ -93,7 +94,9 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxReply+1))
 	res.Body.Close()
-	if err != nil || len(body) > maxReply {
+	// A plain reply answers the request; only a stream may also carry the
+	// upstream's own requests and notifications.
+	if err != nil || len(body) > maxReply || drift.CarriesMethod(body) {
 		replaceBody(res, drift.CheckFailed(nil))
 		return
 	}

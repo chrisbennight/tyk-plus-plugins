@@ -61,8 +61,9 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	proxy := ctx.GetOASDefinition(req).GetTykExtension().Info.ID
 	// Each message is checked against the set active when it arrives, so a
 	// long stream follows set changes.
-	transform := func(message []byte) []byte {
-		received := observed.Received()
+	// A message is numbered as it is received: a plain reply when its
+	// headers arrive, a streamed event when it is complete.
+	check := func(received uint64, message []byte) []byte {
 		state := current()
 		if state == nil {
 			return drift.CheckFailed(message)
@@ -80,6 +81,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
 		return out
 	}
+	plainReceived := observed.Received()
 	// The reply now depends on the gateway's approvals as well as the
 	// upstream, so upstream validators and freshness do not describe it.
 	res.Header.Del("ETag")
@@ -95,7 +97,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		return
 	}
 	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
-		res.Body = drift.NewEventRewriter(res.Body, maxReply, transform)
+		res.Body = drift.NewEventRewriter(res.Body, maxReply, func(message []byte) []byte { return check(observed.Received(), message) })
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1
 		return
@@ -108,7 +110,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		replaceBody(res, drift.CheckFailed(nil))
 		return
 	}
-	replaceBody(res, transform(body))
+	replaceBody(res, check(plainReceived, body))
 }
 
 func replaceBody(res *http.Response, body []byte) {

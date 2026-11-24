@@ -169,7 +169,12 @@ func (u *untilReview) Read(p []byte) (int, error) {
 	if u.reviewed() {
 		return 0, io.EOF
 	}
-	return u.body.Read(p)
+	n, err := u.body.Read(p)
+	// A read may block across the change, so what it returns is checked too.
+	if u.reviewed() {
+		return 0, io.EOF
+	}
+	return n, err
 }
 
 func (u *untilReview) Close() error { return u.body.Close() }

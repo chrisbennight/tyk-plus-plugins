@@ -62,6 +62,9 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, obser
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
 		return checkFailed(nil)
 	}
+	if string(envelope["jsonrpc"]) != `"2.0"` || !validID(envelope["id"]) {
+		return checkFailed(envelope["id"])
+	}
 	// Every message passed on is rebuilt from the members JSON-RPC defines,
 	// spelled exactly, so a client that matches names loosely cannot find
 	// unchecked text under a variant spelling.
@@ -183,10 +186,16 @@ func CheckFailed(message []byte) []byte {
 }
 
 // checkFailed is the error reply that replaces unchecked upstream text.
+// validID reports whether a message's ID is absent, as for a
+// notification, or a string, number or null, as JSON-RPC allows.
+func validID(id jsontext.Value) bool {
+	return len(id) == 0 || id[0] == '"' || id[0] == '-' || id[0] >= '0' && id[0] <= '9' || string(id) == "null"
+}
+
 func checkFailed(id jsontext.Value) []byte {
-	// Only a string or number is kept, so no other upstream content can ride
-	// along in the gateway's own error.
-	if len(id) == 0 || (id[0] != '"' && id[0] != '-' && (id[0] < '0' || id[0] > '9')) {
+	// Only a valid ID is kept, so no other upstream content can ride along
+	// in the gateway's own error.
+	if len(id) == 0 || !validID(id) {
 		id = jsontext.Value("null")
 	}
 	out, _ := jsonv2.Marshal(map[string]any{"jsonrpc": "2.0", "id": id,

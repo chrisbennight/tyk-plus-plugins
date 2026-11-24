@@ -5,7 +5,7 @@
 package drift
 
 import (
-	"encoding/json"
+	"bytes"
 
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
@@ -57,7 +57,11 @@ type Limits struct {
 // with different definitions, and whether the tool is approved. A message
 // that cannot be checked is replaced with an error, so unchecked upstream
 // text never reaches the client.
-func FilterToolsList(message []byte, view policy.DriftView, limits Limits, observe func(name, fingerprint string, approved bool)) []byte {
+//
+// request is the ID of the tools/list request being answered, when known. A
+// result answering any other ID is not a reply to this request: it is
+// refused and nothing it declares is recorded.
+func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, observe func(name, fingerprint string, approved bool)) []byte {
 	var envelope map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
 		return checkFailed(nil)
@@ -90,16 +94,17 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, obser
 		// carry no tool definitions. Anything else is not a valid message.
 		switch {
 		case envelope["error"] != nil:
+			// Only the error code passes on. The upstream's message and data
+			// are text no one reviewed, so a fixed message replaces them.
 			var failure struct {
-				Code    *int64          `json:"code"`
-				Message *string         `json:"message"`
-				Data    json.RawMessage `json:"data,omitempty"`
+				Code    *int64  `json:"code"`
+				Message *string `json:"message"`
 			}
 			if jsonv2.Unmarshal(envelope["error"], &failure) != nil || failure.Code == nil || failure.Message == nil {
 				return checkFailed(envelope["id"])
 			}
 			rebuilt := keep(envelope, "jsonrpc", "id")
-			rebuilt["error"], _ = jsonv2.Marshal(failure)
+			rebuilt["error"], _ = jsonv2.Marshal(map[string]any{"code": *failure.Code, "message": "Upstream could not list tools"})
 			return encode(rebuilt)
 		case envelope["method"] != nil:
 			if method := envelope["method"]; method[0] != '"' {
@@ -109,6 +114,9 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, obser
 		default:
 			return checkFailed(envelope["id"])
 		}
+	}
+	if len(request) > 0 && !SameID(envelope["id"], request) {
+		return checkFailed(envelope["id"])
 	}
 	var result map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(raw, &result); err != nil {
@@ -183,6 +191,23 @@ func CheckFailed(message []byte) []byte {
 	}
 	_ = jsonv2.Unmarshal(message, &envelope)
 	return checkFailed(envelope.ID)
+}
+
+// Failed is the gateway's error reply for a list it could not check,
+// answering the request with this ID ("null" when it is unknown).
+func Failed(request jsontext.Value) []byte { return checkFailed(request) }
+
+// SameID reports whether two JSON-RPC IDs are the same value. IDs are strings
+// or numbers, compared by their canonical JSON.
+func SameID(a, b jsontext.Value) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+	x, y := a.Clone(), b.Clone()
+	if x.Canonicalize() != nil || y.Canonicalize() != nil {
+		return false
+	}
+	return bytes.Equal(x, y)
 }
 
 // checkFailed is the error reply that replaces unchecked upstream text.

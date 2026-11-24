@@ -31,8 +31,6 @@ type entry struct {
 	sequence uint64
 	// charged is set while the tool counts against the proxy's limit.
 	charged bool
-	// matched is set when the declaration was the approved definition.
-	matched bool
 }
 
 // maxToolName is the longest tool name the MCP specification recommends. A
@@ -40,11 +38,12 @@ type entry struct {
 // record large.
 const maxToolName = 128
 
-// Observation is one tool an upstream declared. Matches reports whether the
-// declared definition is the approved one.
+// Observation is one tool an upstream declared, with the fingerprint of its
+// definition ("" when it could not be fingerprinted) and whether it is
+// approved.
 type Observation struct {
 	Tool, Fingerprint string
-	Approved, Matches bool
+	Approved          bool
 }
 
 func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
@@ -54,9 +53,11 @@ func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 
 // Record stores what one reply, numbered by Received, declared. A newer
-// declaration always updates a tool; an older one only when it differs from
-// the approved definition and the record matched it. A
-// tool without approval is added only while the proxy has fewer than
+// declaration always updates a tool. An older one that disagrees with the
+// record marks the tool unsettled: its fingerprint becomes "", which matches
+// no approval, until a newer reply declares it again. Concurrent replies have
+// no reliable order, so neither of two disagreeing declarations is trusted,
+// whatever is approved now or later. A tool without approval is added only while the proxy has fewer than
 // maxUnapproved such tools and its name is not unusually long; otherwise the
 // proxy is marked incomplete. A tool stops counting once it is approved.
 func (o *Observations) Record(proxy string, received uint64, declared []Observation, maxUnapproved int) {
@@ -73,12 +74,13 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 		}
 		for _, d := range declared {
 			key := observationKey(proxy, d.Tool)
-			// Concurrent replies have no reliable order, so order only
-			// decides in the safe direction: an older declaration replaces a
-			// newer record only to record a change over a match.
 			old, known := next.latest[key]
-			if known && old.sequence > received && (d.Matches || !old.matched) {
-				continue
+			fingerprint := d.Fingerprint
+			if known && old.sequence > received {
+				if old.fingerprint == fingerprint {
+					continue
+				}
+				fingerprint = ""
 			}
 			sequence := max(received, old.sequence)
 			// A tool already recorded is always updated, since that adds
@@ -89,6 +91,12 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 			case d.Approved && charged:
 				next.unapproved[proxy]--
 				charged = false
+			case !d.Approved && known && !charged:
+				// A tool that lost its approval counts again. It stays recorded
+				// even past the limit, because its record already exists, but
+				// it fills the limit so new tools without approval are not.
+				next.unapproved[proxy]++
+				charged = true
 			case !d.Approved && !known:
 				if next.unapproved[proxy] >= maxUnapproved || len(d.Tool) > maxToolName {
 					next.incomplete[proxy] = true
@@ -97,7 +105,7 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 				next.unapproved[proxy]++
 				charged = true
 			}
-			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: sequence, charged: charged, matched: d.Matches}
+			next.latest[key] = entry{fingerprint: fingerprint, sequence: sequence, charged: charged}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return

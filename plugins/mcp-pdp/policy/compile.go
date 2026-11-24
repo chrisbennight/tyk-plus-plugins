@@ -272,10 +272,15 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 			}}
 		}
 		reason, _ := candidate.Decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
-		// Under drift review a tool without an approved definition is refused
-		// before rules are evaluated, so a check of it cannot expect a permit;
-		// a check expecting a denial still passes.
-		if view, enforcing := candidate.Drift(c.Proxy); enforcing && c.HypotheticalTool == nil {
+		// Under drift review a listed tool without an approved definition is
+		// refused before rules are evaluated, so a check of it cannot expect a
+		// permit; a check expecting a denial still passes. A tool that is not
+		// listed, or a check naming another upstream, keeps the decision above,
+		// so a misspelled or removed tool cannot pass a check unnoticed.
+		inv, listed := candidate.tools[c.Proxy]
+		_, listed = inv.Tools[c.Tool]
+		listed = listed && inv.Upstream == c.Upstream
+		if view, enforcing := candidate.Drift(c.Proxy); enforcing && c.HypotheticalTool == nil && listed {
 			if _, _, approved := view.Approved(c.Tool); !approved {
 				reason = "unapproved_tool"
 				if c.Expect == "policy_denied" {

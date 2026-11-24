@@ -287,4 +287,15 @@ func TestActivationChecksApplyDriftReview(t *testing.T) {
 	if err := compile(`, "drift": {}`, "policy_denied"); err != nil {
 		t.Fatal(err)
 	}
+	// A denial check naming a tool that is not listed, or the wrong upstream,
+	// does not pass on drift review's account.
+	for _, check := range []string{
+		`[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookpu", "expect": "policy_denied"}]`,
+		`[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://other.example/mcp", "tool": "lookup", "expect": "policy_denied"}]`,
+	} {
+		tools := `{"governed": {"upstream": "https://u.example/mcp", "drift": {}, "tools": {"lookup": {}}}}`
+		if _, err := Compile(Inputs{Rules: []byte(`permit (principal, action, resource);`), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte(check)}, "v"); err == nil {
+			t.Errorf("accepted %s", check)
+		}
+	}
 }

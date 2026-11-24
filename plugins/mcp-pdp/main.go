@@ -43,6 +43,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		// own also decompresses the reply itself.
 		if ctx.GetMCPMethod(r) == "tools/list" && underDriftReview(r) {
 			r.Header.Del("Accept-Encoding")
+			rememberListRequest(r)
 		}
 		return
 	}

@@ -18,6 +18,7 @@ type EventRewriter struct {
 	source    *bufio.Reader
 	body      io.Closer
 	transform func([]byte) []byte
+	failure   []byte
 	limit     int
 	pending   []byte
 	started   bool
@@ -25,9 +26,14 @@ type EventRewriter struct {
 	done      bool
 }
 
-// NewEventRewriter wraps a streamed body. limit bounds the bytes of one event.
-func NewEventRewriter(body io.ReadCloser, limit int, transform func([]byte) []byte) *EventRewriter {
-	return &EventRewriter{source: bufio.NewReader(body), body: body, transform: transform, limit: limit}
+// NewEventRewriter wraps a streamed body. limit bounds the bytes of one event,
+// and failure is the message sent in place of an event that exceeds it; nil
+// sends an error without a request ID.
+func NewEventRewriter(body io.ReadCloser, limit int, failure []byte, transform func([]byte) []byte) *EventRewriter {
+	if failure == nil {
+		failure = CheckFailed(nil)
+	}
+	return &EventRewriter{source: bufio.NewReader(body), body: body, transform: transform, failure: failure, limit: limit}
 }
 
 var errEventTooLarge = errors.New("event too large")
@@ -39,7 +45,7 @@ func (r *EventRewriter) Read(p []byte) (int, error) {
 		}
 		event, err := r.readEvent()
 		if errors.Is(err, errEventTooLarge) {
-			event, err = dataLines(CheckFailed(nil)), io.EOF
+			event, err = dataLines(r.failure), io.EOF
 			event = append(event, '\n')
 		}
 		if err != nil && err != io.EOF {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"mime"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
+	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 // observed holds the definition each upstream last declared for each tool,
@@ -66,7 +69,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	check := func(received uint64, message []byte) []byte {
 		state := current()
 		if state == nil {
-			return drift.CheckFailed(message)
+			return drift.Failed(listRequestID(req))
 		}
 		view, enforcing := state.Drift(proxy)
 		if !enforcing {
@@ -75,9 +78,8 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			return message
 		}
 		var declared []drift.Observation
-		out := drift.FilterToolsList(message, view, limits, func(tool, fingerprint string, approved bool) {
-			want, _, _ := view.Approved(tool)
-			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved, Matches: approved && fingerprint == want})
+		out := drift.FilterToolsList(message, view, limits, listRequestID(req), func(tool, fingerprint string, approved bool) {
+			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
 		})
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
 		return out
@@ -92,13 +94,13 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// cannot be checked, so it is not passed on.
 	if res.Header.Get("Content-Encoding") != "" {
 		res.Body.Close()
-		replaceBody(res, drift.CheckFailed(nil))
+		replaceBody(res, drift.Failed(listRequestID(req)))
 		res.Header.Del("Content-Encoding")
 		slog.Warn("Drift check refused a compressed tools/list reply", "proxy", proxy)
 		return
 	}
 	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
-		res.Body = drift.NewEventRewriter(res.Body, maxReply, func(message []byte) []byte { return check(observed.Received(), message) })
+		res.Body = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(listRequestID(req)), func(message []byte) []byte { return check(observed.Received(), message) })
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1
 		return
@@ -108,7 +110,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	// A plain reply answers the request; only a stream may also carry the
 	// upstream's own requests and notifications.
 	if err != nil || len(body) > maxReply || drift.CarriesMethod(body) {
-		replaceBody(res, drift.CheckFailed(nil))
+		replaceBody(res, drift.Failed(listRequestID(req)))
 		return
 	}
 	replaceBody(res, check(plainReceived, body))
@@ -135,4 +137,32 @@ func underDriftReview(req *http.Request) bool {
 	}
 	_, enforcing := state.Drift(oas.GetTykExtension().Info.ID)
 	return enforcing
+}
+
+// listRequestKey keys the JSON-RPC ID of a tools/list request in its context,
+// so the response hook can answer for that request and check that a result
+// answers it.
+type listRequestKey struct{}
+
+// rememberListRequest records the request's JSON-RPC ID for CheckResponse. Tyk
+// passes response hooks the request its middleware updated, so the request is
+// replaced in place as Tyk's own context helpers do.
+func rememberListRequest(r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		return
+	}
+	var envelope struct {
+		ID jsontext.Value `json:"id"`
+	}
+	if jsonv2.Unmarshal(body, &envelope) != nil || len(envelope.ID) == 0 {
+		return
+	}
+	*r = *r.WithContext(context.WithValue(r.Context(), listRequestKey{}, envelope.ID))
+}
+
+// listRequestID returns the ID rememberListRequest recorded, or nil.
+func listRequestID(r *http.Request) jsontext.Value {
+	id, _ := r.Context().Value(listRequestKey{}).(jsontext.Value)
+	return id
 }

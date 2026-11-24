@@ -149,6 +149,8 @@ type Snapshot struct {
 	// instructions holds each proxy's approved instructions. It is nil for a
 	// format-1 set, which approves none.
 	instructions map[string]string
+	// visibility caches which tools each caller may see, for this set only.
+	visibility *visibilityCache
 }
 
 // Instructions returns a proxy's approved instructions and whether the set
@@ -175,7 +177,7 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Snapshot{Version: version, policies: cedar.NewPolicySet()}
+	s := &Snapshot{Version: version, policies: cedar.NewPolicySet(), visibility: newVisibilityCache()}
 	for i, p := range list {
 		id := cedar.PolicyID(p.Annotations()["id"])
 		if id == "" {
@@ -267,7 +269,7 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 				return nil, fmt.Errorf("activation check %d: %w", i, err)
 			}
 			// A hypothetical reviewed tool exercises the policies without publishing a tool.
-			candidate = &Snapshot{policies: s.policies, tools: map[string]inventory{
+			candidate = &Snapshot{policies: s.policies, visibility: newVisibilityCache(), tools: map[string]inventory{
 				c.Proxy: {Upstream: c.Upstream, Tools: map[string]*tool{c.Tool: h}},
 			}}
 		}

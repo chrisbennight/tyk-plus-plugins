@@ -46,6 +46,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			// every request whose reply may be checked is kept for the
 			// gateway's own errors.
 			rememberRequestID(r)
+			rememberCaller(r, who)
 			if underDriftReview(r) {
 				r.Header.Del("Accept-Encoding")
 			}

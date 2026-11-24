@@ -64,7 +64,11 @@ type Limits struct {
 // reply answering any other ID is not a reply to this request: it is
 // refused and nothing it declares is recorded. The gateway's own errors then
 // answer the request, so the client is not left waiting.
-func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, observe func(name, fingerprint string, approved bool)) []byte {
+//
+// visible reports whether the caller could ever call a tool. A tool it could
+// not is left out of the list, so the caller's model does not spend its
+// context on it, but what the upstream declared for it is still recorded.
+func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, visible func(name string) bool, observe func(name, fingerprint string, approved bool)) []byte {
 	return checkReply(message, request, "Upstream could not list tools", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
 		listed, ok := result["tools"]
 		if !ok || len(listed) == 0 || listed[0] != '[' {
@@ -107,7 +111,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 			fingerprint := declared[name]
 			approved, approvedDefinition, ok := view.Approved(name)
 			observe(name, fingerprint, ok)
-			if ok && (fingerprint == approved || view.ServeApproved()) {
+			if ok && (fingerprint == approved || view.ServeApproved()) && visible(name) {
 				kept = append(kept, jsontext.Value(approvedDefinition))
 			}
 		}

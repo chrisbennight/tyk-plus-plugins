@@ -151,3 +151,25 @@ func dataLines(message []byte) []byte {
 
 // Close closes the wrapped body.
 func (r *EventRewriter) Close() error { return r.body.Close() }
+
+// UntilReview passes a stream through unchanged until reviewed reports that
+// its proxy has come under drift review, then ends it. A client discards the
+// event it was receiving and lists again, through the check, so a stream
+// opened before review started cannot deliver an unchecked list after.
+func UntilReview(body io.ReadCloser, reviewed func() bool) io.ReadCloser {
+	return &untilReview{body: body, reviewed: reviewed}
+}
+
+type untilReview struct {
+	body     io.ReadCloser
+	reviewed func() bool
+}
+
+func (u *untilReview) Read(p []byte) (int, error) {
+	if u.reviewed() {
+		return 0, io.EOF
+	}
+	return u.body.Read(p)
+}
+
+func (u *untilReview) Close() error { return u.body.Close() }

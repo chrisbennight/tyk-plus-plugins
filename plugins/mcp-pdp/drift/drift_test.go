@@ -459,3 +459,16 @@ func TestRecordedToolsAreUpdatedAtTheLimit(t *testing.T) {
 		t.Fatalf("recorded %q", fp)
 	}
 }
+
+func TestStreamsEndWhenReviewStarts(t *testing.T) {
+	reviewed := false
+	stream := UntilReview(io.NopCloser(strings.NewReader("data: one\n\ndata: two\n\n")), func() bool { return reviewed })
+	buf := make([]byte, 11)
+	if n, err := stream.Read(buf); err != nil || string(buf[:n]) != "data: one\n\n" {
+		t.Fatalf("%q %v", buf[:n], err)
+	}
+	reviewed = true
+	if n, err := stream.Read(buf); n != 0 || err != io.EOF {
+		t.Fatalf("stream continued: %q %v", buf[:n], err)
+	}
+}

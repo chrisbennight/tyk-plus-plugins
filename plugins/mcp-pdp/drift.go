@@ -47,7 +47,15 @@ func positiveSetting(variable string, fallback int) int {
 // policy set the gateway cannot tell what is approved, so it withholds the
 // list; calls are refused in that state anyway.
 func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request) {
-	if ctx.GetMCPMethod(req) != "tools/list" || !underDriftReview(req) {
+	if ctx.GetMCPMethod(req) != "tools/list" {
+		return
+	}
+	if !underDriftReview(req) {
+		// The stream passes unparsed, but if drift review starts while it is
+		// open, it ends rather than deliver an unchecked list.
+		if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
+			res.Body = drift.UntilReview(res.Body, func() bool { return underDriftReview(req) })
+		}
 		return
 	}
 	proxy := ctx.GetOASDefinition(req).GetTykExtension().Info.ID

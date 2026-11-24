@@ -16,10 +16,12 @@ import (
 
 // Run is a started sandbox. Closing Conn tells the launcher to destroy it.
 type Run struct {
-	ID     string
-	Conn   *net.UnixConn
-	Stdin  *os.File
-	Stdout *os.File
+	ID string
+	// Backend is the runtime that started this sandbox.
+	Backend string
+	Conn    *net.UnixConn
+	Stdin   *os.File
+	Stdout  *os.File
 }
 
 // Close ends the run.
@@ -36,6 +38,11 @@ const startWait = 30 * time.Second
 type Unavailable struct{ Reason string }
 
 func (u Unavailable) Error() string { return u.Reason }
+
+// Busy reports that the launcher is running as many sandboxes as it allows.
+type Busy struct{ Reason string }
+
+func (b Busy) Error() string { return b.Reason }
 
 // Start asks the launcher at socket for a sandbox that may run for runMillis,
 // giving up when ctx ends or the launcher does not answer in time.
@@ -65,6 +72,9 @@ func Start(ctx context.Context, socket string, runMillis int64) (*Run, error) {
 	var reply Reply
 	if err := json.Unmarshal(buf[:n], &reply); err != nil || reply.Error != "" || reply.Run == "" {
 		c.Close()
+		if strings.HasPrefix(reply.Error, "busy:") {
+			return nil, Busy{reply.Error}
+		}
 		if reply.Error != "" {
 			return nil, Unavailable{reply.Error}
 		}
@@ -84,7 +94,7 @@ func Start(ctx context.Context, socket string, runMillis int64) (*Run, error) {
 		c.Close()
 		return nil, errors.New("the launcher sent the wrong pipes")
 	}
-	return &Run{ID: reply.Run, Conn: c, Stdin: os.NewFile(uintptr(fds[0]), "sandbox-stdin"), Stdout: os.NewFile(uintptr(fds[1]), "sandbox-stdout")}, nil
+	return &Run{ID: reply.Run, Backend: reply.Backend, Conn: c, Stdin: os.NewFile(uintptr(fds[0]), "sandbox-stdin"), Stdout: os.NewFile(uintptr(fds[1]), "sandbox-stdout")}, nil
 }
 
 // QueryHealth asks the launcher at socket for its health.

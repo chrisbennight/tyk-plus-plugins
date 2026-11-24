@@ -73,9 +73,10 @@ const (
 
 // Reply answers a request. A started run's pipes travel with the reply.
 type Reply struct {
-	Run    string           `json:"run,omitempty"`
-	Error  string           `json:"error,omitempty"`
-	Health *protocol.Health `json:"health,omitempty"`
+	Run     string           `json:"run,omitempty"`
+	Backend string           `json:"backend,omitempty"`
+	Error   string           `json:"error,omitempty"`
+	Health  *protocol.Health `json:"health,omitempty"`
 }
 
 // Validate checks a request against the operator's maximum run time.
@@ -176,9 +177,12 @@ func Spec(args []string, memoryBytes int64) map[string]any {
 
 // Launcher serves typed requests on a Unix socket.
 type Launcher struct {
-	config   Config
-	mu       sync.Mutex
-	active   map[string]bool
+	config Config
+	mu     sync.Mutex
+	active map[string]bool
+	// leaked holds runs whose sandbox could not be confirmed gone; they keep
+	// their slots until the runtime no longer lists them.
+	leaked   map[string]bool
 	selfTest map[string]string
 	problem  string
 }
@@ -186,7 +190,7 @@ type Launcher struct {
 // New prepares the state directory and runs the startup self-test. A failed
 // self-test leaves the launcher refusing every run.
 func New(ctx context.Context, config Config) *Launcher {
-	l := &Launcher{config: config, active: map[string]bool{}}
+	l := &Launcher{config: config, active: map[string]bool{}, leaked: map[string]bool{}}
 	if err := os.MkdirAll(filepath.Join(stateDir, "bundles"), 0o700); err != nil {
 		l.problem = "preparing the state directory: " + err.Error()
 		return l
@@ -371,13 +375,34 @@ func (l *Launcher) handle(c *net.UnixConn) {
 	l.start(c, time.Duration(req.RunMillis)*time.Millisecond)
 }
 
+// reconcile retries clean-up of sandboxes that could not be confirmed gone,
+// releasing each slot once the runtime no longer lists it.
+func (l *Launcher) reconcile() {
+	l.mu.Lock()
+	var ids []string
+	for id := range l.leaked {
+		ids = append(ids, id)
+	}
+	l.mu.Unlock()
+	for _, id := range ids {
+		if l.destroy(id) {
+			l.mu.Lock()
+			delete(l.leaked, id)
+			delete(l.active, id)
+			l.mu.Unlock()
+			slog.Info("A sandbox left behind earlier is gone; its slot is free", "run", id)
+		}
+	}
+}
+
 // start runs one sandbox for the connection's lifetime.
 func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
+	l.reconcile()
 	id := newID()
 	l.mu.Lock()
 	if len(l.active) >= l.config.MaxRuns {
 		l.mu.Unlock()
-		data, _ := json.Marshal(Reply{Error: fmt.Sprintf("unavailable: already running %d sandboxes", l.config.MaxRuns)})
+		data, _ := json.Marshal(Reply{Error: fmt.Sprintf("busy: already running %d sandboxes", l.config.MaxRuns)})
 		c.Write(append(data, '\n'))
 		return
 	}
@@ -386,11 +411,14 @@ func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
 	l.active[id] = true
 	l.mu.Unlock()
 	defer func() {
-		if l.destroy(id) {
-			l.mu.Lock()
+		gone := l.destroy(id)
+		l.mu.Lock()
+		if gone {
 			delete(l.active, id)
-			l.mu.Unlock()
+		} else {
+			l.leaked[id] = true
 		}
+		l.mu.Unlock()
 	}()
 	cmd, err := l.prepare(id, []string{"/worker"})
 	if err != nil {
@@ -421,7 +449,7 @@ func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
 	}
 	inR.Close()
 	outW.Close()
-	data, _ := json.Marshal(Reply{Run: id})
+	data, _ := json.Marshal(Reply{Run: id, Backend: l.config.Backend})
 	_, _, err = c.WriteMsgUnix(append(data, '\n'), syscall.UnixRights(int(inW.Fd()), int(outR.Fd())), nil)
 	inW.Close()
 	outR.Close()

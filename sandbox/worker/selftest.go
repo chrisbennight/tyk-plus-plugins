@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -43,15 +44,16 @@ func SelfTest(hostFile, scratchDir string) map[string]string {
 	err = os.WriteFile(scratchDir+"/self-test", []byte("x"), 0o600)
 	results["write"] = outcome(errors.Is(err, syscall.EROFS), "the file system is writable")
 
-	// A sandbox has its own process namespace, so it sees only its own
-	// processes.
+	// A sandbox has its own process namespace, so /proc shows this process
+	// and no other. An empty or missing /proc proves nothing.
 	entries, err := os.ReadDir("/proc")
-	others := 0
+	var pids []string
 	for _, e := range entries {
-		if e.IsDir() && e.Name()[0] >= '0' && e.Name()[0] <= '9' && e.Name() != "1" && e.Name() != "self" {
-			others++
+		if e.Name()[0] >= '0' && e.Name()[0] <= '9' {
+			pids = append(pids, e.Name())
 		}
 	}
-	results["processes"] = outcome(err == nil && others == 0, "other processes are visible")
+	self := strconv.Itoa(os.Getpid())
+	results["processes"] = outcome(err == nil && len(pids) == 1 && pids[0] == self, "/proc shows "+strings.Join(pids, ","))
 	return results
 }

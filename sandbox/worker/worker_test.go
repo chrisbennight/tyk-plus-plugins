@@ -61,7 +61,7 @@ func TestCallsBeyondTheLimitInOneTurnStopTheRun(t *testing.T) {
 	m, sent := runCounting(t, `
 		for (let i = 0; i < 100000; i++) connectors.governed.lookup({ count: i });
 		await new Promise(() => {});`, ``, protocol.Limits{Calls: 3})
-	if m.Type != protocol.TypeFailed || !strings.Contains(m.Failure.Message, "more than 3 tool calls") || sent > 3 {
+	if m.Type != protocol.TypeFailed || m.Failure.Kind != protocol.KindLimit || sent > 3 {
 		t.Fatalf("got %+v after %d calls reached the host", m.Failure, sent)
 	}
 }

@@ -142,15 +142,23 @@ const connectionAllowance = 32
 // cannot hold a run, and its capacity slot, past the write.
 var writeWait = 10 * time.Second
 
-// lockedWriter lets several goroutines write whole messages to one peer.
+// lockedWriter lets several goroutines write whole messages to one peer. Once
+// it has written a run's final message it writes nothing more.
 type lockedWriter struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu     sync.Mutex
+	w      io.Writer
+	closed bool
 }
 
 func (l *lockedWriter) write(m protocol.Message) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.closed {
+		return errors.New("the run is over")
+	}
+	if m.Type == protocol.TypeDone || m.Type == protocol.TypeFailed {
+		l.closed = true
+	}
 	if c, ok := l.w.(net.Conn); ok {
 		c.SetWriteDeadline(time.Now().Add(writeWait))
 	}
@@ -220,13 +228,13 @@ func (s *Service) Handle(c net.Conn) {
 		return
 	}
 	defer s.active.Add(-1)
-	final := s.run(c, reader, client, protocol.Message{Type: protocol.TypeStart, Source: first.Source, Input: first.Input, Limits: &limits})
+	final := s.run(c, reader, client, protocol.Message{Type: protocol.TypeStart, Source: first.Source, Input: first.Input, Limits: &limits}, h.Backend)
 	client.write(final)
 }
 
 // run relays one run between the gateway and its sandbox and returns the
 // message that ends it.
-func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWriter, start protocol.Message) protocol.Message {
+func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWriter, start protocol.Message, backend string) protocol.Message {
 	limits := *start.Limits
 	// The worker enforces the run time from when its engine is ready; this
 	// bounds the whole run, including starting the sandbox, in case anything
@@ -234,10 +242,18 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(limits.RunMillis)*time.Millisecond+startAllowance)
 	defer cancel()
 	run, err := s.launch(ctx, limits.RunMillis)
+	var busy launcher.Busy
+	if errors.As(err, &busy) {
+		return protocol.Failed(protocol.KindBusy, "the sandbox host is at capacity: %v", err)
+	}
 	if err != nil {
 		return protocol.Failed(protocol.KindUnavailable, "no sandbox: %v", err)
 	}
 	defer run.Close()
+	// The gateway accepted the backend in the hello; the sandbox must match it.
+	if run.Backend != backend {
+		return protocol.Failed(protocol.KindUnavailable, "the sandbox started with backend %q, not the %q reported to the gateway", run.Backend, backend)
+	}
 	end := make(chan protocol.Message, 3)
 	finish := func(m protocol.Message) {
 		select {

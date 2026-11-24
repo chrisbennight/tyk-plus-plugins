@@ -6,6 +6,6 @@
     "analyst": {"roles": ["analyst"]},
     "admin": {"roles": ["admin"]},
     "finance": {"groups": ["finance"]},
-    "scoped": {"scope": "notes:read payments:read"}
+    "scoped": {"scope": "notes:read"}
   }
 }

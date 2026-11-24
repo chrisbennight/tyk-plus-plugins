@@ -1,0 +1,60 @@
+{
+  "mcpServers": {
+    "directory-indexer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
+      }
+    },
+    "payments-indexer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/payments/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
+      }
+    },
+    "notes-indexer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/notes/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
+      }
+    },
+    "older-indexer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
+      }
+    },
+    "directory-deployer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
+      }
+    },
+    "payments-deployer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/payments/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
+      }
+    },
+    "notes-deployer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/notes/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
+      }
+    },
+    "older-deployer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
+      }
+    }
+  }
+}

@@ -43,15 +43,16 @@ func driftSuite(k keys, version string) {
 		"change": map[string]any{"definition": approvedChange, "arguments": args("count", "long")},
 	}
 	inventory(map[string]any{}, tools)
+	listedAt := time.Now()
 	listed := catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"lookup"}), "%s: hide listed %v", version, slices.Collect(maps.Keys(listed)))
 	// The gateway shares what it saw: a gateway that never listed the tool,
 	// enforcing the same set, refuses calls to it within its refresh
 	// interval, and the change waits for review.
 	awaitPeerSet(readReport()["active"])
-	// The declaration is shared once; a later client version finds the one
-	// this run shared, which a gateway would not write again unchanged.
-	awaitSharedDeclaration("governed", "change", probeStarted)
+	// Each list is shared again with its own time, so each client version
+	// must produce a declaration of its own.
+	awaitSharedDeclaration("governed", "change", listedAt)
 	time.Sleep(time.Second)
 	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
 	checkPendingChange("governed", "change", catalog["change"])
@@ -127,10 +128,6 @@ func checkPendingChange(proxy, tool string, declared map[string]any) {
 	}
 }
 
-// probeStarted is when this probe run began, so declarations left by an
-// earlier run are not taken for ones this run caused.
-var probeStarted = time.Now()
-
 // awaitPeerSet waits until the peer gateway enforces a set.
 func awaitPeerSet(set any) {
 	deadline := time.Now().Add(10 * time.Second)
@@ -153,7 +150,7 @@ func awaitSharedDeclaration(proxy, tool string, after time.Time) {
 		files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "latest", encode(tool), "*.json"))
 		for _, file := range files {
 			var declared struct{ SeenAt time.Time }
-			if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &declared) == nil && !declared.SeenAt.Before(after.Add(-time.Second)) {
+			if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &declared) == nil && !declared.SeenAt.Before(after) {
 				return
 			}
 		}

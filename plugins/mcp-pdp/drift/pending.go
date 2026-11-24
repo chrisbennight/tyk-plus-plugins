@@ -119,9 +119,15 @@ const maxSharedName = 180
 // maxGatewaysPerTool the declaration files, one per gateway and upstream, it
 // reads for one tool; past it the declarations are not current.
 const (
-	maxDeclarationFile = 4096
+	maxDeclarationFile = 16 << 10
 	maxGatewaysPerTool = 256
 )
+
+// maxSharedUpstream is the longest upstream URL whose declarations fit in a
+// declaration file. Calls to a reviewed upstream with a longer URL, or to a
+// tool whose name is longer than maxSharedName, are refused while sharing is
+// on, since no gateway could share a change to them.
+const maxSharedUpstream = 8 << 10
 
 var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -178,7 +184,7 @@ func decodeName(encoded string) (string, bool) {
 // not, so every gateway decides calls on the newest declaration. An empty
 // fingerprint is shared as a definition that matches no approval.
 func (p *Pending) Saw(proxy, upstream, tool, fingerprint string, approved bool, at time.Time) {
-	if p.declarations == nil || (fingerprint != "" && !fingerprintPattern.MatchString(fingerprint)) || len(tool) > maxSharedName || (!approved && len(tool) > maxToolName) {
+	if p.declarations == nil || (fingerprint != "" && !fingerprintPattern.MatchString(fingerprint)) || !shareable(tool, upstream) || (!approved && len(tool) > maxToolName) {
 		return
 	}
 	select {
@@ -193,7 +199,7 @@ func (p *Pending) Saw(proxy, upstream, tool, fingerprint string, approved bool, 
 // larger than the limit, or one that could not be fingerprinted, is not
 // written.
 func (p *Pending) Changed(proxy, tool, fingerprint string, definition jsontext.Value) {
-	if !fingerprintPattern.MatchString(fingerprint) || len(definition) > p.limits.MaxDefinitionBytes || len(tool) > maxToolName ||
+	if !fingerprintPattern.MatchString(fingerprint) || len(definition) > p.limits.MaxDefinitionBytes || len(tool) > maxSharedName ||
 		(*p.reviewed.Load())[reviewKey(proxy, tool, fingerprint)] {
 		return
 	}
@@ -209,6 +215,12 @@ func (p *Pending) ChangedInstructions(proxy, fingerprint, instructions string) {
 	}
 	p.offerReview(review{instructions: &InstructionsEntry{Proxy: proxy, Fingerprint: fingerprint,
 		Instructions: instructions, FirstSeen: p.now().UTC(), Gateway: p.gateway}})
+}
+
+// shareable reports whether declarations of a tool from an upstream fit in
+// the shared directory.
+func shareable(tool, upstream string) bool {
+	return len(tool) <= maxSharedName && len(upstream) <= maxSharedUpstream
 }
 
 func reviewKey(proxy, tool, fingerprint string) string {
@@ -254,7 +266,7 @@ func (p *Pending) Current(version string) bool {
 func (p *Pending) Lookup(version, proxy, tool, upstream string) (current bool, d Declared, ok bool) {
 	snapshot := p.latest.Load()
 	d, ok = snapshot.declared[declarationKey(proxy, tool, upstream)]
-	return p.dir == "" || snapshot.version == version, d, ok
+	return p.dir == "" || (snapshot.version == version && shareable(tool, upstream)), d, ok
 }
 
 func declarationKey(proxy, tool, upstream string) string {
@@ -290,7 +302,7 @@ func (p *Pending) write() {
 // sighting and its time, whatever other gateways shared since. Tools without
 // approval are shared up to the per-proxy limit.
 func (p *Pending) writeDeclaration(w *writer, d declaration) error {
-	key := observationKey(d.proxy, d.tool)
+	key := declarationKey(d.proxy, d.tool, d.declared.Upstream)
 	last, written := w.own[key]
 	if written && !d.declared.SeenAt.After(last.SeenAt) {
 		return nil

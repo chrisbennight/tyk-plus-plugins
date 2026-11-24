@@ -358,3 +358,44 @@ func TestTooManyDeclarationFilesHoldCalls(t *testing.T) {
 		t.Fatal("declarations read in part were current")
 	}
 }
+
+func TestALateSightingFromOneUpstreamIsWrittenAfterAnotherUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	w := newWriter()
+	start := time.Now()
+	if err := p.writeDeclaration(w, declare(fingerprintA, start, true)); err != nil {
+		t.Fatal(err)
+	}
+	// While the proxy moves between upstreams, a newer reply from the other
+	// one is written before a delayed reply from the reviewed one.
+	other := declare(fingerprintA, start.Add(time.Minute), true)
+	other.declared.Upstream = "https://new.example/mcp"
+	if err := p.writeDeclaration(w, other); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.writeDeclaration(w, declare(fingerprintB, start.Add(time.Second), true)); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh("v", every)
+	if d, _ := p.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
+		t.Fatalf("the reviewed upstream's change was not shared: %+v", d)
+	}
+}
+
+func TestCallsToToolsThatCannotBeSharedAreHeld(t *testing.T) {
+	p := openTestPending(t, t.TempDir(), "one")
+	p.Refresh("v", every)
+	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream); !current {
+		t.Fatal("an ordinary tool was not current")
+	}
+	if current, _, _ := p.Lookup("v", "governed", strings.Repeat("x", maxSharedName+1), testUpstream); current {
+		t.Fatal("a tool whose name cannot be shared was current")
+	}
+	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream+strings.Repeat("x", maxSharedUpstream)); current {
+		t.Fatal("a tool on an upstream whose URL cannot be shared was current")
+	}
+	if !OpenPending("", "one", Limits{}).Current("v") {
+		t.Fatal("without sharing, declarations were not current")
+	}
+}

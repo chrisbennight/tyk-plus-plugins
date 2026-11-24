@@ -13,7 +13,8 @@ const visibilityTools = `{"p": {"upstream": "https://u.example/mcp", "tools": {
   "report": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
   "plain": {"facts": {"risk": "low"}},
   "ordered": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
-  "split": {"facts": {"risk": "low"}, "arguments": {"count": "long"}}}}}`
+  "split": {"facts": {"risk": "low"}, "arguments": {"count": "long"}},
+  "excepted": {"facts": {"risk": "low"}, "arguments": {"count": "long"}}}}}`
 
 const visibilityRules = `
 @id("support-read") permit (principal, action, resource) when { principal.roles.contains("support") && resource.reviewed.flags.contains({name: "readOnly", value: true}) };
@@ -27,6 +28,7 @@ const visibilityRules = `
 @id("plain-count") permit (principal, action, resource) when { resource.name == "plain" && context.numbers.contains({name: "count", value: 3}) };
 @id("context-first") permit (principal, action, resource) when { context.numbers.contains({name: "count", value: 3}) && principal.roles.contains("guest") && resource.name == "ordered" };
 @id("two-clauses") permit (principal, action, resource) when { principal.roles.contains("guest") && resource.name == "split" } when { context.numbers.contains({name: "count", value: 3}) };
+@id("unless-role") permit (principal, action, resource) when { resource.name == "excepted" } unless { context.numbers.contains({name: "count", value: 1}) || !principal.roles.contains("guest") };
 @id("blocked") forbid (principal, action, resource) when { principal.roles.contains("blocked") };
 @id("blocked-read") permit (principal, action, resource) when { principal.roles.contains("blocked") && resource.name == "lookup" };
 `
@@ -61,6 +63,8 @@ var visibilityCases = []struct {
 	{"nobody", "ordered", false, "an argument condition written first must not leak a guest-only permit"},
 	{"guest", "split", true, "role and argument conditions in separate clauses"},
 	{"nobody", "split", false, "a separate argument clause must not leak a guest-only permit"},
+	{"guest", "excepted", true, "a role restriction inside an unless clause that also tests arguments"},
+	{"nobody", "excepted", false, "an unless clause mixing arguments and roles must not leak"},
 }
 
 func TestVisibilityPrecision(t *testing.T) {

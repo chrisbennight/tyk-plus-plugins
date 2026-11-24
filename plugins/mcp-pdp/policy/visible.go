@@ -228,8 +228,7 @@ func toolEntity(uid cedar.EntityUID, proxy, upstream, name string, t *tool, stri
 // but no longer to callers its other conditions exclude.
 //
 // Forbids are left as written: a forbid with a condition on arguments is set
-// aside whole, so a tool some arguments could call is never hidden. Unless
-// clauses are also left whole, since splitting one would not keep its meaning.
+// aside whole, so a tool some arguments could call is never hidden.
 func visibilityPolicy(p *cedar.Policy) *cedar.Policy {
 	original := (*ast.Policy)(p.AST())
 	if original.Effect != ast.EffectPermit {
@@ -246,11 +245,22 @@ func visibilityPolicy(p *cedar.Policy) *cedar.Policy {
 		}
 		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: node})
 	}
+	// "unless a || b" holds exactly when "!a" and "!b" both do, so an unless
+	// clause is split at its top-level "||" into when clauses too.
+	var splitUnless func(node ast.IsNode)
+	splitUnless = func(node ast.IsNode) {
+		if or, ok := node.(ast.NodeTypeOr); ok {
+			splitUnless(or.Left)
+			splitUnless(or.Right)
+			return
+		}
+		rewritten.Conditions = append(rewritten.Conditions, ast.ConditionType{Condition: ast.ConditionWhen, Body: ast.NodeTypeNot{UnaryNode: ast.UnaryNode{Arg: node}}})
+	}
 	for _, c := range original.Conditions {
 		if c.Condition == ast.ConditionWhen {
 			split(c.Body)
 		} else {
-			rewritten.Conditions = append(rewritten.Conditions, c)
+			splitUnless(c.Body)
 		}
 	}
 	return cedar.NewPolicyFromAST((*cedarast.Policy)(&rewritten))

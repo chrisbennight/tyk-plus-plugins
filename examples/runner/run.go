@@ -297,11 +297,14 @@ func (r *runner) waitForServers() error {
 				missing = append(missing, s)
 			}
 		}
+		if _, err := get(setting("ISSUER_URL", "http://issuer:8000") + "/healthz"); err != nil {
+			missing = append(missing, "issuer")
+		}
 		if len(missing) == 0 && gatewayServes(servers[0]) {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("the gateway or these servers are not ready: %v", missing)
+			return fmt.Errorf("the gateway or these services are not ready: %v", missing)
 		}
 		time.Sleep(time.Second)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
@@ -48,7 +49,7 @@ func (r *runner) refusedOn(name string, cred credential, server string) {
 		{versions[1], "server/discover"}, {versions[1], "tools/list"}, {versions[1], "tools/call"},
 	} {
 		what := fmt.Sprintf("%s is refused on %s %s (%s)", name, server, req.method, req.version)
-		if status, err := rawRequest(cred, server, req.version, req.method); err != nil {
+		if status, err := rawRequest(cred, server, r.e.someTool(server), req.version, req.method); err != nil {
 			r.fail(what, err.Error())
 		} else if status != http.StatusUnauthorized && status != http.StatusForbidden {
 			r.fail(what, fmt.Sprintf("answered %d", status))
@@ -105,7 +106,7 @@ func (r *runner) refusedCredential(name string) (credential, error) {
 
 // rawRequest sends one request without a client library, so a refusal is seen
 // exactly as the gateway sends it.
-func rawRequest(cred credential, server, version, method string) (int, error) {
+func rawRequest(cred credential, server, tool, version, method string) (int, error) {
 	params := map[string]any{}
 	if version == versions[1] {
 		params["_meta"] = map[string]any{
@@ -120,8 +121,10 @@ func rawRequest(cred credential, server, version, method string) (int, error) {
 		params["capabilities"] = map[string]any{}
 		params["clientInfo"] = map[string]any{"name": "examples-runner", "version": "1"}
 	case "tools/call":
-		params["name"] = "search"
-		params["arguments"] = map[string]any{"query": "x"}
+		// An approved tool, so a refusal comes from the caller check rather
+		// than from the tool being unknown.
+		params["name"] = tool
+		params["arguments"] = map[string]any{}
 	}
 	message := map[string]any{"jsonrpc": "2.0", "method": method, "params": params}
 	if !strings.HasPrefix(method, "notifications/") {
@@ -137,7 +140,7 @@ func rawRequest(cred credential, server, version, method string) (int, error) {
 	if version == versions[1] {
 		req.Header.Set("Mcp-Method", method)
 		if method == "tools/call" {
-			req.Header.Set("Mcp-Name", "search")
+			req.Header.Set("Mcp-Name", tool)
 		}
 	}
 	for k, v := range cred {
@@ -149,4 +152,17 @@ func rawRequest(cred credential, server, version, method string) (int, error) {
 	}
 	res.Body.Close()
 	return res.StatusCode, nil
+}
+
+// someTool returns an approved tool on server, the first by name.
+func (e *examples) someTool(server string) string {
+	var names []string
+	for name := range e.tools[server].Tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if len(names) == 0 {
+		return ""
+	}
+	return names[0]
 }

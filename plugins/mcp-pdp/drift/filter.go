@@ -59,15 +59,23 @@ type Limits struct {
 // text never reaches the client.
 //
 // request is the ID of the tools/list request being answered, when known. A
-// result answering any other ID is not a reply to this request: it is
-// refused and nothing it declares is recorded.
+// reply answering any other ID is not a reply to this request: it is
+// refused and nothing it declares is recorded. The gateway's own errors then
+// answer the request, so the client is not left waiting.
 func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, observe func(name, fingerprint string, approved bool)) []byte {
 	var envelope map[string]jsontext.Value
+	failed := func() []byte {
+		if len(request) > 0 {
+			return checkFailed(request)
+		}
+		return checkFailed(envelope["id"])
+	}
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
-		return checkFailed(nil)
+		envelope = nil
+		return failed()
 	}
 	if string(envelope["jsonrpc"]) != `"2.0"` || !validID(envelope["id"]) {
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	// Every message passed on is rebuilt from the members JSON-RPC defines,
 	// spelled exactly, so a client that matches names loosely cannot find
@@ -84,7 +92,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 	encode := func(rebuilt map[string]jsontext.Value) []byte {
 		out, err := jsonv2.Marshal(rebuilt, jsonv2.Deterministic(true))
 		if err != nil {
-			return checkFailed(envelope["id"])
+			return failed()
 		}
 		return out
 	}
@@ -94,6 +102,9 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 		// carry no tool definitions. Anything else is not a valid message.
 		switch {
 		case envelope["error"] != nil:
+			if len(request) > 0 && !SameID(envelope["id"], request) {
+				return failed()
+			}
 			// Only the error code passes on. The upstream's message and data
 			// are text no one reviewed, so a fixed message replaces them.
 			var failure struct {
@@ -101,38 +112,38 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 				Message *string `json:"message"`
 			}
 			if jsonv2.Unmarshal(envelope["error"], &failure) != nil || failure.Code == nil || failure.Message == nil {
-				return checkFailed(envelope["id"])
+				return failed()
 			}
 			rebuilt := keep(envelope, "jsonrpc", "id")
 			rebuilt["error"], _ = jsonv2.Marshal(map[string]any{"code": *failure.Code, "message": "Upstream could not list tools"})
 			return encode(rebuilt)
 		case envelope["method"] != nil:
 			if method := envelope["method"]; method[0] != '"' {
-				return checkFailed(envelope["id"])
+				return failed()
 			}
 			return encode(keep(envelope, "jsonrpc", "id", "method", "params"))
 		default:
-			return checkFailed(envelope["id"])
+			return failed()
 		}
 	}
 	if len(request) > 0 && !SameID(envelope["id"], request) {
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	var result map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(raw, &result); err != nil {
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	listed, ok := result["tools"]
 	if !ok || len(listed) == 0 || listed[0] != '[' {
 		// A tools/list result must carry its tools as an array.
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	var tools []jsontext.Value
 	if err := jsonv2.Unmarshal(listed, &tools); err != nil {
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	if cursor, ok := result["nextCursor"]; ok && (len(cursor) == 0 || cursor[0] != '"') {
-		return checkFailed(envelope["id"])
+		return failed()
 	}
 	var order []string
 	declared := map[string]string{}

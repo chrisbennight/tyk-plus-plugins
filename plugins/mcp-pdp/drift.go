@@ -62,6 +62,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		return
 	}
 	proxy := ctx.GetOASDefinition(req).GetTykExtension().Info.ID
+	upstream := ctx.GetOASDefinition(req).GetTykExtension().Upstream.URL
 	// Each message is checked against the set active when it arrives, so a
 	// long stream follows set changes.
 	// A message is numbered as it is received: a plain reply when its
@@ -76,6 +77,12 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			// The proxy left drift review while the reply was streaming; its
 			// remaining messages pass as they would for any other proxy.
 			return message
+		}
+		if view.Upstream() != upstream {
+			// The proxy now targets an upstream other than the one reviewed;
+			// calls to it are refused, so its list is withheld and its
+			// declarations are not recorded against the reviewed tools.
+			return drift.Failed(listRequestID(req))
 		}
 		var declared []drift.Observation
 		out := drift.FilterToolsList(message, view, limits, listRequestID(req), func(tool, fingerprint string, approved bool) {
@@ -100,7 +107,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		return
 	}
 	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
-		res.Body = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(listRequestID(req)), func(message []byte) []byte { return check(observed.Received(), message) })
+		// The reply that answers the request ends the stream, as MCP servers
+		// do, so a second reply cannot replace what the first recorded.
+		var stream *drift.EventRewriter
+		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(listRequestID(req)), func(message []byte) []byte {
+			if !drift.CarriesMethod(message) {
+				stream.End()
+			}
+			return check(observed.Received(), message)
+		})
+		res.Body = stream
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1
 		return

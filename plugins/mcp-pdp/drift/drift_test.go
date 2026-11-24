@@ -1,8 +1,8 @@
 package drift
 
 import (
-	"github.com/go-json-experiment/json/jsontext"
 	"encoding/json"
+	"github.com/go-json-experiment/json/jsontext"
 	"io"
 	"reflect"
 	"strings"
@@ -559,5 +559,32 @@ func TestToolsThatLoseApprovalCountAgainstTheLimit(t *testing.T) {
 	o.Record("governed", o.Received(), []Observation{{Tool: "a"}}, 1)
 	if _, ok := o.Latest("governed", "a"); ok || o.Complete("governed") {
 		t.Fatal("a tool that lost its approval did not count against the limit")
+	}
+}
+
+func TestGatewayErrorsAnswerTheRequest(t *testing.T) {
+	for name, message := range map[string]string{
+		"unreadable":            `{`,
+		"error for another ID":  `{"jsonrpc":"2.0","id":99,"error":{"code":-32000,"message":"no"}}`,
+		"invalid result":        `{"jsonrpc":"2.0","id":99,"result":{}}`,
+		"request with bad name": `{"jsonrpc":"2.0","id":5,"method":5}`,
+	} {
+		out := FilterToolsList([]byte(message), view(t, `{}`), testLimits, jsontext.Value(`7`), func(string, string, bool) {})
+		if !strings.Contains(string(out), `"id":7`) || !strings.Contains(string(out), "could not be checked") {
+			t.Errorf("%s: sent %s", name, out)
+		}
+	}
+}
+
+func TestEndedStreamsStopAfterTheCurrentEvent(t *testing.T) {
+	stream := "data: first\n\ndata: second\n\n"
+	var rewriter *EventRewriter
+	rewriter = NewEventRewriter(io.NopCloser(strings.NewReader(stream)), 1<<20, nil, func(b []byte) []byte {
+		rewriter.End()
+		return b
+	})
+	out, err := io.ReadAll(rewriter)
+	if err != nil || string(out) != "data: first\n\n" {
+		t.Fatalf("sent %q, %v", out, err)
 	}
 }

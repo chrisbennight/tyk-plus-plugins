@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
@@ -20,6 +21,15 @@ import (
 // observed holds the definition each upstream last declared for each tool,
 // as seen by this gateway.
 var observed drift.Observations
+
+// shared exchanges declarations with other gateways and queues changes for
+// review, through CEDAR_PENDING_DIR. Without it, each gateway decides calls
+// on what it has seen itself.
+var shared *drift.Pending
+
+// maxSharedPerProxy bounds the shared declarations a gateway reads for each
+// proxy. Gateways write one for each approved tool.
+const maxSharedPerProxy = 10000
 
 // maxReply bounds a plain reply, or one streamed event, that the
 // gateway reads to check it.
@@ -82,7 +92,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			if method == "tools/list" {
 				return drift.Failed(requestID(req))
 			}
-			return drift.FilterInstructions(message, "", true, method == "server/discover", requestID(req))
+			return drift.FilterInstructions(message, "", true, method == "server/discover", requestID(req), nil)
 		}
 		if state == nil {
 			return unchecked()
@@ -101,7 +111,11 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		if method != "tools/list" {
 			approved, _ := state.Instructions(proxy)
-			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req))
+			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req), func(declared string) {
+				if fingerprint := policy.InstructionsFingerprint(declared); !view.RejectedInstructions(fingerprint) {
+					shared.ChangedInstructions(proxy, fingerprint, declared)
+				}
+			})
 		}
 		var declared []drift.Observation
 		// Visibility is decided only when a list needs it, so errors and
@@ -113,8 +127,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			}
 			return visible[tool]
 		}
-		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool) {
+		now := time.Now()
+		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool, definition jsontext.Value) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+			approvedFingerprint, _, _ := view.Approved(tool)
+			if approved {
+				shared.Saw(proxy, tool, fingerprint, now)
+			}
+			if fingerprint != approvedFingerprint && !view.Rejected(tool, fingerprint) {
+				shared.Changed(proxy, tool, fingerprint, definition)
+			}
 		})
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
 		return out

@@ -37,6 +37,13 @@ func DefinitionFingerprint(definition []byte) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
+// InstructionsFingerprint identifies server instructions by the SHA-256 of
+// their UTF-8 text.
+func InstructionsFingerprint(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
 // canonical is a value in canonical form, kept as a tree so each byte is
 // written once: copying a child's text into every enclosing level would make
 // the work grow with depth times size.

@@ -10,7 +10,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     CGO_ENABLED=0 go build -trimpath -o /cedar-policy ./cmd/cedar-policy
 # The default store activates the shipped policy, which grants nothing.
 COPY policy/rules.cedar policy/approved_tools.json policy/approved_instructions.json policy/checks.json /default-policy/
-RUN /cedar-policy promote -store /store -label default /default-policy && mkdir /status
+RUN /cedar-policy promote -store /store -label default /default-policy && mkdir /status /pending
 
 FROM tykio/tyk-gateway:v5.16.0
 COPY --from=compiler /mcp-pdp.so /opt/tyk-gateway/middleware/mcp-pdp.so
@@ -21,3 +21,5 @@ COPY policies /opt/tyk-gateway/policies
 COPY --from=compiler /store /opt/tyk-gateway/cedar
 # The gateway's user writes its enforcement report here.
 COPY --from=compiler --chown=65532:65532 /status /opt/tyk-gateway/cedar-status
+# Gateways share what upstreams declare, and queue changes for review, here.
+COPY --from=compiler --chown=65532:65532 /pending /opt/tyk-gateway/cedar-pending

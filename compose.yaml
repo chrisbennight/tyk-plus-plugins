@@ -11,6 +11,9 @@ services:
       # Drift review limits.
       CEDAR_PENDING_MAX_DEFINITION_BYTES: ${CEDAR_PENDING_MAX_DEFINITION_BYTES:-262144}
       CEDAR_PENDING_MAX_PER_PROXY: ${CEDAR_PENDING_MAX_PER_PROXY:-200}
+      # Gateways sharing this directory refuse calls to a tool any of them saw
+      # change, and queue changes there for review.
+      CEDAR_PENDING_DIR: /opt/tyk-gateway/cedar-pending
       # Token callers: leave these unset to accept keys only.
       MCP_TOKEN_JWKS_URL: ${MCP_TOKEN_JWKS_URL:-}
       MCP_TOKEN_ISSUER: ${MCP_TOKEN_ISSUER:-}

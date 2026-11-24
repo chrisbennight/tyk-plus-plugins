@@ -68,7 +68,7 @@ type Limits struct {
 // visible reports whether the caller could ever call a tool. A tool it could
 // not is left out of the list, so the caller's model does not spend its
 // context on it, but what the upstream declared for it is still recorded.
-func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, visible func(name string) bool, observe func(name, fingerprint string, approved bool)) []byte {
+func FilterToolsList(message []byte, view policy.DriftView, limits Limits, request jsontext.Value, visible func(name string) bool, observe func(name, fingerprint string, approved bool, definition jsontext.Value)) []byte {
 	return checkReply(message, request, "Upstream could not list tools", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
 		listed, ok := result["tools"]
 		if !ok || len(listed) == 0 || listed[0] != '[' {
@@ -84,6 +84,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 		}
 		var order []string
 		declared := map[string]string{}
+		definitions := map[string]jsontext.Value{}
 		for _, definition := range tools {
 			var named struct {
 				Name string `json:"name"`
@@ -101,6 +102,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 			case !repeated:
 				order = append(order, named.Name)
 				declared[named.Name] = fingerprint
+				definitions[named.Name] = definition
 			case previous != fingerprint:
 				// Conflicting definitions of one tool match nothing.
 				declared[named.Name] = ""
@@ -110,7 +112,7 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 		for _, name := range order {
 			fingerprint := declared[name]
 			approved, approvedDefinition, ok := view.Approved(name)
-			observe(name, fingerprint, ok)
+			observe(name, fingerprint, ok, definitions[name])
 			if ok && (fingerprint == approved || view.ServeApproved()) && visible(name) {
 				kept = append(kept, jsontext.Value(approvedDefinition))
 			}
@@ -134,8 +136,9 @@ func FilterToolsList(message []byte, view policy.DriftView, limits Limits, reque
 // reviewer approves the upstream's text.
 //
 // request is the ID of the request being answered, when known, as for
-// FilterToolsList.
-func FilterInstructions(message []byte, approved string, strip, discovery bool, request jsontext.Value) []byte {
+// FilterToolsList. report, when set, receives instructions the upstream
+// declared that are not the approved text.
+func FilterInstructions(message []byte, approved string, strip, discovery bool, request jsontext.Value, report func(declared string)) []byte {
 	return checkReply(message, request, "Upstream could not start the session", func(result map[string]jsontext.Value) (map[string]jsontext.Value, bool) {
 		changed := dropVariants(result, "instructions")
 		declared := ""
@@ -145,6 +148,9 @@ func FilterInstructions(message []byte, approved string, strip, discovery bool, 
 			}
 		}
 		if declared != approved {
+			if report != nil && declared != "" {
+				report(declared)
+			}
 			changed = true
 			delete(result, "instructions")
 			if !strip && approved != "" {

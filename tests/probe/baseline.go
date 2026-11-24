@@ -94,7 +94,7 @@ func baseline(k keys, version string) {
 	// Neither handshake lets an unidentified caller reach the upstream.
 	for _, handshake := range []struct{ version, method string }{{olderProtocol, "initialize"}, {newerProtocol, "server/discover"}} {
 		before, _ := observed()
-		fresh := &conn{version: handshake.version}
+		fresh := &conn{url: gateway, version: handshake.version}
 		r := fresh.rpc(unidentified, handshake.method, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
 			"clientInfo": map[string]any{"name": "probe", "version": "1"}})
 		after, _ := observed()

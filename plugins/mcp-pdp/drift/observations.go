@@ -3,6 +3,7 @@ package drift
 import (
 	"maps"
 	"sync/atomic"
+	"time"
 )
 
 // Observations records, for each proxy and tool, the fingerprint of the
@@ -31,6 +32,8 @@ type entry struct {
 	sequence uint64
 	// charged is set while the tool counts against the proxy's limit.
 	charged bool
+	// seenAt is when the declaration was recorded.
+	seenAt time.Time
 }
 
 // maxToolName is the longest tool name the MCP specification recommends. A
@@ -64,6 +67,7 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 	if len(declared) == 0 {
 		return
 	}
+	now := time.Now()
 	for {
 		previous := o.current.Load()
 		next := &observed{latest: map[string]entry{}, unapproved: map[string]int{}, incomplete: map[string]bool{}}
@@ -105,7 +109,11 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 				next.unapproved[proxy]++
 				charged = true
 			}
-			next.latest[key] = entry{fingerprint: fingerprint, sequence: sequence, charged: charged}
+			seenAt := now
+			if known && old.sequence > received {
+				seenAt = old.seenAt
+			}
+			next.latest[key] = entry{fingerprint: fingerprint, sequence: sequence, charged: charged, seenAt: seenAt}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return
@@ -121,6 +129,17 @@ func (o *Observations) Latest(proxy, tool string) (string, bool) {
 	}
 	seen, ok := current.latest[observationKey(proxy, tool)]
 	return seen.fingerprint, ok
+}
+
+// LatestAt returns the fingerprint the upstream last declared for a tool and
+// when this gateway recorded it.
+func (o *Observations) LatestAt(proxy, tool string) (string, time.Time, bool) {
+	current := o.current.Load()
+	if current == nil {
+		return "", time.Time{}, false
+	}
+	seen, ok := current.latest[observationKey(proxy, tool)]
+	return seen.fingerprint, seen.seenAt, ok
 }
 
 // Complete reports whether every tool the proxy's upstream declared to this

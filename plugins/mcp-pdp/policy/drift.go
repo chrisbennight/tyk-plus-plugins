@@ -92,6 +92,12 @@ func (v DriftView) Rejected(name, fingerprint string) bool {
 	return slices.Contains(v.settings.RejectedTools[name], fingerprint)
 }
 
+// RejectedInstructions reports whether a reviewer rejected these
+// instructions, by fingerprint.
+func (v DriftView) RejectedInstructions(fingerprint string) bool {
+	return slices.Contains(v.settings.RejectedInstructions, fingerprint)
+}
+
 // StripInstructions reports whether changed instructions are removed rather
 // than replaced with the approved text.
 func (v DriftView) StripInstructions() bool { return v.settings.ChangedInstructions == "strip" }

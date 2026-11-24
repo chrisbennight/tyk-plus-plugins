@@ -33,10 +33,11 @@ func main() {
 }
 
 // waitForGateway waits until Tyk reports healthy, the governed API answers
-// (an unloaded API returns 404), and the upstream is reachable.
+// (an unloaded API returns 404), and the upstream is reachable. The peer
+// gateway must be ready too.
 func waitForGateway() {
 	for range 60 {
-		if healthy() && apiLoaded() && upstreamUp() {
+		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(peerGateway) && upstreamUp() {
 			return
 		}
 		time.Sleep(time.Second)
@@ -44,8 +45,8 @@ func waitForGateway() {
 	panic("gateway or upstream did not become ready")
 }
 
-func healthy() bool {
-	res, err := httpClient.Get("http://gateway:9696/hello")
+func healthy(host string) bool {
+	res, err := httpClient.Get("http://" + host + ":9696/hello")
 	if err != nil {
 		return false
 	}
@@ -54,8 +55,8 @@ func healthy() bool {
 	return json.NewDecoder(res.Body).Decode(&health) == nil && health.Status == "pass"
 }
 
-func apiLoaded() bool {
-	res, err := httpClient.Post(gateway, "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":0,"method":"tools/list"}`))
+func apiLoaded(url string) bool {
+	res, err := httpClient.Post(url, "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":0,"method":"tools/list"}`))
 	if err != nil {
 		return false
 	}

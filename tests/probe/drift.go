@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"time"
 )
 
 // driftSuite checks drift enforcement for one client version: only tools
@@ -40,6 +45,12 @@ func driftSuite(k keys, version string) {
 	inventory(map[string]any{}, tools)
 	listed := catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"lookup"}), "%s: hide listed %v", version, slices.Collect(maps.Keys(listed)))
+	// The gateway shares what it saw: a gateway that never listed the tool
+	// refuses calls to it within its refresh interval, and the change waits
+	// for review.
+	time.Sleep(time.Second)
+	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
+	checkPendingChange("governed", "change")
 	check(sameJSON(listed["lookup"], catalog["lookup"]), "%s: lookup listed as %v", version, listed["lookup"])
 	call(c, k.support, "lookup", args("count", 1), "found")
 	changed := call(c, k.operator, "change", args("count", 2))
@@ -90,4 +101,23 @@ func driftSuite(k keys, version string) {
 	handshake = connect(k.operator, version)
 	check(handshake.hasInstructions && handshake.instructions == upstreamInstructions, "%s: approved instructions %q", version, handshake.instructions)
 	fmt.Printf("Verified drift enforcement for a %s client.\n", version)
+}
+
+// checkPendingChange checks that the drift review directory holds an entry
+// for a changed tool, with its definition and fingerprint.
+func checkPendingChange(proxy, tool string) {
+	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "tools", encode(tool), "*.json"))
+	check(len(files) > 0, "no review entry for %s on %s", tool, proxy)
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		var entry struct {
+			Proxy, Tool, Fingerprint string
+			Definition               struct{ Name string }
+		}
+		check(err == nil && json.Unmarshal(data, &entry) == nil, "review entry %s: %v", file, err)
+		check(entry.Proxy == proxy && entry.Tool == tool && entry.Definition.Name == tool &&
+			regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(entry.Fingerprint) &&
+			filepath.Base(file) == entry.Fingerprint+".json", "review entry %s: %s", file, data)
+	}
 }

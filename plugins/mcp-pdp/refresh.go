@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
 
@@ -37,11 +38,21 @@ func init() {
 			interval = parsed
 		}
 	}
+	gateway, _ := os.Hostname()
+	pending, err := drift.OpenPending(os.Getenv("CEDAR_PENDING_DIR"), gateway, limits)
+	if err != nil {
+		// Calls are still decided on what this gateway sees itself.
+		slog.Error("Could not open the drift review directory; declarations are not shared", "error", err)
+		pending, _ = drift.OpenPending("", gateway, limits)
+	}
+	shared = pending
 	reloader := policy.NewReloader(storeRoot, os.Getenv("CEDAR_STATUS_FILE"), &active)
 	reloader.Load()
+	shared.Refresh(maxSharedPerProxy)
 	go func() {
 		for range time.Tick(interval) {
 			reloader.Load()
+			shared.Refresh(maxSharedPerProxy)
 		}
 	}()
 }

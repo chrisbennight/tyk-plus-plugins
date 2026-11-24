@@ -1,6 +1,6 @@
 services:
   gateway:
-    environment:
+    environment: &test-gateway-environment
       MCP_UPSTREAM_URL: http://upstream:8000/mcp
       CEDAR_REFRESH_INTERVAL: 200ms
       # Plain HTTP is acceptable only on this isolated test network.
@@ -11,6 +11,19 @@ services:
     volumes:
       - policy:/opt/tyk-gateway/cedar:ro
       - status:/opt/tyk-gateway/cedar-status
+      - pending:/opt/tyk-gateway/cedar-pending
+  # A second gateway sharing the store and drift review directory, so the
+  # probe can check that a change one gateway sees is refused on the other.
+  gateway-peer:
+    extends:
+      file: compose.yaml
+      service: gateway
+    environment: *test-gateway-environment
+    ports: !reset []
+    volumes: !override
+      - policy:/opt/tyk-gateway/cedar:ro
+      - peer-status:/opt/tyk-gateway/cedar-status
+      - pending:/opt/tyk-gateway/cedar-pending
   upstream:
     build:
       context: ./tests
@@ -34,6 +47,11 @@ services:
     volumes:
       - policy:/policy
       - status:/status:ro
+      - pending:/pending:ro
+    depends_on:
+      - gateway-peer
 volumes:
   policy:
   status:
+  peer-status:
+  pending:

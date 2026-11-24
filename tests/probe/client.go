@@ -14,7 +14,10 @@ import (
 )
 
 const (
-	gateway        = "http://gateway:8080/mcp/"
+	gateway = "http://gateway:8080/mcp/"
+	// peerGateway shares the policy store and drift review directory with
+	// gateway but never lists the drift suite's tools itself.
+	peerGateway    = "http://gateway-peer:8080/mcp/"
 	olderProtocol  = "2025-11-25"
 	newerProtocol  = "2026-07-28"
 	methodNotFound = -32601
@@ -62,6 +65,7 @@ type response struct {
 // version, carries the older protocol's session, and reads plain or
 // streamed replies.
 type conn struct {
+	url     string // the gateway endpoint this connection uses
 	version string // the version actually in use after negotiation
 	session string
 	lastID  int
@@ -87,7 +91,12 @@ const (
 // tries server/discover first and falls back to the older handshake when the
 // server does not offer the newer version, as the MCP specification requires.
 func connect(cred credential, version string) *conn {
-	c := &conn{version: version}
+	return connectAt(gateway, cred, version)
+}
+
+// connectAt opens a connection to a gateway endpoint.
+func connectAt(url string, cred credential, version string) *conn {
+	c := &conn{url: url, version: version}
 	if version == newerProtocol {
 		r := c.rpc(cred, "server/discover", map[string]any{})
 		if r.Status == http.StatusOK && r.Error == nil {
@@ -176,7 +185,7 @@ func (c *conn) rpc(cred credential, method string, params map[string]any) respon
 	c.lastID++
 	id := c.lastID
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": c.params(params)})
-	req, _ := http.NewRequest(http.MethodPost, gateway, bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
 	req.Header = c.headers(cred, method, name)
 	res, err := httpClient.Do(req)
 	check(err == nil, "%s: %v", method, err)
@@ -200,7 +209,7 @@ func (c *conn) notify(cred credential, method string) {
 // notifyStatus sends a notification and returns the HTTP status.
 func (c *conn) notifyStatus(cred credential, method string) int {
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method, "params": c.params(map[string]any{})})
-	req, _ := http.NewRequest(http.MethodPost, gateway, bytes.NewReader(body))
+	req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(body))
 	req.Header = c.headers(cred, method, "")
 	res, err := httpClient.Do(req)
 	check(err == nil, "%s: %v", method, err)

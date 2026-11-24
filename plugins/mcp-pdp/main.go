@@ -84,7 +84,11 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			// Under drift enforcement a tool must be approved, and the
 			// definition its upstream last declared must be the approved one.
 			if view, enforcing := state.Drift(proxy); enforcing {
-				latest, seen := observed.Latest(proxy, name)
+				latest, at, seen := observed.LatestAt(proxy, name)
+				// Another gateway may have seen a newer declaration.
+				if d, ok := shared.Latest(proxy, name); ok && (!seen || d.SeenAt.After(at)) {
+					latest, seen = d.Fingerprint, true
+				}
 				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))
 			} else {
 				reason = ""

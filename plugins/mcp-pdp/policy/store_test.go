@@ -12,7 +12,7 @@ import (
 func writeSource(t *testing.T, rules, tools, checks string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for name, text := range map[string]string{"rules.cedar": rules, "tools.json": tools, "checks.json": checks} {
+	for name, text := range map[string]string{"rules.cedar": rules, "approved_tools.json": tools, "checks.json": checks} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}

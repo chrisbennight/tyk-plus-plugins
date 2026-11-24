@@ -23,6 +23,8 @@ type toolDefinition struct {
 	Name        string                     `json:"name"`
 	Annotations map[string]json.RawMessage `json:"annotations"`
 	facts       cedar.RecordMap
+	// fingerprint identifies the exact definition the operator approved.
+	fingerprint string
 }
 
 func (d *toolDefinition) UnmarshalJSON(data []byte) error {
@@ -30,6 +32,11 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	if err := jsonv2.Unmarshal(data, (*wire)(d)); err != nil {
 		return err
 	}
+	fingerprint, err := DefinitionFingerprint(data)
+	if err != nil {
+		return err
+	}
+	d.fingerprint = fingerprint
 	values := scalarFacts{}
 	for name, raw := range d.Annotations {
 		switch raw[0] {
@@ -123,9 +130,22 @@ type Snapshot struct {
 	Label    string
 	policies *cedar.PolicySet
 	tools    map[string]inventory
+	// instructions holds each proxy's approved instructions. It is nil for a
+	// format-1 set, which approves none.
+	instructions map[string]string
 }
 
-func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, error) {
+// Instructions returns a proxy's approved instructions and whether the set
+// approves any for it. An empty string is an approved value.
+func (s *Snapshot) Instructions(proxy string) (string, bool) {
+	text, ok := s.instructions[proxy]
+	return text, ok
+}
+
+// Compile validates a set's policy files and builds the snapshot gateways
+// decide with. Version identifies the set.
+func Compile(in Inputs, version string) (*Snapshot, error) {
+	rules, inventoryData, checks := in.Rules, in.Tools, in.Checks
 	var schemaDoc schema.Schema
 	if err := schemaDoc.UnmarshalCedar(inputSchema); err != nil {
 		return nil, err
@@ -169,6 +189,22 @@ func Compile(rules, inventoryData, checks []byte, version string) (*Snapshot, er
 			if err := t.prepare(name); err != nil {
 				return nil, err
 			}
+		}
+	}
+	if in.Instructions != nil {
+		var approved map[string]*string
+		if err := jsonv2.Unmarshal(in.Instructions, &approved); err != nil {
+			return nil, fmt.Errorf("approved instructions: %w", err)
+		}
+		if approved == nil {
+			return nil, fmt.Errorf("approved instructions must be an object")
+		}
+		s.instructions = make(map[string]string, len(approved))
+		for proxy, text := range approved {
+			if proxy == "" || text == nil {
+				return nil, fmt.Errorf("approved instructions for proxy %q must be a string", proxy)
+			}
+			s.instructions[proxy] = *text
 		}
 	}
 	// Activation checks are optional. An operator adds them to test a candidate's

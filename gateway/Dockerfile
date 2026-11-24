@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     go build -trimpath -tags=goplugin -buildmode=plugin -o /mcp-pdp.so . && \
     CGO_ENABLED=0 go build -trimpath -o /cedar-policy ./cmd/cedar-policy
 # The default store activates the shipped policy, which grants nothing.
-COPY policy/rules.cedar policy/tools.json policy/checks.json /default-policy/
+COPY policy/rules.cedar policy/approved_tools.json policy/approved_instructions.json policy/checks.json /default-policy/
 RUN /cedar-policy promote -store /store -label default /default-policy && mkdir /status
 
 FROM tykio/tyk-gateway:v5.16.0

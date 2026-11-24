@@ -14,19 +14,37 @@ import (
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
 
-// Files are the three policy files a set consists of.
+// Files are a set's policy files. Format is the store format the files come
+// from; zero means the current format.
 type Files struct {
-	Rules, Tools, Checks []byte
+	Rules, Tools, Instructions, Checks []byte
+	Format                             int
+}
+
+// inputs returns the files in the roles the compiler reads them. A current
+// set without instructions approves none.
+func (f Files) inputs() policy.Inputs {
+	in := policy.Inputs{Rules: f.Rules, Tools: f.Tools, Instructions: f.Instructions, Checks: f.Checks}
+	if f.Format != 1 && in.Instructions == nil {
+		in.Instructions = []byte("{}\n")
+	}
+	return in
 }
 
 // Fingerprint identifies the files as the store would name their set.
 func (f Files) Fingerprint() string {
+	in := f.inputs()
+	format, named := policy.FormatVersion, map[string][]byte{
+		"rules.cedar": in.Rules, "approved_tools.json": in.Tools, "approved_instructions.json": in.Instructions, "checks.json": in.Checks}
+	if f.Format == 1 {
+		format, named = 1, map[string][]byte{"rules.cedar": in.Rules, "tools.json": in.Tools, "checks.json": in.Checks}
+	}
 	hashes := map[string]string{}
-	for name, data := range map[string][]byte{"rules.cedar": f.Rules, "tools.json": f.Tools, "checks.json": f.Checks} {
+	for name, data := range named {
 		sum := sha256.Sum256(data)
 		hashes[name] = hex.EncodeToString(sum[:])
 	}
-	return policy.Fingerprint(hashes)
+	return policy.Fingerprint(format, hashes)
 }
 
 // FromStore reads the active set of a policy store, with a vocabulary drawn
@@ -40,7 +58,8 @@ func FromStore(root string, callers int) (files Files, vocab Vocabulary, version
 	if err != nil {
 		return files, vocab, "", "", err
 	}
-	files = Files{Rules: contents["rules.cedar"], Tools: contents["tools.json"], Checks: contents["checks.json"]}
+	in := policy.InputsOf(manifest.Format, contents)
+	files = Files{Rules: in.Rules, Tools: in.Tools, Instructions: in.Instructions, Checks: in.Checks, Format: manifest.Format}
 	return files, Harvest(files.Rules, callers), pointer.Set, manifest.Label, nil
 }
 
@@ -115,7 +134,7 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 	var report Report
 	report.Seed, report.Version = seed, version
 	report.Set.Rules = countRules(files.Rules)
-	report.Set.Bytes = len(files.Rules) + len(files.Tools) + len(files.Checks)
+	report.Set.Bytes = len(files.Rules) + len(files.Tools) + len(files.Instructions) + len(files.Checks)
 
 	before := heap()
 	var snapshot *policy.Snapshot
@@ -124,7 +143,7 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 		snapshot = nil
 		runtime.GC()
 		start := time.Now()
-		compiled, err := policy.Compile(files.Rules, files.Tools, files.Checks, version)
+		compiled, err := policy.Compile(files.inputs(), version)
 		compiles = append(compiles, time.Since(start))
 		if err != nil {
 			return report, err

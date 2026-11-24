@@ -28,7 +28,7 @@ func baseline(k keys, version string) {
 		"lookup": map[string]any{"facts": args("readOnly", true), "arguments": args("count", "long")},
 		"change": map[string]any{"arguments": args("count", "long")},
 	}}})
-	publish("activated", map[string]string{"rules.cedar": exampleRules, "tools.json": string(inventory), "checks.json": "[]"})
+	publish("activated", map[string]string{"rules.cedar": exampleRules, "approved_tools.json": string(inventory), "approved_instructions.json": "{}", "checks.json": "[]"})
 	connectBefore, _ := observed()
 	c := connect(k.operator, version)
 	connectAfter, _ := observed()

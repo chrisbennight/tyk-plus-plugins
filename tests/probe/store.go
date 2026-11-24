@@ -24,7 +24,10 @@ const (
 	upstream   = "http://upstream:8000/mcp"
 )
 
-var files = []string{"rules.cedar", "tools.json", "checks.json"}
+var files = []string{"rules.cedar", "approved_tools.json", "approved_instructions.json", "checks.json"}
+
+// legacyFiles are the files of a format-1 set, published by earlier builds.
+var legacyFiles = []string{"rules.cedar", "tools.json", "checks.json"}
 
 // staged holds the files of the set the probe will publish next.
 var staged = map[string]string{}
@@ -35,6 +38,11 @@ func digest(s string) string {
 }
 
 func writeSet(contents map[string]string, manifestFiles map[string]string) string {
+	return writeSetFormat(2, files, contents, manifestFiles)
+}
+
+// writeSetFormat stores a set of the given format and returns its fingerprint.
+func writeSetFormat(format int, files []string, contents map[string]string, manifestFiles map[string]string) string {
 	hashes := map[string]string{}
 	var joined strings.Builder
 	for _, name := range files {
@@ -54,7 +62,7 @@ func writeSet(contents map[string]string, manifestFiles map[string]string) strin
 	if manifestFiles == nil {
 		manifestFiles = hashes
 	}
-	manifest, _ := json.Marshal(map[string]any{"format": 1, "files": manifestFiles})
+	manifest, _ := json.Marshal(map[string]any{"format": format, "files": manifestFiles})
 	must(os.WriteFile(filepath.Join(staging, "manifest.json"), manifest, 0o644))
 	must(os.Rename(staging, final))
 	return set
@@ -102,7 +110,7 @@ func publish(expect string, changes map[string]string) map[string]any {
 
 func publishInventory(tools map[string]any, upstreamURL, expect string) {
 	data, _ := json.Marshal(map[string]any{"governed": map[string]any{"upstream": upstreamURL, "tools": tools}})
-	publish(expect, map[string]string{"tools.json": string(data)})
+	publish(expect, map[string]string{"approved_tools.json": string(data)})
 }
 
 // observed reports how many requests reached the upstream and the arguments

@@ -108,13 +108,16 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	}
 	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
 		// The reply that answers the request ends the stream, as MCP servers
-		// do, so a second reply cannot replace what the first recorded.
+		// do, so a second reply cannot replace what the first recorded. What
+		// the gateway sends is classified rather than what it received: a
+		// rebuilt message is either a request or notification, or a reply.
 		var stream *drift.EventRewriter
 		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(listRequestID(req)), func(message []byte) []byte {
-			if !drift.CarriesMethod(message) {
+			out := check(observed.Received(), message)
+			if !drift.CarriesMethod(out) {
 				stream.End()
 			}
-			return check(observed.Received(), message)
+			return out
 		})
 		res.Body = stream
 		res.Header.Del("Content-Length")

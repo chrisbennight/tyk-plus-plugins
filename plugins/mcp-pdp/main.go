@@ -41,9 +41,13 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		// review, so there the client's request for compression is not
 		// passed upstream. A Go HTTP client that asks for compression on its
 		// own also decompresses the reply itself.
-		if ctx.GetMCPMethod(r) == "tools/list" && underDriftReview(r) {
-			r.Header.Del("Accept-Encoding")
+		if ctx.GetMCPMethod(r) == "tools/list" {
+			// Drift review can start before the reply arrives, so every
+			// list request's ID is kept for the gateway's own errors.
 			rememberListRequest(r)
+			if underDriftReview(r) {
+				r.Header.Del("Accept-Encoding")
+			}
 		}
 		return
 	}

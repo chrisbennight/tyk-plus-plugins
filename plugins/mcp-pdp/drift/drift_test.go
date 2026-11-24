@@ -588,3 +588,13 @@ func TestEndedStreamsStopAfterTheCurrentEvent(t *testing.T) {
 		t.Fatalf("sent %q, %v", out, err)
 	}
 }
+
+func TestAMixedEnvelopeIsSentAsAReply(t *testing.T) {
+	// The response hook ends a stream at the first message it sends that is
+	// not a request or notification, so a result is never sent with a method.
+	message := `{"jsonrpc":"2.0","id":7,"method":"notifications/message","result":{"tools":[]}}`
+	out := FilterToolsList([]byte(message), view(t, `{}`), testLimits, jsontext.Value(`7`), func(string, string, bool) {})
+	if CarriesMethod(out) {
+		t.Fatalf("sent %s", out)
+	}
+}

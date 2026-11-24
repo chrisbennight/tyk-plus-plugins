@@ -255,6 +255,10 @@ func toolEntity(uid cedar.EntityUID, proxy, upstream, name string, t *tool, stri
 // some arguments could make it apply. A forbid does the reverse, so it applies
 // only when every set of arguments would make it apply. A tool some arguments
 // could let the caller call is therefore never hidden.
+//
+// Any other expression that reads arguments is replaced whole, including
+// tests on the caller or tool inside it, such as in "(a && b) == true". Its
+// result is then unclear, and an unclear tool is shown.
 func visibilityPolicy(p *cedar.Policy) *cedar.Policy {
 	original := (*ast.Policy)(p.AST())
 	rewritten := *original

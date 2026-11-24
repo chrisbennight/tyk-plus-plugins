@@ -2,6 +2,7 @@ package drift
 
 import (
 	"maps"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -16,6 +17,8 @@ import (
 type Observations struct {
 	current  atomic.Pointer[observed]
 	sequence atomic.Uint64
+	// receiving makes ReceivedAt number and time replies in one order.
+	receiving sync.Mutex
 }
 
 type observed struct {
@@ -58,6 +61,15 @@ func ObservedProxy(proxy, upstream string) string { return proxy + "\x00" + upst
 // Received numbers a reply as the gateway receives it, before checking it,
 // so a reply checked later cannot overwrite what a newer reply declared.
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
+
+// ReceivedAt numbers a reply as Received does and takes its time with it, so
+// replies numbered in one order are timed in the same order, and what this
+// gateway shares orders them as it does.
+func (o *Observations) ReceivedAt() (uint64, time.Time) {
+	o.receiving.Lock()
+	defer o.receiving.Unlock()
+	return o.sequence.Add(1), time.Now()
+}
 
 // Record stores what one reply, numbered by Received, declared. A newer
 // declaration always updates a tool. An older one that disagrees with the

@@ -227,6 +227,8 @@ func TestInvalidDeclarationsHoldCalls(t *testing.T) {
 		"garbled":   `{`,
 		"oversized": `{"fingerprint":"` + fingerprintA + `","pad":"` + strings.Repeat("x", maxDeclarationFile) + `"}`,
 		"notahash":  `{"fingerprint":"nope"}`,
+		"empty":     `{}`,
+		"misnamed":  `{"fingerprint":"` + fingerprintA + `","seenAt":"2026-01-01T00:00:00Z","gateway":"two","upstream":"` + testUpstream + `"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -246,15 +248,20 @@ func TestInvalidDeclarationsHoldCalls(t *testing.T) {
 	}
 }
 
-func TestAGatewayDoesNotReadItsOwnDeclarations(t *testing.T) {
+func TestAGatewayReadsItsOwnDeclarationsOnlyForToolsWithoutRecords(t *testing.T) {
 	dir := t.TempDir()
 	p := openTestPending(t, dir, "one")
 	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
 	p.Refresh("v", every)
-	if d, ok := p.Latest("governed", "lookup", testUpstream); ok {
-		t.Fatalf("read its own declaration %+v", d)
+	// Its own records order its replies as received, and override its file.
+	if _, d, ok := p.Lookup("v", "governed", "lookup", testUpstream, true); ok {
+		t.Fatalf("read its own declaration over its records: %+v", d)
+	}
+	// Without records, as after a restart, its file still holds calls.
+	if _, d, ok := p.Lookup("v", "governed", "lookup", testUpstream, false); !ok || d.Fingerprint != fingerprintA {
+		t.Fatalf("a restarted gateway lost its own declaration: %+v, %v", d, ok)
 	}
 	other := openTestPending(t, dir, "two")
 	other.Refresh("v", every)
@@ -413,13 +420,13 @@ func TestALateSightingFromOneUpstreamIsWrittenAfterAnotherUpstreams(t *testing.T
 func TestCallsToToolsThatCannotBeSharedAreHeld(t *testing.T) {
 	p := openTestPending(t, t.TempDir(), "one")
 	p.Refresh("v", every)
-	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream); !current {
+	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream, false); !current {
 		t.Fatal("an ordinary tool was not current")
 	}
-	if current, _, _ := p.Lookup("v", "governed", strings.Repeat("x", maxSharedName+1), testUpstream); current {
+	if current, _, _ := p.Lookup("v", "governed", strings.Repeat("x", maxSharedName+1), testUpstream, false); current {
 		t.Fatal("a tool whose name cannot be shared was current")
 	}
-	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream+strings.Repeat("x", maxSharedUpstream)); current {
+	if current, _, _ := p.Lookup("v", "governed", "lookup", testUpstream+strings.Repeat("x", maxSharedUpstream), false); current {
 		t.Fatal("a tool on an upstream whose URL cannot be shared was current")
 	}
 	if !OpenPending("", "one", Limits{}).Current("v") {

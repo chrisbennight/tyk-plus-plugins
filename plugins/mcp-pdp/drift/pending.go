@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"regexp"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -240,7 +239,7 @@ func (p *Pending) offerReview(r review) {
 }
 
 // Latest returns the newest declaration of a tool from an upstream that any
-// gateway shares. Declarations from other upstreams are kept apart, so a
+// other gateway shares. Declarations from other upstreams are kept apart, so a
 // gateway still on a previous upstream cannot hide one from the reviewed one.
 func (p *Pending) Latest(proxy, tool, upstream string) (Declared, bool) {
 	d, ok := p.latest.Load().declared[declarationKey(proxy, tool, upstream)]
@@ -252,6 +251,9 @@ func (p *Pending) Latest(proxy, tool, upstream string) (Declared, bool) {
 type sharedSnapshot struct {
 	version  string
 	declared map[string]Declared
+	// own holds this gateway's files, for tools it holds no record of, as
+	// after a restart.
+	own map[string]Declared
 }
 
 // Current reports whether the shared declarations were read for the policy
@@ -263,10 +265,15 @@ func (p *Pending) Current(version string) bool {
 
 // Lookup returns, from one consistent read, whether the shared declarations
 // were read for the policy set with this version and the newest declaration
-// of a tool from an upstream.
-func (p *Pending) Lookup(version, proxy, tool, upstream string) (current bool, d Declared, ok bool) {
+// of a tool from an upstream. A gateway's own records order its own replies
+// as it received them, so its own files count only when recorded is false.
+func (p *Pending) Lookup(version, proxy, tool, upstream string, recorded bool) (current bool, d Declared, ok bool) {
 	snapshot := p.latest.Load()
-	d, ok = snapshot.declared[declarationKey(proxy, tool, upstream)]
+	key := declarationKey(proxy, tool, upstream)
+	d, ok = snapshot.declared[key]
+	if own, found := snapshot.own[key]; found && !recorded && (!ok || own.SeenAt.After(d.SeenAt)) {
+		d, ok = own, true
+	}
 	return p.dir == "" || (snapshot.version == version && shareable(tool, upstream)), d, ok
 }
 
@@ -303,6 +310,7 @@ func (p *Pending) write() {
 // sighting and its time, whatever other gateways shared since. Tools without
 // approval are shared up to the per-proxy limit.
 func (p *Pending) writeDeclaration(w *writer, d declaration) error {
+	d.declared.Gateway = p.gateway
 	key := declarationKey(d.proxy, d.tool, d.declared.Upstream)
 	last, written := w.own[key]
 	if written && !d.declared.SeenAt.After(last.SeenAt) {
@@ -428,16 +436,14 @@ func (p *Pending) publish(dir, name string, data []byte, replace bool) error {
 // Refresh reads the newest declaration of every tool keep accepts, for the
 // policy set with this version, and counts each proxy's review entries. keep
 // limits reading to the tools of that set, so declarations of tools no longer
-// reviewed cannot crowd out current ones. Only other gateways' files are
-// read. If the directory or any declaration cannot be read, or a file is not
+// reviewed cannot crowd out current ones. If the directory or any declaration cannot be read, or a file is not
 // a valid declaration, the previous declarations are kept and marked stale,
 // so a failed read cannot release a tool another gateway saw change.
 func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 	if p.dir == "" || !p.open() {
 		return
 	}
-	latest, counts := map[string]Declared{}, map[string]int{}
-	own := encodeName(p.gateway) + "."
+	latest, own, counts := map[string]Declared{}, map[string]Declared{}, map[string]int{}
 	proxies, err := p.readDir(".")
 	if err != nil {
 		slog.Error("Could not read shared drift declarations", "error", err)
@@ -475,12 +481,6 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 				return
 			}
 			for _, file := range gateways {
-				// This gateway's own sightings are decided from its own
-				// records, which order replies as they were received; its
-				// files are for the other gateways.
-				if strings.HasPrefix(file, own) {
-					continue
-				}
 				var d Declared
 				switch err := p.readJSON(path.Join(encodedProxy, "latest", encodedTool, file), &d); {
 				case err != nil:
@@ -488,19 +488,26 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 					p.stale()
 					return
 				}
-				if d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint) {
+				// A declaration names the gateway and upstream its file is
+				// named after, and when it was received.
+				if (d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint)) || d.Gateway == "" || d.Upstream == "" ||
+					d.SeenAt.IsZero() || file != declarationFile(d.Gateway, d.Upstream) {
 					slog.Error("A shared drift declaration is not valid; keeping the previous ones", "proxy", proxy, "tool", tool)
 					p.stale()
 					return
 				}
+				into := latest
+				if d.Gateway == p.gateway {
+					into = own
+				}
 				key := declarationKey(proxy, tool, d.Upstream)
-				if newest, ok := latest[key]; !ok || d.SeenAt.After(newest.SeenAt) {
-					latest[key] = d
+				if newest, ok := into[key]; !ok || d.SeenAt.After(newest.SeenAt) {
+					into[key] = d
 				}
 			}
 		}
 	}
-	p.latest.Store(&sharedSnapshot{version: version, declared: latest})
+	p.latest.Store(&sharedSnapshot{version: version, declared: latest, own: own})
 	p.counts.Store(&entryCounts{generation: p.counts.Load().generation + 1, byProxy: counts})
 }
 
@@ -509,7 +516,7 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 // declaration recorded since could otherwise go unenforced.
 func (p *Pending) stale() {
 	previous := p.latest.Load()
-	p.latest.Store(&sharedSnapshot{declared: previous.declared})
+	p.latest.Store(&sharedSnapshot{declared: previous.declared, own: previous.own})
 }
 
 // countEntries counts a proxy's review entries, stopping past the limit.

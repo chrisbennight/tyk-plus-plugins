@@ -136,7 +136,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		observed.RecordAt(drift.ObservedProxy(proxy, upstream), received, receivedAt, declared, limits.MaxUnapprovedPerProxy)
 		return out
 	}
-	plainReceived, plainReceivedAt := observed.Received(), time.Now()
+	plainReceived, plainReceivedAt := observed.ReceivedAt()
 	// The reply now depends on the gateway's approvals as well as the
 	// upstream, so upstream validators and freshness do not describe it.
 	res.Header.Del("ETag")
@@ -158,7 +158,8 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		// rebuilt message is either a request or notification, or a reply.
 		var stream *drift.EventRewriter
 		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(requestID(req)), func(message []byte) []byte {
-			out := check(observed.Received(), time.Now(), message)
+			received, receivedAt := observed.ReceivedAt()
+			out := check(received, receivedAt, message)
 			if !drift.CarriesMethod(out) {
 				stream.End()
 			}

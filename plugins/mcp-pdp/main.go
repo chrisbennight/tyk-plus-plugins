@@ -89,7 +89,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 				// nothing about its tools.
 				observedProxy := drift.ObservedProxy(proxy, view.Upstream())
 				latest, at, seen := observed.LatestAt(observedProxy, name)
-				current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream())
+				current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream(), seen)
 				if ok && (!seen || d.SeenAt.After(at)) {
 					latest, seen = d.Fingerprint, true
 				}

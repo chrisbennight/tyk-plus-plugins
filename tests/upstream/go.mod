@@ -2,7 +2,7 @@ module github.com/chrisbennight/tyk-plus-plugins/tests/upstream
 
 go 1.26.5
 
-require github.com/modelcontextprotocol/go-sdk v1.7.0
+require github.com/modelcontextprotocol/go-sdk v1.8.0
 
 require (
 	github.com/google/jsonschema-go v0.4.3 // indirect

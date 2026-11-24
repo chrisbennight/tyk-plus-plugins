@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,10 +27,18 @@ func main() {
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server },
-		&mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+		// UPSTREAM_STREAM selects streamed replies and UPSTREAM_SESSIONS the
+		// older protocol's sessions, so the gateway is tested against each kind
+		// of upstream. A server that keeps sessions accepts only the older protocol.
+		&mcp.StreamableHTTPOptions{Stateless: os.Getenv("UPSTREAM_SESSIONS") == "", JSONResponse: os.Getenv("UPSTREAM_STREAM") == ""})
 	var requests atomic.Uint64
+	// lastVersion records the protocol version the gateway used on the last
+	// request, so tests can confirm it matches what the client negotiated.
+	var lastVersion atomic.Value
+	lastVersion.Store("")
 	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
+		lastVersion.Store(r.Header.Get("MCP-Protocol-Version"))
 		if r.Header.Get("Authorization") != "" || r.Header.Get("X-API-Key") != "" {
 			http.Error(w, "unexpected caller credential", http.StatusBadRequest)
 			return
@@ -37,7 +46,7 @@ func main() {
 		handler.ServeHTTP(w, r)
 	})
 	http.HandleFunc("/requests", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"requests": requests.Load(), "arguments": lastArgs.Load()})
+		json.NewEncoder(w).Encode(map[string]any{"requests": requests.Load(), "arguments": lastArgs.Load(), "protocolVersion": lastVersion.Load()})
 	})
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }

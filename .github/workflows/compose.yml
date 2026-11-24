@@ -5,7 +5,26 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
+    # Both supported client versions run against each kind of upstream: one
+    # that speaks both protocol versions, with plain or streamed replies; the
+    # same server keeping sessions, which limits it to the older protocol; and a
+    # server that only knows the older protocol.
+    strategy:
+      fail-fast: false
+      matrix:
+        # discovery: what server/discover does on that upstream.
+        include:
+          - {upstream: upstream, stream: "", sessions: "", discovery: newer}
+          - {upstream: upstream, stream: "1", sessions: "", discovery: newer}
+          - {upstream: upstream, stream: "1", sessions: "1", discovery: older-only}
+          - {upstream: upstream-legacy, stream: "", sessions: "", discovery: unsupported}
+          - {upstream: upstream-legacy, stream: "1", sessions: "1", discovery: unsupported}
+    env:
+      UPSTREAM_TARGET: ${{ matrix.upstream }}
+      UPSTREAM_STREAM: ${{ matrix.stream }}
+      UPSTREAM_SESSIONS: ${{ matrix.sessions }}
+      UPSTREAM_DISCOVERY: ${{ matrix.discovery }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify Cedar authorization through Tyk
@@ -22,6 +41,7 @@ jobs:
           docker compose restart gateway
           docker compose run --rm -e PROBE_PHASE=restarted probe
       - name: Benchmark Cedar decisions
+        if: matrix.upstream == 'upstream' && matrix.stream == '' && matrix.sessions == ''
         run: |
           # The benchmark starts no gateway; Compose still requires its secrets to be set.
           export TYK_GW_SECRET=unused TYK_GW_NODESECRET=unused

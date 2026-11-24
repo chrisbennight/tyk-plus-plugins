@@ -5,8 +5,6 @@
 package drift
 
 import (
-	"encoding/json"
-
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 
@@ -34,12 +32,13 @@ func CallReason(view policy.DriftView, name, latest string, seen bool) string {
 	return ""
 }
 
-// FilterToolsList checks one JSON-RPC message answering tools/list. Approved
-// tools pass unchanged. A changed tool is left out, or shown with its approved
-// definition when the proxy serves approved definitions. New tools are left
-// out. observe receives the fingerprint of every tool the
-// upstream declared. A message that cannot be checked is replaced with an
-// error, so unchecked upstream text never reaches the client.
+// FilterToolsList checks one JSON-RPC message answering tools/list. A tool
+// whose upstream definition matches the approved one is sent as approved, so
+// even its unfingerprinted _meta is reviewed text. A changed tool is left
+// out, or shown with its approved definition when the proxy serves approved
+// definitions. New tools are left out. observe receives the fingerprint each
+// approved tool's upstream declared. A message that cannot be checked is
+// replaced with an error, so unchecked upstream text never reaches the client.
 func FilterToolsList(message []byte, view policy.DriftView, observe func(name, fingerprint string)) []byte {
 	var envelope map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
@@ -47,7 +46,8 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	}
 	raw, ok := envelope["result"]
 	if !ok {
-		// Error replies carry no upstream tool text.
+		// Error replies, and requests and notifications sharing the stream,
+		// carry no tool definitions.
 		return message
 	}
 	var result map[string]jsontext.Value
@@ -56,7 +56,8 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	}
 	listed, ok := result["tools"]
 	if !ok {
-		return message
+		// A tools/list result must carry its tools.
+		return checkFailed(envelope["id"])
 	}
 	var tools []jsontext.Value
 	if err := jsonv2.Unmarshal(listed, &tools); err != nil {
@@ -67,7 +68,12 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 		var named struct {
 			Name string `json:"name"`
 		}
-		if json.Unmarshal(definition, &named) != nil || named.Name == "" {
+		// Names match exactly, as the policy set reads them.
+		if jsonv2.Unmarshal(definition, &named) != nil || named.Name == "" {
+			continue
+		}
+		approved, approvedDefinition, ok := view.Approved(named.Name)
+		if !ok {
 			continue
 		}
 		fingerprint, err := policy.DefinitionFingerprint(definition)
@@ -75,11 +81,7 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 			continue
 		}
 		observe(named.Name, fingerprint)
-		approved, approvedDefinition, ok := view.Approved(named.Name)
-		switch {
-		case ok && fingerprint == approved:
-			kept = append(kept, definition)
-		case ok && view.ServeApproved():
+		if fingerprint == approved || view.ServeApproved() {
 			kept = append(kept, jsontext.Value(approvedDefinition))
 		}
 	}

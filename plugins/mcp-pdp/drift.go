@@ -16,7 +16,8 @@ import (
 // as seen by this gateway.
 var observed drift.Observations
 
-// maxReply bounds a plain tools/list reply the gateway reads to check it.
+// maxReply bounds a plain tools/list reply, or one streamed event, that the
+// gateway reads to check it.
 const maxReply = 16 << 20
 
 // CheckResponse is a Tyk response hook. On a proxy under drift enforcement it
@@ -46,7 +47,8 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			return out
 		}
 	}
-	// A compressed reply cannot be checked, so it is not passed on.
+	// Authorize asks for an uncompressed reply. One that is compressed anyway
+	// cannot be checked, so it is not passed on.
 	if res.Header.Get("Content-Encoding") != "" {
 		res.Body.Close()
 		replaceBody(res, drift.CheckFailed(nil))
@@ -55,7 +57,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		return
 	}
 	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
-		res.Body = drift.NewEventRewriter(res.Body, transform)
+		res.Body = drift.NewEventRewriter(res.Body, maxReply, transform)
 		res.Header.Del("Content-Length")
 		res.ContentLength = -1
 		return
@@ -70,6 +72,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 }
 
 func replaceBody(res *http.Response, body []byte) {
+	res.Header.Set("Content-Type", "application/json")
 	res.Body = io.NopCloser(bytes.NewReader(body))
 	res.ContentLength = int64(len(body))
 	res.Header.Set("Content-Length", strconv.Itoa(len(body)))

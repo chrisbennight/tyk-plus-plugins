@@ -35,6 +35,13 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal(body, &envelope)
 			slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
 			refuse(w, envelope.ID, "Caller not identified")
+			return
+		}
+		// CheckResponse reads tools/list replies, so the client's request for
+		// compression is not passed upstream. A Go HTTP client that asks for
+		// compression on its own also decompresses the reply itself.
+		if ctx.GetMCPMethod(r) == "tools/list" {
+			r.Header.Del("Accept-Encoding")
 		}
 		return
 	}

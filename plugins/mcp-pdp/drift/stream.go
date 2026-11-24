@@ -97,8 +97,8 @@ func (r *EventRewriter) readLine(size *int) ([]byte, error) {
 
 // readEvent reads lines up to and including the blank line that ends an
 // event, and returns the event with its data transformed. Only the fields the
-// event-stream format defines are passed on, and comments; clients ignore any
-// other field, so dropping it changes nothing for them and no line the
+// event-stream format defines are passed on, except event IDs, and comments;
+// clients ignore any other field, so dropping it changes nothing for them and no line the
 // rewriter did not recognize reaches a client. A comment outside an event is
 // passed on at once, so keepalives are not held back.
 func (r *EventRewriter) readEvent() ([]byte, error) {
@@ -125,6 +125,7 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			case len(joined) == 0:
 				// An event with empty data carries no message; servers send
 				// one to prime a stream for resumption, and clients skip it.
+				// Its ID is dropped like any other.
 				out.WriteString("data:\n")
 			default:
 				out.Write(dataLines(r.transform(joined)))
@@ -142,9 +143,13 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			if data == nil && out.Len() == len(line)+1 {
 				return out.Bytes(), nil
 			}
-		case "event", "id", "retry":
+		case "event", "retry":
 			out.Write(line)
 			out.WriteString("\n")
+		case "id":
+			// Event IDs are dropped, so a client cannot resume a checked list
+			// on another request whose reply the gateway does not check. A
+			// client that loses the stream lists again, through the check.
 		}
 	}
 }

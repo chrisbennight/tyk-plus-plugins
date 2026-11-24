@@ -168,10 +168,15 @@ func TestStreamedEventsAreRewritten(t *testing.T) {
 	if strings.Contains(text, "Delete everything") || !strings.Contains(text, "Find a record") {
 		t.Fatalf("stream: %q", text)
 	}
-	for _, want := range []string{"event: message\n", "id: 1\n", ": note\n", "event: ping\n\n"} {
+	for _, want := range []string{"event: message\n", ": note\n", "event: ping\n\n"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("lost %q in %q", want, text)
 		}
+	}
+	// Without an event ID, a client cannot resume the list on a request whose
+	// reply is not checked.
+	if strings.Contains(text, "id: 1") {
+		t.Errorf("passed an event ID in %q", text)
 	}
 }
 
@@ -606,7 +611,7 @@ func TestPrimingEventsPassUnchecked(t *testing.T) {
 		transformed = append(transformed, string(b))
 		return b
 	}))
-	if err != nil || string(out) != "id: 1\ndata:\n\ndata: reply\n\n" || len(transformed) != 1 {
+	if err != nil || string(out) != "data:\n\ndata: reply\n\n" || len(transformed) != 1 {
 		t.Fatalf("sent %q, transformed %q, %v", out, transformed, err)
 	}
 }

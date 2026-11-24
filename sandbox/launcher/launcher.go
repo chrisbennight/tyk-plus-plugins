@@ -315,8 +315,10 @@ func (l *Launcher) listed(id string) bool {
 
 // containers counts the containers the runtime reports.
 func (l *Launcher) containers() int {
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupWait)
+	defer cancel()
 	name, argv := RuntimeCommand(l.config.Backend, "list", "")
-	out, err := exec.Command(name, argv...).Output()
+	out, err := exec.CommandContext(ctx, name, argv...).Output()
 	if err != nil {
 		return -1
 	}

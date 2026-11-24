@@ -37,6 +37,9 @@ type Config struct {
 	Max protocol.Limits
 }
 
+// minimumMemory is the smallest memory limit the engine can start in.
+const minimumMemory = 16 << 20
+
 // startAllowance covers starting a sandbox and its engine, which does not
 // count against a run's own time.
 const startAllowance = 10 * time.Second
@@ -210,6 +213,10 @@ func (s *Service) Handle(c net.Conn) {
 		requested = *first.Limits
 	}
 	limits := requested.Within(s.config.Max)
+	if limits.MemoryBytes < minimumMemory {
+		client.write(protocol.Failed(protocol.KindLimit, "the memory limit must be at least %d bytes", minimumMemory))
+		return
+	}
 	if len(first.Source) > limits.ProgramBytes {
 		client.write(protocol.Failed(protocol.KindLimit, "the program exceeds %d bytes", limits.ProgramBytes))
 		return
@@ -319,6 +326,13 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 			case protocol.TypeFailed:
 				if m.Failure == nil {
 					m = protocol.Failed(protocol.KindException, "the program failed")
+				}
+				// Only the service and the launcher report a host as busy or
+				// unavailable; a program cannot claim either for its own run.
+				switch m.Failure.Kind {
+				case protocol.KindLimit, protocol.KindException, protocol.KindProtocol:
+				default:
+					m = protocol.Failed(protocol.KindException, "%s", m.Failure.Message)
 				}
 				finish(protocol.Message{Type: protocol.TypeFailed, Failure: m.Failure})
 				return

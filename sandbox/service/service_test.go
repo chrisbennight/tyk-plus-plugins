@@ -91,6 +91,15 @@ func TestOversizedProgramAndBadInputAreRefused(t *testing.T) {
 	}
 }
 
+func TestMemoryBelowTheEngineMinimumIsALimit(t *testing.T) {
+	s, launched := testService(&protocol.Health{Backend: "gvisor", Ready: true})
+	tiny := protocol.Limits{MemoryBytes: 1024}
+	_, answer := exchange(t, s, protocol.Message{Type: protocol.TypeStart, Source: "return 1;", Limits: &tiny})
+	if answer.Type != protocol.TypeFailed || answer.Failure.Kind != protocol.KindLimit || *launched != 0 {
+		t.Errorf("got %+v, launched %d", answer.Failure, *launched)
+	}
+}
+
 func TestHealthQuery(t *testing.T) {
 	s, _ := testService(&protocol.Health{Backend: "runc", Ready: true, Active: 2})
 	_, answer := exchange(t, s, protocol.Message{Type: protocol.TypeHealth})

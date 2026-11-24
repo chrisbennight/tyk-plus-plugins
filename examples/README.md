@@ -55,7 +55,7 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 | `analyst` | Token | Role `analyst` |
 | `admin` | Token | Role `admin` |
 | `finance` | Token | Group `finance`, no role |
-| `scoped` | Token | Scope `notes:read` only |
+| `scoped` | Token | Scopes `notes:read payments:read`, as one space-separated string, and no role |
 | `indexer` | Key | Role `analyst` |
 | `deployer` | Key | Role `admin` |
 

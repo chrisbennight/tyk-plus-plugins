@@ -2,7 +2,6 @@ package drift
 
 import (
 	"maps"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -17,8 +16,13 @@ import (
 type Observations struct {
 	current  atomic.Pointer[observed]
 	sequence atomic.Uint64
-	// receiving makes ReceivedAt number and time replies in one order.
-	receiving sync.Mutex
+	// receipt is the last reply ReceivedAt numbered and timed.
+	receipt atomic.Pointer[receipt]
+}
+
+type receipt struct {
+	sequence uint64
+	at       time.Time
 }
 
 type observed struct {
@@ -65,10 +69,20 @@ func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 // ReceivedAt numbers a reply as Received does and takes its time with it, so
 // replies numbered in one order are timed in the same order, and what this
 // gateway shares orders them as it does.
+// It takes no lock: a number is taken after reading the last receipt, and
+// kept only if no other reply was received meanwhile, so each receipt has a
+// higher number than the last, and a time no earlier.
 func (o *Observations) ReceivedAt() (uint64, time.Time) {
-	o.receiving.Lock()
-	defer o.receiving.Unlock()
-	return o.sequence.Add(1), time.Now()
+	for {
+		last := o.receipt.Load()
+		next := &receipt{sequence: o.sequence.Add(1), at: time.Now()}
+		if last != nil && next.at.Before(last.at) {
+			next.at = last.at
+		}
+		if o.receipt.CompareAndSwap(last, next) {
+			return next.sequence, next.at
+		}
+	}
 }
 
 // Record stores what one reply, numbered by Received, declared. A newer

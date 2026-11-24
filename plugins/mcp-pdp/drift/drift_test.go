@@ -1,6 +1,7 @@
 package drift
 
 import (
+	"cmp"
 	"encoding/json"
 	"github.com/go-json-experiment/json/jsontext"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
@@ -728,5 +730,37 @@ func TestToolsTheCallerCanNeverCallAreLeftOut(t *testing.T) {
 	slices.Sort(recorded)
 	if !slices.Equal(recorded, []string{"change", "lookup"}) {
 		t.Fatalf("recorded %v", recorded)
+	}
+}
+
+func TestRepliesAreNumberedAndTimedInOneOrder(t *testing.T) {
+	var o Observations
+	type stamp struct {
+		sequence uint64
+		at       time.Time
+	}
+	stamps := make(chan stamp, 8000)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 1000 {
+				n, at := o.ReceivedAt()
+				stamps <- stamp{n, at}
+			}
+		}()
+	}
+	wg.Wait()
+	close(stamps)
+	var all []stamp
+	for s := range stamps {
+		all = append(all, s)
+	}
+	slices.SortFunc(all, func(a, b stamp) int { return cmp.Compare(a.sequence, b.sequence) })
+	for i := 1; i < len(all); i++ {
+		if all[i].sequence == all[i-1].sequence || all[i].at.Before(all[i-1].at) {
+			t.Fatalf("reply %d at %v after reply %d at %v", all[i].sequence, all[i].at, all[i-1].sequence, all[i-1].at)
+		}
 	}
 }

@@ -31,6 +31,8 @@ type entry struct {
 	sequence uint64
 	// charged is set while the tool counts against the proxy's limit.
 	charged bool
+	// matched is set when the declaration was the approved definition.
+	matched bool
 }
 
 // maxToolName is the longest tool name the MCP specification recommends. A
@@ -51,9 +53,9 @@ func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 // so a reply checked later cannot overwrite what a newer reply declared.
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 
-// Record stores what one reply, numbered by Received, declared. A
-// declaration that differs from the approved definition always updates a
-// tool; one that matches updates it only when newer than its record. A
+// Record stores what one reply, numbered by Received, declared. A newer
+// declaration always updates a tool; an older one only when it differs from
+// the approved definition and the record matched it. A
 // tool without approval is added only while the proxy has fewer than
 // maxUnapproved such tools and its name is not unusually long; otherwise the
 // proxy is marked incomplete. A tool stops counting once it is approved.
@@ -72,11 +74,10 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 		for _, d := range declared {
 			key := observationKey(proxy, d.Tool)
 			// Concurrent replies have no reliable order, so order only
-			// decides in the safe direction: a declaration that differs
-			// from the approved definition is always recorded, while one
-			// that matches must be newer than the record it replaces.
+			// decides in the safe direction: an older declaration replaces a
+			// newer record only to record a change over a match.
 			old, known := next.latest[key]
-			if known && old.sequence > received && d.Matches {
+			if known && old.sequence > received && (d.Matches || !old.matched) {
 				continue
 			}
 			sequence := max(received, old.sequence)
@@ -96,7 +97,7 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 				next.unapproved[proxy]++
 				charged = true
 			}
-			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: sequence, charged: charged}
+			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: sequence, charged: charged, matched: d.Matches}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return

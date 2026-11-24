@@ -509,3 +509,13 @@ func TestSuccessEnvelopesAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestAnOlderChangeDoesNotReplaceANewerOne(t *testing.T) {
+	var o Observations
+	older, newer := o.Received(), o.Received()
+	o.Record("governed", newer, []Observation{{Tool: "lookup", Fingerprint: "second", Approved: true}}, 10)
+	o.Record("governed", older, []Observation{{Tool: "lookup", Fingerprint: "first", Approved: true}}, 10)
+	if fp, _ := o.Latest("governed", "lookup"); fp != "second" {
+		t.Fatalf("recorded %q", fp)
+	}
+}

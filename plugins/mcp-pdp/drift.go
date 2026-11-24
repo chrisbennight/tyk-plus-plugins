@@ -76,7 +76,8 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		var declared []drift.Observation
 		out := drift.FilterToolsList(message, view, limits, func(tool, fingerprint string, approved bool) {
-			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+			want, _, _ := view.Approved(tool)
+			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved, Matches: approved && fingerprint == want})
 		})
 		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
 		return out

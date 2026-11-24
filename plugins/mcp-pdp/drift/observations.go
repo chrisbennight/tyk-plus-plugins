@@ -38,10 +38,11 @@ type entry struct {
 // record large.
 const maxToolName = 128
 
-// Observation is one tool an upstream declared.
+// Observation is one tool an upstream declared. Matches reports whether the
+// declared definition is the approved one.
 type Observation struct {
 	Tool, Fingerprint string
-	Approved          bool
+	Approved, Matches bool
 }
 
 func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
@@ -50,8 +51,9 @@ func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 // so a reply checked later cannot overwrite what a newer reply declared.
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 
-// Record stores what one reply, numbered by Received, declared. A tool is
-// updated only by a reply newer than the one it was last recorded from. A
+// Record stores what one reply, numbered by Received, declared. A
+// declaration that differs from the approved definition always updates a
+// tool; one that matches updates it only when newer than its record. A
 // tool without approval is added only while the proxy has fewer than
 // maxUnapproved such tools and its name is not unusually long; otherwise the
 // proxy is marked incomplete. A tool stops counting once it is approved.
@@ -69,10 +71,15 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 		}
 		for _, d := range declared {
 			key := observationKey(proxy, d.Tool)
+			// Concurrent replies have no reliable order, so order only
+			// decides in the safe direction: a declaration that differs
+			// from the approved definition is always recorded, while one
+			// that matches must be newer than the record it replaces.
 			old, known := next.latest[key]
-			if known && old.sequence > received {
+			if known && old.sequence > received && d.Matches {
 				continue
 			}
+			sequence := max(received, old.sequence)
 			// A tool already recorded is always updated, since that adds
 			// nothing to the record; only new tools without approval count
 			// against the limit.
@@ -89,7 +96,7 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 				next.unapproved[proxy]++
 				charged = true
 			}
-			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: received, charged: charged}
+			next.latest[key] = entry{fingerprint: d.Fingerprint, sequence: sequence, charged: charged}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return

@@ -424,10 +424,22 @@ func TestObservationsKeepTheNewestDeclaration(t *testing.T) {
 	var o Observations
 	older, newer := o.Received(), o.Received()
 	// The newer reply is recorded first; the older one, checked later, must
-	// not overwrite it.
+	// not replace a change with the approved definition.
 	o.Record("governed", newer, []Observation{{Tool: "lookup", Fingerprint: "changed", Approved: true}}, 10)
-	o.Record("governed", older, []Observation{{Tool: "lookup", Fingerprint: "approved", Approved: true}}, 10)
+	o.Record("governed", older, []Observation{{Tool: "lookup", Fingerprint: "approved", Approved: true, Matches: true}}, 10)
 	if fp, _ := o.Latest("governed", "lookup"); fp != "changed" {
+		t.Fatalf("recorded %q", fp)
+	}
+	// A change is recorded whatever its order.
+	first, second := o.Received(), o.Received()
+	o.Record("governed", second, []Observation{{Tool: "lookup", Fingerprint: "approved", Approved: true, Matches: true}}, 10)
+	o.Record("governed", first, []Observation{{Tool: "lookup", Fingerprint: "changed", Approved: true}}, 10)
+	if fp, _ := o.Latest("governed", "lookup"); fp != "changed" {
+		t.Fatalf("a change was ignored for its order: %q", fp)
+	}
+	// Only a newer matching declaration clears it.
+	o.Record("governed", o.Received(), []Observation{{Tool: "lookup", Fingerprint: "approved", Approved: true, Matches: true}}, 10)
+	if fp, _ := o.Latest("governed", "lookup"); fp != "approved" {
 		t.Fatalf("recorded %q", fp)
 	}
 }

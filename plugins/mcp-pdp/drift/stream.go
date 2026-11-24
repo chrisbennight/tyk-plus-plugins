@@ -120,8 +120,14 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			return out.Bytes(), io.EOF
 		}
 		if len(line) == 0 {
-			if data != nil {
-				out.Write(dataLines(r.transform(bytes.Join(data, []byte("\n")))))
+			switch joined := bytes.Join(data, []byte("\n")); {
+			case data == nil:
+			case len(joined) == 0:
+				// An event with empty data carries no message; servers send
+				// one to prime a stream for resumption, and clients skip it.
+				out.WriteString("data:\n")
+			default:
+				out.Write(dataLines(r.transform(joined)))
 			}
 			out.WriteString("\n")
 			return out.Bytes(), nil

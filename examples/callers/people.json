@@ -1,0 +1,11 @@
+{
+  "issuer": "https://issuer.example",
+  "audience": "examples-gateway",
+  "lifetimeSeconds": 3600,
+  "people": {
+    "analyst": {"roles": ["analyst"]},
+    "admin": {"roles": ["admin"]},
+    "finance": {"groups": ["finance"]},
+    "scoped": {"scope": "notes:read payments:read"}
+  }
+}

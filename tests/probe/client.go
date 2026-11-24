@@ -45,8 +45,9 @@ type response struct {
 	ID     json.RawMessage `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data,omitempty"`
 	} `json:"error"`
 }
 
@@ -56,27 +57,49 @@ type response struct {
 type conn struct {
 	version string // the version actually in use after negotiation
 	session string
+	// discovery records what server/discover did for a newer client: the
+	// newer version was offered, only older versions were offered, or the
+	// method was not supported at all.
+	discovery string
 }
+
+const (
+	discoveryNewer       = "newer"
+	discoveryOlderOnly   = "older-only"
+	discoveryUnsupported = "unsupported"
+)
 
 // connect opens a connection that prefers the given version. A newer client
 // tries server/discover first and falls back to the older handshake when the
-// upstream does not support it, as the MCP specification requires.
+// server does not offer the newer version, as the MCP specification requires.
 func connect(cred credential, version string) *conn {
 	c := &conn{version: version}
 	if version == newerProtocol {
 		r := c.rpc(cred, "server/discover", map[string]any{})
-		var discovered struct {
-			SupportedVersions []string `json:"supportedVersions"`
-		}
-		if r.Status == http.StatusOK && r.Error == nil && json.Unmarshal(r.Result, &discovered) == nil &&
-			slices.Contains(discovered.SupportedVersions, newerProtocol) {
-			return c
+		if r.Status == http.StatusOK && r.Error == nil {
+			var discovered struct {
+				SupportedVersions []string `json:"supportedVersions"`
+			}
+			check(json.Unmarshal(r.Result, &discovered) == nil && len(discovered.SupportedVersions) > 0,
+				"server/discover succeeded without listing versions: %v", r)
+			if slices.Contains(discovered.SupportedVersions, newerProtocol) {
+				c.discovery = discoveryNewer
+				return c
+			}
+			c.discovery = discoveryOlderOnly
+		} else {
+			check(r.Error != nil, "server/discover failed without a JSON-RPC error: %v", r)
+			c.discovery = discoveryUnsupported
 		}
 		c.version = olderProtocol
 	}
 	r := c.rpc(cred, "initialize", map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
 		"clientInfo": map[string]any{"name": "probe", "version": "1"}})
-	check(r.Status == http.StatusOK && r.Error == nil, "initialize failed: %+v", r)
+	var initialized struct {
+		ServerInfo struct{ Name string } `json:"serverInfo"`
+	}
+	check(r.Status == http.StatusOK && r.Error == nil && json.Unmarshal(r.Result, &initialized) == nil &&
+		initialized.ServerInfo.Name == "test-upstream", "initialize failed: %v", r)
 	if c.session != "" {
 		c.notify(cred, "notifications/initialized")
 	}

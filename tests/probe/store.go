@@ -160,8 +160,9 @@ func call(c *conn, cred credential, name string, arguments map[string]any, expec
 	before, _ := observed()
 	r := c.rpc(cred, "tools/call", map[string]any{"name": name, "arguments": arguments})
 	after, args := observed()
+	check(string(r.ID) == "1", "%s: reply ID %s does not match the request", name, r.ID)
 	if len(expected) == 0 {
-		check(r.Status == http.StatusForbidden && after == before, "%s: expected refusal with no dispatch, got %d %+v (requests %d -> %d)", name, r.Status, r, before, after)
+		check(r.Status == http.StatusForbidden && r.Error != nil && after == before, "%s: expected refusal with no dispatch, got %v (requests %d -> %d)", name, r, before, after)
 		return r
 	}
 	var result struct {
@@ -191,8 +192,10 @@ func refused(c *conn, cred credential) {
 	check((r.Status == http.StatusUnauthorized || r.Status == http.StatusForbidden) && after == before, "expected refusal, got %v", r)
 }
 
+// sameRefusal reports whether two refusals are indistinguishable to a client.
 func sameRefusal(a, b response) bool {
-	return a.Status == b.Status && reflect.DeepEqual(a.Error, b.Error) && string(a.ID) == string(b.ID)
+	return a.Error != nil && b.Error != nil && len(a.ID) > 0 && a.Status == b.Status &&
+		reflect.DeepEqual(a.Error, b.Error) && string(a.ID) == string(b.ID) && string(a.Result) == string(b.Result)
 }
 
 func must(err error) {

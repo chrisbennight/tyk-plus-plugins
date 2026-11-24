@@ -79,6 +79,12 @@ func policySuite(k keys) {
 		}
 	}
 	check(slices.Equal(names, []string{"active", "sets"}), "store contents %v", names)
+	setEntries, _ := os.ReadDir(filepath.Join(policyDir, "sets", shipped))
+	var setFiles []string
+	for _, e := range setEntries {
+		setFiles = append(setFiles, e.Name())
+	}
+	check(slices.Equal(setFiles, []string{"checks.json", "manifest.json", "rules.cedar", "tools.json"}), "shipped set contents %v", setFiles)
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(policyDir, "sets", shipped, name))
 		must(err)

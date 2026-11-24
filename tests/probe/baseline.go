@@ -14,10 +14,12 @@ import (
 // baseline is the common set of checks every supported client version must
 // pass against every supported upstream.
 func baseline(k keys, version string) {
-	// The newer protocol is used only when the upstream supports it; otherwise
-	// the client falls back to the older handshake, as the specification requires.
+	// UPSTREAM_DISCOVERY says what server/discover does on this upstream. A
+	// newer client uses the newer version only when it is offered and otherwise
+	// falls back to the older handshake, as the specification requires.
+	discovery := os.Getenv("UPSTREAM_DISCOVERY")
 	want := version
-	if version == newerProtocol && os.Getenv("UPSTREAM_SUPPORTS_NEWER") != "true" {
+	if version == newerProtocol && discovery != discoveryNewer {
 		want = olderProtocol
 	}
 	// Publish the baseline's whole set at once, independent of what earlier checks staged.
@@ -28,6 +30,9 @@ func baseline(k keys, version string) {
 	publish("activated", map[string]string{"rules.cedar": exampleRules, "tools.json": string(inventory), "checks.json": "[]"})
 	c := connect(k.operator, version)
 	check(c.version == want, "%s client negotiated %s, want %s", version, c.version, want)
+	if version == newerProtocol {
+		check(c.discovery == discovery, "%s client saw discovery %q, want %q", version, c.discovery, discovery)
+	}
 	catalog := catalogOf(c, k.operator)
 	check(catalog["lookup"] != nil && catalog["change"] != nil, "%s client listed %v", version, catalog)
 
@@ -35,11 +40,20 @@ func baseline(k keys, version string) {
 	call(c, k.support, "lookup", args("count", 1), "found")
 	denied := call(c, k.support, "change", args("count", 2))
 	unknown := call(c, k.support, "unknown", args("count", 2))
-	check(sameRefusal(denied, unknown), "%s: hidden %+v, unknown %+v", version, denied, unknown)
+	check(sameRefusal(denied, unknown), "%s: hidden %v, unknown %v", version, denied, unknown)
 	call(c, k.operator, "change", args("count", 2), "updated")
 	call(c, bearerCred(token("published", args("app_roles", []string{"support"}))), "lookup", args(), "found")
-	r := c.rpc(bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil))), "tools/list", map[string]any{})
-	check(r.Status == http.StatusForbidden, "%s: unidentified caller listed tools: %d %+v", version, r.Status, r)
+	// A caller that cannot be identified is refused on every method.
+	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
+	call(c, unidentified, "lookup", args())
+	methods := []string{"tools/list"}
+	if c.version == newerProtocol {
+		methods = append(methods, "server/discover")
+	}
+	for _, method := range methods {
+		r := c.rpc(unidentified, method, map[string]any{})
+		check(r.Status == http.StatusForbidden && r.Error != nil && string(r.ID) == "1", "%s: unidentified caller allowed %s: %v", version, method, r)
+	}
 
 	// The same checks through a real MCP client.
 	sdkBaseline(k, version, want)
@@ -67,6 +81,15 @@ func sdkSession(ctx context.Context, cred credential, version string) *mcp.Clien
 func sdkBaseline(k keys, version, want string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// A caller that cannot be identified cannot even connect.
+	client := mcp.NewClient(&mcp.Implementation{Name: "probe-sdk", Version: "1"}, nil)
+	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
+	transport := &mcp.StreamableClientTransport{Endpoint: gateway, HTTPClient: &http.Client{Transport: withHeaders{unidentified}}}
+	if session, err := client.Connect(ctx, transport, &mcp.ClientSessionOptions{ProtocolVersion: version}); err == nil {
+		session.Close()
+		panic(fmt.Sprintf("%s SDK client connected without an identifiable caller", version))
+	}
+
 	for _, caller := range []struct {
 		name string
 		cred credential
@@ -75,9 +98,8 @@ func sdkBaseline(k keys, version, want string) {
 		{"support token", bearerCred(token("published", args("app_roles", []string{"support"})))},
 	} {
 		session := sdkSession(ctx, caller.cred, version)
-		if result := session.InitializeResult(); result != nil {
-			check(result.ProtocolVersion == want, "%s SDK client (%s) negotiated %s, want %s", version, caller.name, result.ProtocolVersion, want)
-		}
+		result := session.InitializeResult()
+		check(result != nil && result.ProtocolVersion == want, "%s SDK client (%s) negotiated %+v, want %s", version, caller.name, result, want)
 		listing, err := session.ListTools(ctx, nil)
 		check(err == nil, "%s SDK client (%s) could not list tools: %v", version, caller.name, err)
 		names := map[string]bool{}
@@ -86,19 +108,23 @@ func sdkBaseline(k keys, version, want string) {
 		}
 		check(names["lookup"] && names["change"], "%s SDK client (%s) listed %v", version, caller.name, names)
 
-		// A permitted call runs with the caller's arguments.
-		result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "lookup", Arguments: args("count", 5)})
-		check(err == nil && !result.IsError && len(result.Content) == 1, "%s SDK client (%s) permitted call: %v %+v", version, caller.name, err, result)
-		text, ok := result.Content[0].(*mcp.TextContent)
-		check(ok && text.Text == "found", "%s SDK client (%s) got %+v", version, caller.name, result.Content)
-		_, seen := observed()
-		check(sameJSON(seen, args("count", 5)), "%s SDK client (%s): upstream saw %v", version, caller.name, seen)
+		// A permitted call reaches the upstream exactly once with the caller's arguments.
+		before, _ := observed()
+		called, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "lookup", Arguments: args("count", 5)})
+		after, seen := observed()
+		check(err == nil && !called.IsError && len(called.Content) == 1, "%s SDK client (%s) permitted call: %v %+v", version, caller.name, err, called)
+		text, ok := called.Content[0].(*mcp.TextContent)
+		check(ok && text.Text == "found", "%s SDK client (%s) got %+v", version, caller.name, called.Content)
+		check(after == before+1 && sameJSON(seen, args("count", 5)), "%s SDK client (%s): requests %d -> %d, upstream saw %v", version, caller.name, before, after, seen)
 
-		// A denied call never runs: the upstream still holds the previous arguments.
-		result, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "change", Arguments: args("count", 41)})
-		check(err != nil || (result != nil && result.IsError), "%s SDK client (%s) denied call succeeded: %+v", version, caller.name, result)
-		_, seen = observed()
-		check(sameJSON(seen, args("count", 5)), "%s SDK client (%s): denied call reached the upstream: %v", version, caller.name, seen)
+		// A denied call and an unknown tool never reach the upstream.
+		for _, name := range []string{"change", "unknown"} {
+			before, _ = observed()
+			called, err = session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args("count", 41)})
+			after, _ = observed()
+			check(err != nil || (called != nil && called.IsError), "%s SDK client (%s) call to %s succeeded: %+v", version, caller.name, name, called)
+			check(after == before, "%s SDK client (%s): call to %s reached the upstream (%d -> %d)", version, caller.name, name, before, after)
+		}
 		session.Close()
 	}
 }

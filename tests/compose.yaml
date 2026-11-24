@@ -29,7 +29,7 @@ services:
       target: probe
     environment:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?}
-      UPSTREAM_SUPPORTS_NEWER: ${UPSTREAM_SUPPORTS_NEWER:-true}
+      UPSTREAM_DISCOVERY: ${UPSTREAM_DISCOVERY:-newer}
     volumes:
       - policy:/policy
       - status:/status:ro

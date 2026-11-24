@@ -133,49 +133,6 @@ func TestDefinitionsAreValidated(t *testing.T) {
 	}
 }
 
-func TestFormatOneToleratesDefinitionsFormatTwoRefuses(t *testing.T) {
-	// A number beyond the range of a 64-bit float cannot be canonicalized.
-	tools := `{"governed": {"upstream": "https://u.example/mcp", "tools": {"lookup": {"facts": {"readOnly": true},
-	  "definition": {"name": "lookup", "inputSchema": {"type": "object", "properties": {"n": {"type": "number", "maximum": 1e400}}}}}}}}`
-	if _, err := Compile(Inputs{Rules: []byte(formatRules), Tools: []byte(tools), Checks: []byte("[]"), Format: legacyFormat}, "v"); err != nil {
-		t.Fatalf("a format-1 set that loaded before now fails: %v", err)
-	}
-	if _, err := Compile(Inputs{Rules: []byte(formatRules), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v"); err == nil {
-		t.Fatal("a format-2 set approved a definition without a fingerprint")
-	}
-}
-
-func TestWholeNumberAnnotationsAgreeWithFingerprints(t *testing.T) {
-	// Upstream annotations can only narrow access, so the rule that reads one
-	// is a forbid.
-	rules := []byte(`permit (principal, action, resource);
-forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 1}) };`)
-	decideWith := func(cost string) string {
-		definition := `{"name": "lookup", "annotations": {"cost": ` + cost + `}}`
-		tools := `{"governed": {"upstream": "https://u.example/mcp", "tools": {"lookup": {"definition": ` + definition + `}}}}`
-		s, err := Compile(Inputs{Rules: rules, Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
-		if err != nil {
-			t.Fatal(err)
-		}
-		return decide(s)
-	}
-	var fingerprints []string
-	for _, cost := range []string{"1", "1.0", "1e0"} {
-		if got := decideWith(cost); got != "policy_denied" {
-			t.Errorf("cost %s was not read as the integer 1: %s", cost, got)
-		}
-		fingerprints = append(fingerprints, fingerprint(t, `{"name": "lookup", "annotations": {"cost": `+cost+`}}`))
-	}
-	if fingerprints[0] != fingerprints[1] || fingerprints[0] != fingerprints[2] {
-		t.Fatalf("spellings of one number fingerprinted differently: %v", fingerprints)
-	}
-	if got := decideWith("1.5"); got != "permitted" {
-		t.Fatalf("a fractional annotation became an integer: %s", got)
-	}
-}
-
-// compileCost builds a one-tool set whose definition annotates a cost, in the
-// given format, and decides a call to it.
 func compileCost(t *testing.T, rules, cost string, format int) string {
 	t.Helper()
 	definition := `{"name": "lookup", "annotations": {"cost": ` + cost + `}}`
@@ -189,18 +146,6 @@ func compileCost(t *testing.T, rules, cost string, format int) string {
 		t.Fatal(err)
 	}
 	return decide(s)
-}
-
-func TestFormatOneAnnotationDecisionsAreUnchanged(t *testing.T) {
-	rules := `permit (principal, action, resource);
-forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 1}) };`
-	// Earlier builds read only integer spellings as numbers; format-1 sets keep that.
-	if got := compileCost(t, rules, "1", legacyFormat); got != "policy_denied" {
-		t.Fatalf("format 1, cost 1: %s", got)
-	}
-	if got := compileCost(t, rules, "1.0", legacyFormat); got != "permitted" {
-		t.Fatalf("format 1, cost 1.0 changed meaning: %s", got)
-	}
 }
 
 func TestNullIsNeverANumber(t *testing.T) {
@@ -218,21 +163,48 @@ forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers
 	}
 }
 
-func TestLargeIntegersAgreeWithFingerprints(t *testing.T) {
-	// Both spellings canonicalize to the same binary64 number.
-	rules := `permit (principal, action, resource);
-forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 9007199254740992}) };`
-	a, b := "9007199254740993", "9007199254740993.0"
-	if fingerprint(t, `{"name":"lookup","annotations":{"cost":`+a+`}}`) != fingerprint(t, `{"name":"lookup","annotations":{"cost":`+b+`}}`) {
-		t.Fatal("the two spellings fingerprinted differently")
-	}
-	if compileCost(t, rules, a, FormatVersion) != compileCost(t, rules, b, FormatVersion) {
-		t.Fatal("two spellings with one fingerprint produced different decisions")
-	}
-}
-
 func TestMetaDoesNotBlockAFingerprint(t *testing.T) {
 	if _, err := DefinitionFingerprint([]byte(`{"name": "lookup", "_meta": {"big": 1e400}}`)); err != nil {
 		t.Fatalf("ignored metadata blocked the fingerprint: %v", err)
+	}
+}
+
+func TestNumbersAreFingerprintedExactly(t *testing.T) {
+	// No two different numbers share a fingerprint, even beyond the precision
+	// of a 64-bit float, and numbers outside its range still fingerprint.
+	pairs := [][2]string{{"1", "1.0"}, {"1", "1e0"}, {"9007199254740993", "9007199254740992"}, {"1e400", "2e400"}}
+	for _, pair := range pairs {
+		a := fingerprint(t, `{"name":"lookup","inputSchema":{"maximum":`+pair[0]+`}}`)
+		b := fingerprint(t, `{"name":"lookup","inputSchema":{"maximum":`+pair[1]+`}}`)
+		if a == b {
+			t.Errorf("%s and %s share a fingerprint", pair[0], pair[1])
+		}
+	}
+}
+
+func TestAnnotationsReadTheSameInBothFormats(t *testing.T) {
+	rules := `permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 1}) };`
+	for _, format := range []int{legacyFormat, FormatVersion} {
+		// Only an integer spelling is an integer fact, as in earlier builds.
+		if got := compileCost(t, rules, "1", format); got != "policy_denied" {
+			t.Errorf("format %d, cost 1: %s", format, got)
+		}
+		if got := compileCost(t, rules, "1.0", format); got != "permitted" {
+			t.Errorf("format %d, cost 1.0: %s", format, got)
+		}
+		// Integers beyond the precision of a 64-bit float are read exactly.
+		large := `permit (principal, action, resource);
+forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers.contains({name: "cost", value: 9007199254740993}) };`
+		if got := compileCost(t, large, "9007199254740993", format); got != "policy_denied" {
+			t.Errorf("format %d, a large integer was not read exactly: %s", format, got)
+		}
+		if got := compileCost(t, large, "9007199254740992", format); got != "permitted" {
+			t.Errorf("format %d, a neighbouring integer matched: %s", format, got)
+		}
+		// Out-of-range numbers do not stop a set from loading.
+		if got := compileCost(t, rules, "1e400", format); got != "permitted" {
+			t.Errorf("format %d, cost 1e400: %s", format, got)
+		}
 	}
 }

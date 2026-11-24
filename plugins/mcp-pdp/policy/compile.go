@@ -13,7 +13,6 @@ import (
 	"github.com/cedar-policy/cedar-go/x/exp/schema"
 	"github.com/cedar-policy/cedar-go/x/exp/schema/validate"
 	jsonv2 "github.com/go-json-experiment/json"
-	"github.com/gowebpki/jcs"
 )
 
 //go:embed schema.cedarschema
@@ -26,8 +25,7 @@ type toolDefinition struct {
 	facts       cedar.RecordMap
 	// raw is the definition as published, kept to fingerprint it.
 	raw []byte
-	// fingerprint identifies the exact definition the operator approved. It
-	// is set for format-2 sets only.
+	// fingerprint identifies the exact definition the operator approved.
 	fingerprint string
 }
 
@@ -37,7 +35,7 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	d.raw = append([]byte(nil), data...)
-	facts, err := annotationFacts(d.Annotations, false)
+	facts, err := annotationFacts(d.Annotations)
 	if err != nil {
 		return err
 	}
@@ -45,22 +43,14 @@ func (d *toolDefinition) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// annotationFacts turns upstream annotations into the facts rules read.
-// Format-1 sets read each value as written, as they always have. Format-2
-// sets read each value's RFC 8785 canonical form, the same text the
-// definition's fingerprint covers, so two spellings that share a fingerprint
-// always produce the same facts. JSON null is never a fact.
-func annotationFacts(annotations map[string]json.RawMessage, canonical bool) (cedar.RecordMap, error) {
+// annotationFacts turns upstream annotations into the facts rules read, from
+// each value as written: only an integer spelling is an integer fact, and
+// JSON null is never a fact. A definition's fingerprint keeps numbers as
+// written too, so a different spelling is a reviewed change.
+func annotationFacts(annotations map[string]json.RawMessage) (cedar.RecordMap, error) {
 	values := scalarFacts{}
 	readOnly := json.RawMessage(nil)
 	for name, raw := range annotations {
-		if canonical {
-			canon, err := jcs.Transform(raw)
-			if err != nil {
-				return nil, fmt.Errorf("annotation %q: %w", name, err)
-			}
-			raw = canon
-		}
 		if name == "readOnlyHint" {
 			readOnly = raw
 		}
@@ -214,14 +204,10 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 			if err := t.prepare(name); err != nil {
 				return nil, err
 			}
-			// Format-2 sets approve exact definitions, so each must have a
-			// fingerprint, and their annotation facts come from the same
-			// canonical text. Format-1 sets predate fingerprints and load as before.
-			if in.Format != legacyFormat && t.Definition != nil {
+			// Every approved definition has a fingerprint, so drift review can
+			// compare it exactly. Any definition that loads has one.
+			if t.Definition != nil {
 				if t.Definition.fingerprint, err = DefinitionFingerprint(t.Definition.raw); err != nil {
-					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
-				}
-				if t.Definition.facts, err = annotationFacts(t.Definition.Annotations, true); err != nil {
 					return nil, fmt.Errorf("tool %q for proxy %q: %w", name, proxy, err)
 				}
 			}

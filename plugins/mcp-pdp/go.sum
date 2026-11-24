@@ -2,5 +2,3 @@ github.com/cedar-policy/cedar-go v1.9.3 h1:ClVTAiyHkhh6FDZgA9/zBucRFESthIIcEXKEX
 github.com/cedar-policy/cedar-go v1.9.3/go.mod h1:xF1pHCQW69SIyMguq5BX1ZP9CwdessfnZELtjUpyW7U=
 github.com/go-json-experiment/json v1.27.2 h1:rZIyqYh+Qq+nEa+Y5iwohr8h7G/MfLJqu2CD4/ZONqM=
 github.com/go-json-experiment/json v1.27.2/go.mod h1:tphK2c80bpPhMOI4v6bIc2xWywPfbqi1Z06+RcrMkDg=
-github.com/gowebpki/jcs v1.0.2 h1:IY0Iv76ThSvocWinl2rphYmGLhMufS3ZD1giKqkI6ps=
-github.com/gowebpki/jcs v1.0.2/go.mod h1:caHbxgiKxrUu6KNItCUKoggR5/ZUSNxVCm9ZxWJXR0U=

@@ -121,7 +121,7 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.
 
-Each approved tool definition has a fingerprint: the SHA-256 of its RFC 8785 canonical JSON, ignoring the top-level `_meta` member. Field order, whitespace and different spellings of the same number (`1`, `1.0`, `1e0`) don't change it; any other change does. A set whose definitions repeat a key is rejected. In a format-2 set, rules see each upstream annotation as its canonical value, the same text the fingerprint covers, so two definitions with one fingerprint always produce the same facts. Format-1 sets read annotations as written, exactly as before.
+Each approved tool definition has a fingerprint: the SHA-256 of its canonical JSON, ignoring the top-level `_meta` member. In the canonical form object keys are sorted, whitespace is removed, and strings are compared by their text rather than their escapes; numbers keep their exact written form, so `1` and `1.0` are different definitions. Any change other than key order, whitespace or string escapes changes the fingerprint. A definition that repeats a key is rejected. Rules read annotation values as written in every format: only an integer spelling is an integer fact, and `null` is never a number.
 
 ### The policy store
 
@@ -142,7 +142,7 @@ Earlier builds published sets with `tools.json` instead of `approved_tools.json`
 
 Upgrade every gateway that shares a store before publishing with the new `cedar-policy`, because it always publishes format 2 and older gateways cannot read it. Until upgraded, an older gateway treats a format-2 set as not ready: if it is running, it keeps enforcing its current set; if it restarts, it has no valid set and denies every tool call. To roll back while older gateways remain, activate the previous format-1 set with `cedar-policy activate`.
 
-Format-1 sets load exactly as before. Only format-2 sets require each approved definition to have a fingerprint, so a definition that cannot be canonicalized, for example one with a number outside the range of a 64-bit float, is refused when converting to format 2 rather than when loading an older set.
+Format-1 sets load and decide exactly as before, and converting one to format 2 changes no decision: both formats read definitions the same way.
 
 ### Upgrading from the three-file layout
 

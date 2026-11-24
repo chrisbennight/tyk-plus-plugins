@@ -1,6 +1,10 @@
 package policy
 
-import "testing"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
 
 func fingerprint(t *testing.T, definition string) string {
 	t.Helper()
@@ -53,5 +57,16 @@ func TestFingerprintRejectsAmbiguousDefinitions(t *testing.T) {
 		if _, err := DefinitionFingerprint([]byte(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+func TestFingerprintIsTheHashOfTheCanonicalForm(t *testing.T) {
+	got, err := DefinitionFingerprint([]byte(`{"name": "t", "b": [1.0, {"y": "\u0041", "x": null}], "a": true, "_meta": {"z": 1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(`{"a":true,"b":[1.0,{"x":null,"y":"A"}],"name":"t"}`))
+	if want := hex.EncodeToString(sum[:]); got != want {
+		t.Fatalf("got %s, want %s", got, want)
 	}
 }

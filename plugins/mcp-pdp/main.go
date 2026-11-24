@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/TykTechnologies/tyk/ctx"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/identity"
 	jsonv2 "github.com/go-json-experiment/json"
 )
@@ -34,6 +35,15 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal(body, &envelope)
 			slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "reason", "invalid_caller")
 			refuse(w, envelope.ID, "Caller not identified")
+			return
+		}
+		// CheckResponse reads tools/list replies on proxies under drift
+		// review, so there the client's request for compression is not
+		// passed upstream. A Go HTTP client that asks for compression on its
+		// own also decompresses the reply itself.
+		if ctx.GetMCPMethod(r) == "tools/list" && underDriftReview(r) {
+			r.Header.Del("Accept-Encoding")
+			rememberListRequest(r)
 		}
 		return
 	}
@@ -63,8 +73,19 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		reason = "missing_proxy"
 	default:
 		reason = "invalid_call"
+		proxy := oas.GetTykExtension().Info.ID
 		if validBody && call.Method == "tools/call" && call.Params.Name == name {
-			reason, rules = state.Decide(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
+			// Under drift enforcement a tool must be approved, and the
+			// definition its upstream last declared must be the approved one.
+			if view, enforcing := state.Drift(proxy); enforcing {
+				latest, seen := observed.Latest(proxy, name)
+				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))
+			} else {
+				reason = ""
+			}
+			if reason == "" {
+				reason, rules = state.Decide(who, proxy, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
+			}
 		}
 	}
 	slog.Info("Cedar authorization", "identity", method, "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules)

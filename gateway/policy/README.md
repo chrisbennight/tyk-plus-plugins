@@ -117,6 +117,41 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 {"governed": "Use lookup to find records before changing them."}
 ```
 
+## Drift review
+
+An upstream can change a tool's definition after you reviewed it, for example to add instructions to its description. Drift review makes the gateway pass on only the definitions you approved. It applies to a proxy once its entry in `approved_tools.json` has a `drift` object, so turning it on is a reviewed step:
+
+```json
+{
+  "governed": {
+    "upstream": "https://mcp.company.example/mcp",
+    "drift": {"changedTools": "hide"},
+    "tools": {
+      "lookup": {"definition": {"name": "lookup", "description": "Find a record", "inputSchema": {"type": "object"}}}
+    }
+  }
+}
+```
+
+Under drift review:
+
+- A tool is approved when its entry has a `definition`. A tool without one is treated as not approved.
+- `tools/list` replies, plain or streamed, contain only tools whose upstream definition has the same fingerprint as the approved one, and those tools are sent as their approved definition, so a top-level `_meta` member is the approved one too. Tools the upstream added and tools without an approved definition are left out. Each tool is listed at most once, and a reply that declares one tool with conflicting definitions counts as a changed definition.
+- `changedTools` decides what happens to an approved tool whose upstream definition changed: `hide` (the default) leaves it out of lists, and `serve-approved` lists the approved definition instead of the upstream's. Either way, calls to it are refused until you approve the new definition or the upstream returns to the approved one.
+- A call to a tool that is not approved, or whose upstream last listed a different definition, is refused with the same reply as any other denied call, before rules are evaluated.
+- Activation checks apply the same rule: a check that expects a permit for a tool without an approved definition rejects the set, and one that expects a denial passes.
+- Each gateway compares calls with the definitions it last saw in a `tools/list` reply, including definitions of tools that were not approved when listed, so approving a definition the upstream no longer declares does not let calls through. Until a gateway has seen a tool in a list, it checks calls to it against approval alone.
+- A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error. Checked replies carry `Cache-Control: private, no-cache` and no upstream `ETag`, because they depend on your approvals as well as the upstream. A streamed list that was already open when drift review started on its proxy ends at that point, and the client lists again through the check.
+
+Two settings bound the work of checking lists:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CEDAR_PENDING_MAX_DEFINITION_BYTES` | `262144` | The largest upstream tool definition the gateway fingerprints. A larger one counts as a changed definition, so raise this if you approve larger definitions. |
+| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy. Once a proxy passes the limit, or declares a tool name longer than 128 bytes, a call to a tool the gateway has not seen listed is refused until a list shows it. |
+
+The `drift` object also accepts `changedInstructions` (`replace`, the default, or `strip`), `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). The gateway validates these fields; later releases act on them.
+
 ## Deploying changes
 
 A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.

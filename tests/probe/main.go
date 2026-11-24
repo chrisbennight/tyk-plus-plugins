@@ -27,6 +27,7 @@ func main() {
 	policySuite(k)
 	for _, version := range []string{olderProtocol, newerProtocol} {
 		baseline(k, version)
+		driftSuite(k, version)
 	}
 	leaveRejectedSet(k)
 }

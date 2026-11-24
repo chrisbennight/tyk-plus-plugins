@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -24,30 +25,65 @@ func DefinitionFingerprint(definition []byte) (string, error) {
 	if dec.PeekKind() != '{' {
 		return "", errors.New("definition must be a JSON object")
 	}
-	canonical, err := canonicalValue(dec, true)
+	root, err := canonicalValue(dec, true)
 	if err != nil {
 		return "", err
 	}
 	if _, err := dec.ReadToken(); err != io.EOF {
 		return "", errors.New("definition has data after the object")
 	}
-	sum := sha256.Sum256(canonical)
-	return hex.EncodeToString(sum[:]), nil
+	sum := sha256.New()
+	root.writeTo(bufio.NewWriter(sum))
+	return hex.EncodeToString(sum.Sum(nil)), nil
+}
+
+// canonical is a value in canonical form, kept as a tree so each byte is
+// written once: copying a child's text into every enclosing level would make
+// the work grow with depth times size.
+type canonical struct {
+	// text is a scalar's canonical text, or an object member's quoted key.
+	text []byte
+	// open and close are '{' and '}' or '[' and ']' for a container.
+	open, close byte
+	// children are an array's items, or an object's members sorted by key,
+	// each a key node whose single child is the value.
+	children []*canonical
+}
+
+func (c *canonical) writeTo(w *bufio.Writer) {
+	defer w.Flush()
+	c.write(w)
+}
+
+func (c *canonical) write(w *bufio.Writer) {
+	if c.open == 0 {
+		w.Write(c.text)
+		if c.children != nil {
+			w.WriteByte(':')
+			c.children[0].write(w)
+		}
+		return
+	}
+	w.WriteByte(c.open)
+	for i, child := range c.children {
+		if i > 0 {
+			w.WriteByte(',')
+		}
+		child.write(w)
+	}
+	w.WriteByte(c.close)
 }
 
 // canonicalValue reads one value from the decoder and returns its canonical
 // form. At the top level the _meta member is left out.
-func canonicalValue(dec *jsontext.Decoder, top bool) ([]byte, error) {
+func canonicalValue(dec *jsontext.Decoder, top bool) (*canonical, error) {
 	switch dec.PeekKind() {
 	case '{':
 		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		type member struct {
-			key   string
-			value []byte
-		}
-		var members []member
+		object := &canonical{open: '{', close: '}'}
+		var keys []string
 		for dec.PeekKind() != '}' {
 			token, err := dec.ReadToken()
 			if err != nil {
@@ -61,55 +97,56 @@ func canonicalValue(dec *jsontext.Decoder, top bool) ([]byte, error) {
 			if top && key == "_meta" {
 				continue
 			}
-			members = append(members, member{key, value})
+			quoted, err := jsontext.AppendQuote(nil, key)
+			if err != nil {
+				return nil, err
+			}
+			keys = append(keys, key)
+			object.children = append(object.children, &canonical{text: quoted, children: []*canonical{value}})
 		}
 		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		slices.SortFunc(members, func(a, b member) int { return strings.Compare(a.key, b.key) })
-		out := []byte{'{'}
-		for i, m := range members {
-			if i > 0 {
-				out = append(out, ',')
-			}
-			var err error
-			if out, err = jsontext.AppendQuote(out, m.key); err != nil {
-				return nil, err
-			}
-			out = append(append(out, ':'), m.value...)
+		order := make([]int, len(keys))
+		for i := range order {
+			order[i] = i
 		}
-		return append(out, '}'), nil
+		slices.SortFunc(order, func(a, b int) int { return strings.Compare(keys[a], keys[b]) })
+		sorted := make([]*canonical, len(order))
+		for i, at := range order {
+			sorted[i] = object.children[at]
+		}
+		object.children = sorted
+		return object, nil
 	case '[':
 		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		out := []byte{'['}
-		for first := true; dec.PeekKind() != ']'; first = false {
+		array := &canonical{open: '[', close: ']'}
+		for dec.PeekKind() != ']' {
 			value, err := canonicalValue(dec, false)
 			if err != nil {
 				return nil, err
 			}
-			if !first {
-				out = append(out, ',')
-			}
-			out = append(out, value...)
+			array.children = append(array.children, value)
 		}
 		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		return append(out, ']'), nil
+		return array, nil
 	case '"':
 		token, err := dec.ReadToken()
 		if err != nil {
 			return nil, err
 		}
-		return jsontext.AppendQuote(nil, token.String())
+		text, err := jsontext.AppendQuote(nil, token.String())
+		return &canonical{text: text}, err
 	default:
 		// Numbers, true, false and null keep their exact text.
 		value, err := dec.ReadValue()
 		if err != nil {
 			return nil, err
 		}
-		return append([]byte(nil), value...), nil
+		return &canonical{text: append([]byte(nil), value...)}, nil
 	}
 }

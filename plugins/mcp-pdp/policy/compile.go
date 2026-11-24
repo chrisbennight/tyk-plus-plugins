@@ -135,6 +135,7 @@ func (t *tool) prepare(name string) error {
 type inventory struct {
 	Upstream string           `json:"upstream"`
 	Tools    map[string]*tool `json:"tools"`
+	Drift    *driftSettings   `json:"drift"`
 }
 
 // Snapshot is a validated configuration ready to decide tool calls. Version
@@ -196,6 +197,11 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 	for proxy, inv := range s.tools {
 		if proxy == "" || inv.Upstream == "" || inv.Tools == nil {
 			return nil, fmt.Errorf("invalid inventory for proxy %q", proxy)
+		}
+		if inv.Drift != nil {
+			if err := inv.Drift.validate(proxy); err != nil {
+				return nil, err
+			}
 		}
 		for name, t := range inv.Tools {
 			if name == "" || t == nil {
@@ -266,6 +272,22 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 			}}
 		}
 		reason, _ := candidate.Decide(c.Caller, c.Proxy, c.Upstream, c.Tool, c.Arguments)
+		// Under drift review a listed tool without an approved definition is
+		// refused before rules are evaluated, so a check of it cannot expect a
+		// permit; a check expecting a denial still passes. A tool that is not
+		// listed, or a check naming another upstream, keeps the decision above,
+		// so a misspelled or removed tool cannot pass a check unnoticed.
+		inv, listed := candidate.tools[c.Proxy]
+		_, listed = inv.Tools[c.Tool]
+		listed = listed && inv.Upstream == c.Upstream
+		if view, enforcing := candidate.Drift(c.Proxy); enforcing && c.HypotheticalTool == nil && listed {
+			if _, _, approved := view.Approved(c.Tool); !approved {
+				reason = "unapproved_tool"
+				if c.Expect == "policy_denied" {
+					reason = c.Expect
+				}
+			}
+		}
 		if reason != c.Expect {
 			return nil, fmt.Errorf("activation check %d expected %s, got %s", i, c.Expect, reason)
 		}

@@ -237,4 +237,65 @@ func TestDeeplyNestedDefinitionsFingerprintQuickly(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("a %d-level definition took %s", depth, elapsed)
 	}
+	// A large value deep inside is written once, not once per enclosing level.
+	large := strings.Repeat(`{"items":`, depth) + `{"description":"` + strings.Repeat("x", 4<<20) + `"}` + strings.Repeat("}", depth)
+	start = time.Now()
+	if _, err := DefinitionFingerprint([]byte(`{"name":"lookup","inputSchema":` + large + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("a %d-level definition with a large value took %s", depth, elapsed)
+	}
+}
+
+func TestDriftSettingsAreValidated(t *testing.T) {
+	compile := func(drift string) error {
+		tools := `{"governed": {"upstream": "https://u.example/mcp", "drift": ` + drift + `, "tools": {}}}`
+		_, err := Compile(Inputs{Rules: []byte(""), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
+		return err
+	}
+	fp := strings.Repeat("a", 64)
+	for _, good := range []string{`{}`, `{"changedTools": "serve-approved", "changedInstructions": "strip"}`,
+		`{"rejectedTools": {"lookup": ["` + fp + `"]}, "rejectedInstructions": ["` + fp + `"]}`} {
+		if err := compile(good); err != nil {
+			t.Errorf("%s: %v", good, err)
+		}
+	}
+	for _, bad := range []string{`{"changedTools": "show"}`, `{"changedInstructions": "keep"}`, `{"rejectedTools": {"lookup": ["abc"]}}`,
+		`{"rejectedInstructions": ["abc"]}`, `{"rejectedTools": {"": ["` + fp + `"]}}`, `{"unknown": true}`} {
+		if err := compile(bad); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}
+
+func TestActivationChecksApplyDriftReview(t *testing.T) {
+	compile := func(drift, expect string) error {
+		tools := `{"governed": {"upstream": "https://u.example/mcp"` + drift + `, "tools": {"lookup": {}}}}`
+		checks := `[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookup", "expect": "` + expect + `"}]`
+		_, err := Compile(Inputs{Rules: []byte(`permit (principal, action, resource);`), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte(checks)}, "v")
+		return err
+	}
+	if err := compile("", "permitted"); err != nil {
+		t.Fatal(err)
+	}
+	// Under drift review lookup has no approved definition, so it is refused.
+	if err := compile(`, "drift": {}`, "permitted"); err == nil || !strings.Contains(err.Error(), "unapproved_tool") {
+		t.Fatalf("accepted a permit for an unapproved tool: %v", err)
+	}
+	// A check that expects the denial passes.
+	if err := compile(`, "drift": {}`, "policy_denied"); err != nil {
+		t.Fatal(err)
+	}
+	// A denial check naming a tool that is not listed, or the wrong upstream,
+	// does not pass on drift review's account.
+	for _, check := range []string{
+		`[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookpu", "expect": "policy_denied"}]`,
+		`[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://other.example/mcp", "tool": "lookup", "expect": "policy_denied"}]`,
+	} {
+		tools := `{"governed": {"upstream": "https://u.example/mcp", "drift": {}, "tools": {"lookup": {}}}}`
+		if _, err := Compile(Inputs{Rules: []byte(`permit (principal, action, resource);`), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte(check)}, "v"); err == nil {
+			t.Errorf("accepted %s", check)
+		}
+	}
 }

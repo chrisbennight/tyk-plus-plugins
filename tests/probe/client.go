@@ -65,6 +65,8 @@ type conn struct {
 	version string // the version actually in use after negotiation
 	session string
 	lastID  int
+	// lastStreamed records whether the last reply arrived as a stream.
+	lastStreamed bool
 	// discovery records what server/discover did for a newer client: the
 	// newer version was offered, only older versions were offered, or the
 	// method was not supported at all.
@@ -168,9 +170,11 @@ func (c *conn) rpc(cred credential, method string, params map[string]any) respon
 	if id := res.Header.Get("Mcp-Session-Id"); id != "" && method == "initialize" {
 		c.session = id
 	}
+	c.lastStreamed = strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream")
 	r := decode(res, id)
-	if r.JSONRPC != "" {
-		check(string(r.ID) == strconv.Itoa(id), "%s: reply ID %s does not match request %d", method, r.ID, id)
+	// A reply that carries a result or an error must be JSON-RPC and echo the ID.
+	if r.JSONRPC != "" || r.Result != nil || r.Error != nil {
+		check(r.JSONRPC == "2.0" && string(r.ID) == strconv.Itoa(id), "%s: reply %s does not answer request %d", method, r.Raw, id)
 	}
 	return r
 }

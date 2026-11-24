@@ -36,6 +36,14 @@ func baseline(k keys, version string) {
 	}
 	catalog := catalogOf(c, k.operator)
 	check(catalog["lookup"] != nil && catalog["change"] != nil, "%s client listed %v", version, catalog)
+	// The upstream must really use the transport this job declares.
+	streamed, sessions := os.Getenv("UPSTREAM_STREAM") != "", os.Getenv("UPSTREAM_SESSIONS") != ""
+	check(c.lastStreamed == streamed, "%s client: streamed reply %v, want %v", version, c.lastStreamed, streamed)
+	// Some releases issue a session ID even when stateless, so only a job that
+	// declares sessions is checked: it must receive one.
+	if c.version == olderProtocol && sessions {
+		check(c.session != "", "%s client: no session from an upstream that keeps sessions", version)
+	}
 
 	// Exact checks: where each call went and how it was refused.
 	call(c, k.support, "lookup", args("count", 1), "found")
@@ -43,7 +51,11 @@ func baseline(k keys, version string) {
 	unknown := call(c, k.support, "unknown", args("count", 2))
 	check(sameRefusal(denied, unknown), "%s: hidden %v, unknown %v", version, denied, unknown)
 	call(c, k.operator, "change", args("count", 2), "updated")
-	call(c, bearerCred(token("published", args("app_roles", []string{"support"}))), "lookup", args(), "found")
+	supportToken := bearerCred(token("published", args("app_roles", []string{"support"})))
+	call(c, supportToken, "lookup", args(), "found")
+	tokenDenied := call(c, supportToken, "change", args("count", 2))
+	tokenUnknown := call(c, supportToken, "unknown", args("count", 2))
+	check(sameRefusal(tokenDenied, tokenUnknown) && sameRefusal(tokenDenied, denied), "%s: token caller hidden %v, unknown %v", version, tokenDenied, tokenUnknown)
 	// A caller that cannot be identified is refused on every method.
 	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
 	call(c, unidentified, "lookup", args())
@@ -123,14 +135,18 @@ func sdkBaseline(k keys, version, want string) {
 		check(ok && text.Text == "found", "%s SDK client (%s) got %+v", version, caller.name, called.Content)
 		check(after == before+1 && sameJSON(seen, args("count", 5)), "%s SDK client (%s): requests %d -> %d, upstream saw %v", version, caller.name, before, after, seen)
 
-		// A denied call and an unknown tool never reach the upstream.
+		// A denied call and an unknown tool never reach the upstream, and the
+		// client cannot tell them apart.
+		var refusals []string
 		for _, name := range []string{"change", "unknown"} {
 			before, _ = observed()
 			called, err = session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args("count", 41)})
 			after, _ = observed()
 			check(err != nil && isRefusal(err), "%s SDK client (%s) call to %s was not refused by the gateway: %v %+v", version, caller.name, name, err, called)
 			check(after == before, "%s SDK client (%s): call to %s reached the upstream (%d -> %d)", version, caller.name, name, before, after)
+			refusals = append(refusals, err.Error())
 		}
+		check(refusals[0] == refusals[1], "%s SDK client (%s): hidden %q, unknown %q", version, caller.name, refusals[0], refusals[1])
 		session.Close()
 	}
 }

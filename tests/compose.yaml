@@ -29,7 +29,10 @@ services:
       target: probe
     environment:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?}
+      # The probe checks that the upstream behaves as this job declares.
       UPSTREAM_DISCOVERY: ${UPSTREAM_DISCOVERY:-newer}
+      UPSTREAM_STREAM: ${UPSTREAM_STREAM:-}
+      UPSTREAM_SESSIONS: ${UPSTREAM_SESSIONS:-}
     volumes:
       - policy:/policy
       - status:/status:ro

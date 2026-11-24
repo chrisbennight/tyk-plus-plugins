@@ -82,40 +82,17 @@ func TestVisibilityPrecision(t *testing.T) {
 		if got := s.Visible(who, "p", c.tool); got != c.want {
 			t.Errorf("%s calling %s: visible=%v, want %v (%s)", c.role, c.tool, got, c.want, c.why)
 		}
-		if got := s.VisibleTools(who, "p", DefaultVisibilityBatchThreshold)[c.tool]; got != c.want {
+		if got := s.VisibleTools(who, "p")[c.tool]; got != c.want {
 			t.Errorf("%s calling %s: listed=%v, want %v (%s)", c.role, c.tool, got, c.want, c.why)
 		}
-	}
-}
-
-func TestBatchVisibilityNeverHidesUsableTools(t *testing.T) {
-	s := visibilitySnapshot(t)
-	for _, c := range visibilityCases {
-		who := Caller{Issuer: "i", Subject: c.role, Roles: []string{c.role}}
-		// A threshold of zero checks every proxy in one batch.
-		if c.want && !s.VisibleTools(who, "p", 0)[c.tool] {
-			t.Errorf("%s calling %s: the batch check hid a usable tool (%s)", c.role, c.tool, c.why)
-		}
-	}
-	// The batch check may show extra tools, but a permit limited to one role
-	// never reveals a tool to other callers, and tools without declared
-	// arguments are decided exactly.
-	nobody := s.VisibleTools(Caller{Issuer: "i", Subject: "nobody", Roles: []string{"nobody"}}, "p", 0)
-	for _, tool := range []string{"report", "ordered", "split", "excepted", "branched"} {
-		if nobody[tool] {
-			t.Errorf("the batch check revealed the role-limited tool %s to another caller", tool)
-		}
-	}
-	if s.VisibleTools(Caller{Issuer: "i", Subject: "support", Roles: []string{"support"}}, "p", 0)["plain"] {
-		t.Error("the batch check showed a tool without arguments that no call can use")
 	}
 }
 
 func TestVisibilityIsCachedPerCallerFacts(t *testing.T) {
 	s := visibilitySnapshot(t)
 	// The same subject with different roles must not share a result.
-	support := s.VisibleTools(Caller{Issuer: "i", Subject: "x", Roles: []string{"support"}}, "p", DefaultVisibilityBatchThreshold)
-	guest := s.VisibleTools(Caller{Issuer: "i", Subject: "x", Roles: []string{"guest"}}, "p", DefaultVisibilityBatchThreshold)
+	support := s.VisibleTools(Caller{Issuer: "i", Subject: "x", Roles: []string{"support"}}, "p")
+	guest := s.VisibleTools(Caller{Issuer: "i", Subject: "x", Roles: []string{"guest"}}, "p")
 	if support["change"] || !guest["change"] {
 		t.Fatalf("support %v, guest %v", support, guest)
 	}
@@ -124,7 +101,7 @@ func TestVisibilityIsCachedPerCallerFacts(t *testing.T) {
 		t.Fatal("role order changed the cache key")
 	}
 	// An unknown proxy shows nothing.
-	if len(s.VisibleTools(Caller{Issuer: "i", Subject: "x"}, "other", DefaultVisibilityBatchThreshold)) != 0 {
+	if len(s.VisibleTools(Caller{Issuer: "i", Subject: "x"}, "other")) != 0 {
 		t.Fatal("tools shown on an unknown proxy")
 	}
 }
@@ -139,7 +116,7 @@ func TestVisibilityIsSafeToCheckConcurrently(t *testing.T) {
 			for j := range 50 {
 				role := visibilityCases[(i+j)%len(visibilityCases)]
 				who := Caller{Issuer: "i", Subject: fmt.Sprint(j % 5), Roles: []string{role.role}}
-				if got := s.VisibleTools(who, "p", DefaultVisibilityBatchThreshold)[role.tool]; got != role.want {
+				if got := s.VisibleTools(who, "p")[role.tool]; got != role.want {
 					t.Errorf("%s calling %s: listed=%v", role.role, role.tool, got)
 				}
 			}

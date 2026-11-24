@@ -109,7 +109,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		var visible map[string]bool
 		isVisible := func(tool string) bool {
 			if visible == nil {
-				visible = state.VisibleTools(requestCaller(req), proxy, visibilityBatchThreshold)
+				visible = state.VisibleTools(requestCaller(req), proxy)
 			}
 			return visible[tool]
 		}
@@ -185,11 +185,6 @@ func underDriftReview(req *http.Request) bool {
 	_, enforcing := state.Drift(oas.GetTykExtension().Info.ID)
 	return enforcing
 }
-
-// visibilityBatchThreshold is the number of tools on a proxy above which the
-// gateway decides which tools a caller may see in one batch: faster, but it
-// can show a tool the caller cannot use. It never hides one the caller can.
-var visibilityBatchThreshold = positiveSetting("CEDAR_VISIBILITY_BATCH_THRESHOLD", policy.DefaultVisibilityBatchThreshold)
 
 // callerKey keys the caller of a tools/list request in its context, so the
 // response hook can leave out tools the caller could never call.

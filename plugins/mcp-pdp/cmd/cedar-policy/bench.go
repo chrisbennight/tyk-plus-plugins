@@ -78,12 +78,8 @@ func runBench(args []string) error {
 		fmt.Printf("Outcomes:  %v (permitted share %.2f, target %.2f)\n", report.Decisions.Outcomes, report.Decisions.PermitRatio, report.Decisions.TargetPermitRatio)
 	}
 	if v := report.Visibility; v.Tools > 0 {
-		mode := "one tool at a time"
-		if v.Batch {
-			mode = "in one batch"
-		}
-		fmt.Printf("Visibility: %d tools on %s checked %s: first list median %s, p99 %s; cached list median %s, p99 %s over %d callers\n",
-			v.Tools, v.Proxy, mode, d(v.First.Median), d(v.First.P99), d(v.Cached.Median), d(v.Cached.P99), v.First.Count)
+		fmt.Printf("Visibility: %d tools on %s: first list median %s, p99 %s; cached list median %s, p99 %s over %d callers\n",
+			v.Tools, v.Proxy, d(v.First.Median), d(v.First.P99), d(v.Cached.Median), d(v.Cached.P99), v.First.Count)
 	}
 	fmt.Printf("Memory:    set heap %d bytes, %d bytes allocated per decision, peak resident %d bytes\n",
 		report.Memory.SetHeapBytes, report.Memory.AllocBytesPerDecision, report.Memory.PeakRSSBytes)

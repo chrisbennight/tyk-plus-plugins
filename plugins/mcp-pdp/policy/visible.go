@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"context"
 	"encoding/json"
 	"hash/maphash"
 	"reflect"
@@ -12,21 +11,12 @@ import (
 	cedarast "github.com/cedar-policy/cedar-go/ast"
 	"github.com/cedar-policy/cedar-go/types"
 	"github.com/cedar-policy/cedar-go/x/exp/ast"
-	"github.com/cedar-policy/cedar-go/x/exp/batch"
 )
 
 // Visibility decides which of a proxy's tools to show a caller. A tool is
 // left out only when Cedar shows that no call arguments could let the caller
 // call it; when that is unclear, the tool is shown. See visibilityPolicy for
 // how conditions on arguments are treated.
-//
-// Large proxies are checked with cedar-go's experimental batch package, so
-// cedar-go is pinned to an exact version and the accuracy tests run in CI.
-
-// DefaultVisibilityBatchThreshold is the number of tools on a proxy above
-// which VisibleTools checks the whole proxy in one batch instead of one tool
-// at a time.
-const DefaultVisibilityBatchThreshold = 500
 
 // visibilitySlots bounds the per-caller results a snapshot keeps. A result
 // whose slot is taken by another caller is computed again, so the bound
@@ -49,11 +39,10 @@ type visibilityEntry struct {
 }
 
 // VisibleTools returns the tools on a proxy the caller could call with some
-// arguments. Proxies with up to batchThreshold tools are checked one tool at
-// a time, which is exact. Larger proxies are checked in one batch, which can
-// show a tool the caller cannot use but never hides one it can. Results are
-// cached per caller for the life of the snapshot.
-func (s *Snapshot) VisibleTools(who Caller, proxy string, batchThreshold int) map[string]bool {
+// arguments. Each tool is checked on its own, with only its own entity, as a
+// call to it is decided. Results are cached per caller for the life of the
+// snapshot.
+func (s *Snapshot) VisibleTools(who Caller, proxy string) map[string]bool {
 	key := visibilityKey(who, proxy)
 	slot := &s.visibility.slots[maphash.String(s.visibility.seed, key)%visibilitySlots]
 	if entry := slot.Load(); entry != nil && entry.key == key {
@@ -63,15 +52,9 @@ func (s *Snapshot) VisibleTools(who Caller, proxy string, batchThreshold int) ma
 	// Only the visible names are kept, so a caller who may see few tools
 	// costs little to cache however large the proxy.
 	visible := map[string]bool{}
-	if len(inv.Tools) > batchThreshold {
-		for name := range s.visibleInBatch(who, proxy) {
+	for name := range inv.Tools {
+		if s.Visible(who, proxy, name) {
 			visible[name] = true
-		}
-	} else {
-		for name := range inv.Tools {
-			if s.Visible(who, proxy, name) {
-				visible[name] = true
-			}
 		}
 	}
 	slot.Store(&visibilityEntry{key: key, visible: visible})
@@ -130,86 +113,6 @@ func (s *Snapshot) Visible(who Caller, proxy, name string) bool {
 func noArguments() cedar.Record {
 	facts, _ := argumentFacts(nil, nil)
 	return facts
-}
-
-// visibleInBatch returns the tools on a proxy that some call arguments could
-// let this caller call, evaluating the whole proxy in one batch per kind of
-// tool. It can include tools Visible would leave out. Every tool's entity is
-// present during the batch, where a call decision sees only its own; a rule
-// could tell them apart only by naming another tool's entity, which rules
-// about tools have no reason to do, since they match the requested tool
-// through resource.
-func (s *Snapshot) visibleInBatch(who Caller, proxy string) map[string]bool {
-	inv := s.tools[proxy]
-	principal, _ := callerEntity(who)
-	// Tools without declared arguments are decided with the rules as
-	// written, as their calls would be; others with the rules rewritten for
-	// unknown arguments.
-	pass := func(policies *cedar.PolicySet, names []string, stripAnnotations bool) map[string]bool {
-		allowed := make(map[string]bool, len(names))
-		if len(names) == 0 {
-			return allowed
-		}
-		_, entities := callerEntity(who)
-		uids := make([]cedar.Value, 0, len(names))
-		byUID := make(map[cedar.EntityUID]string, len(names))
-		for _, name := range names {
-			toolID, _ := json.Marshal([2]string{proxy, name})
-			uid := cedar.NewEntityUID("Tool", cedar.String(toolID))
-			entities[uid] = toolEntity(uid, proxy, inv.Upstream, name, inv.Tools[name], stripAnnotations)
-			uids = append(uids, uid)
-			byUID[uid] = name
-		}
-		err := batch.Authorize(context.Background(), policies, entities, batch.Request{
-			Principal: principal, Action: cedar.NewEntityUID("Action", "tools/call"),
-			Resource: batch.Variable("tool"), Context: noArguments(),
-			Variables: batch.Variables{"tool": uids},
-		}, func(r batch.Result) error {
-			if outcomeOf(policies, r.Decision, r.Diagnostic) == "permitted" {
-				allowed[byUID[r.Request.Resource]] = true
-			}
-			return nil
-		})
-		if err != nil {
-			// The batch could not be evaluated, so every tool is shown.
-			for _, name := range names {
-				allowed[name] = true
-			}
-		}
-		return allowed
-	}
-	var exact, unknown []string
-	for name, t := range inv.Tools {
-		if len(t.Arguments) == 0 {
-			exact = append(exact, name)
-		} else {
-			unknown = append(unknown, name)
-		}
-	}
-	visible := pass(s.policies, exact, false)
-	for name := range pass(s.visibilityPolicies, unknown, false) {
-		visible[name] = true
-	}
-	var recheckExact, recheckUnknown []string
-	for name := range visible {
-		if t := inv.Tools[name]; t.Definition != nil && len(t.Definition.Annotations) > 0 {
-			if len(t.Arguments) == 0 {
-				recheckExact = append(recheckExact, name)
-			} else {
-				recheckUnknown = append(recheckUnknown, name)
-			}
-		}
-	}
-	without := pass(s.policies, recheckExact, true)
-	for name := range pass(s.visibilityPolicies, recheckUnknown, true) {
-		without[name] = true
-	}
-	for _, name := range append(recheckExact, recheckUnknown...) {
-		if !without[name] {
-			delete(visible, name)
-		}
-	}
-	return visible
 }
 
 // callerEntity returns the caller's entity UID and an entity map holding it,

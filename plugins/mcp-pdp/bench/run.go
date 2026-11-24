@@ -91,12 +91,10 @@ type Report struct {
 	// Visibility is the time to decide which of one proxy's tools a caller
 	// may see in its list: First for the caller's first list after a set
 	// change, Cached for a later one. The proxy is the one with the most
-	// tools, and Batch reports whether it is large enough to be checked in
-	// one batch rather than one tool at a time.
+	// tools.
 	Visibility struct {
 		Proxy  string    `json:"proxy"`
 		Tools  int       `json:"tools"`
-		Batch  bool      `json:"batch"`
 		First  Durations `json:"first"`
 		Cached Durations `json:"cached"`
 	} `json:"visibility"`
@@ -256,7 +254,6 @@ func measureVisibility(report *Report, snapshot *policy.Snapshot, tools []policy
 	if report.Visibility.Tools == 0 {
 		return
 	}
-	report.Visibility.Batch = report.Visibility.Tools > policy.DefaultVisibilityBatchThreshold
 	seen := map[string]bool{}
 	var first, cached []time.Duration
 	for _, r := range requests {
@@ -266,10 +263,10 @@ func measureVisibility(report *Report, snapshot *policy.Snapshot, tools []policy
 		}
 		seen[key] = true
 		start := time.Now()
-		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy, policy.DefaultVisibilityBatchThreshold)
+		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy)
 		first = append(first, time.Since(start))
 		start = time.Now()
-		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy, policy.DefaultVisibilityBatchThreshold)
+		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy)
 		cached = append(cached, time.Since(start))
 	}
 	report.Visibility.First, report.Visibility.Cached = summarize(first), summarize(cached)

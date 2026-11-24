@@ -3,9 +3,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -29,19 +31,42 @@ func main() {
 	leaveRejectedSet(k)
 }
 
+// waitForGateway waits until Tyk reports healthy, the governed API answers
+// (an unloaded API returns 404), and the upstream is reachable.
 func waitForGateway() {
-	for range 30 {
-		res, err := httpClient.Get("http://gateway:9696/hello")
-		if err == nil {
-			res.Body.Close()
-			if res.StatusCode == http.StatusOK {
-				if up, err := httpClient.Get("http://upstream:8000/requests"); err == nil {
-					up.Body.Close()
-					return
-				}
-			}
+	for range 60 {
+		if healthy() && apiLoaded() && upstreamUp() {
+			return
 		}
 		time.Sleep(time.Second)
 	}
 	panic("gateway or upstream did not become ready")
+}
+
+func healthy() bool {
+	res, err := httpClient.Get("http://gateway:9696/hello")
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	var health struct{ Status string }
+	return json.NewDecoder(res.Body).Decode(&health) == nil && health.Status == "pass"
+}
+
+func apiLoaded() bool {
+	res, err := httpClient.Post(gateway, "application/json", strings.NewReader(`{"jsonrpc":"2.0","id":0,"method":"tools/list"}`))
+	if err != nil {
+		return false
+	}
+	res.Body.Close()
+	return res.StatusCode != http.StatusNotFound
+}
+
+func upstreamUp() bool {
+	res, err := httpClient.Get("http://upstream:8000/requests")
+	if err != nil {
+		return false
+	}
+	res.Body.Close()
+	return true
 }

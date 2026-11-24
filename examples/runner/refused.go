@@ -15,50 +15,56 @@ import (
 // first (initialize, its notification, server/discover, tools/list and
 // tools/call), and that none of their requests reach a server.
 func (r *runner) refusedCallers() {
-	const server = "directory"
 	for _, name := range r.e.expected.RefusedCallers {
 		cred, err := r.refusedCredential(name)
 		if err != nil {
 			r.fail(name, err.Error())
 			continue
 		}
-		before, err := observe(server)
-		if err != nil {
-			r.fail(name, err.Error())
-			continue
+		// Each proxy authenticates on its own, so every one must refuse.
+		for _, server := range r.e.proxies() {
+			r.refusedOn(name, cred, server)
 		}
-		for _, version := range versions {
-			what := fmt.Sprintf("%s is refused when connecting with a %s client", name, version)
-			if s, err := connect(cred, version, server); err == nil {
-				s.Close()
-				r.fail(what, "connected")
-			} else {
-				r.pass(what)
-			}
-		}
-		for _, req := range []struct{ version, method string }{
-			{versions[0], "initialize"}, {versions[0], "notifications/initialized"}, {versions[0], "tools/list"}, {versions[0], "tools/call"},
-			{versions[1], "server/discover"}, {versions[1], "tools/list"}, {versions[1], "tools/call"},
-		} {
-			what := fmt.Sprintf("%s is refused on %s (%s)", name, req.method, req.version)
-			if status, err := rawRequest(cred, server, req.version, req.method); err != nil {
-				r.fail(what, err.Error())
-			} else if status != http.StatusUnauthorized && status != http.StatusForbidden {
-				r.fail(what, fmt.Sprintf("answered %d", status))
-			} else {
-				r.pass(what)
-			}
-		}
-		after, err := observe(server)
-		what := name + "'s requests never reach the server"
-		switch {
-		case err != nil:
-			r.fail(what, err.Error())
-		case after.Requests != before.Requests:
-			r.fail(what, fmt.Sprintf("the server received %d requests", after.Requests-before.Requests))
-		default:
+	}
+}
+
+func (r *runner) refusedOn(name string, cred credential, server string) {
+	before, err := observe(server)
+	if err != nil {
+		r.fail(name, err.Error())
+		return
+	}
+	for _, version := range versions {
+		what := fmt.Sprintf("%s is refused when connecting to %s with a %s client", name, server, version)
+		if s, err := connect(cred, version, server); err == nil {
+			s.Close()
+			r.fail(what, "connected")
+		} else {
 			r.pass(what)
 		}
+	}
+	for _, req := range []struct{ version, method string }{
+		{versions[0], "initialize"}, {versions[0], "notifications/initialized"}, {versions[0], "tools/list"}, {versions[0], "tools/call"},
+		{versions[1], "server/discover"}, {versions[1], "tools/list"}, {versions[1], "tools/call"},
+	} {
+		what := fmt.Sprintf("%s is refused on %s %s (%s)", name, server, req.method, req.version)
+		if status, err := rawRequest(cred, server, req.version, req.method); err != nil {
+			r.fail(what, err.Error())
+		} else if status != http.StatusUnauthorized && status != http.StatusForbidden {
+			r.fail(what, fmt.Sprintf("answered %d", status))
+		} else {
+			r.pass(what)
+		}
+	}
+	after, err := observe(server)
+	what := fmt.Sprintf("%s's requests never reach %s", name, server)
+	switch {
+	case err != nil:
+		r.fail(what, err.Error())
+	case after.Requests != before.Requests:
+		r.fail(what, fmt.Sprintf("the server received %d requests", after.Requests-before.Requests))
+	default:
+		r.pass(what)
 	}
 }
 

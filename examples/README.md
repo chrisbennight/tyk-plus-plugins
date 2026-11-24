@@ -33,7 +33,7 @@ The runner checks every row of [`expected.json`](expected.json) with clients of 
 
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
-To start only some parts, name them, for example `docker compose up -d notes` or `docker compose up -d gateway directory`.
+To start only some parts, name them, for example `docker compose up -d notes` or `docker compose up -d gateway directory`. Compose reads every service's settings even when starting one, so set the two secrets first; any values do when the gateway is not among the parts.
 
 ## What each server shows
 
@@ -61,7 +61,7 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 - **People** are in the issuer's deck, [`callers/people.json`](callers/people.json). See the [issuer guide](issuer/README.md).
 - **Services** are Tyk keys whose metadata is in [`callers/keys.json`](callers/keys.json). The runner creates the keys through Tyk's control API.
-- **Refused callers.** The runner also checks seven callers that must be refused: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, and a key without metadata. Each must fail to connect in both protocol versions and be refused on the methods a client sends first, with no request reaching a server. Those methods are `initialize`, `notifications/initialized`, `server/discover`, `tools/list` and `tools/call`.
+- **Refused callers.** The runner also checks seven callers that must be refused: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, and a key without metadata. On every proxy, each must fail to connect in both protocol versions and be refused on the methods a client sends first, with no request reaching a server. Those methods are `initialize`, `notifications/initialized`, `server/discover`, `tools/list` and `tools/call`.
 - **Every refusal looks the same.** Every refused tool call must return the same JSON-RPC error, so a caller cannot tell a tool it may not call from one that was never approved or does not exist.
 - **Key and token together.** A request carrying both a key and a token is identified by the key. Two cases show it: a strong key with a weak token is permitted, and a weak key with a strong token is refused.
 
@@ -71,7 +71,7 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 The approved tool definitions are copied from each server's `tools/list`.
 
-The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`, so the policy the gateway enforces always agrees with the expected outcomes. After changing `expected.json`, regenerate the checks and publish again:
+The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`. Regenerate the checks whenever you change `expected.json` or the approved tools, so the published policy is checked against the current expectations. After changing `expected.json`, regenerate the checks and publish again:
 
 ```sh
 docker compose run --build --rm runner checks > checks.new && mv checks.new policy/checks.json

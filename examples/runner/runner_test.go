@@ -131,8 +131,8 @@ func TestCallerNamesMustBeSafeShellNames(t *testing.T) {
 }
 
 func TestRefusalsDifferingOnlyInDataDiffer(t *testing.T) {
-	a, _ := refusalOf(errors.New(`x: {"error":{"code":-32002,"message":"Tool call denied","data":{"reason":"unknown"}}}`))
-	b, _ := refusalOf(errors.New(`x: {"error":{"code":-32002,"message":"Tool call denied"}}`))
+	a, _ := refusalOf(errors.New(`x: {"jsonrpc":"2.0","error":{"code":-32002,"message":"Tool call denied","data":{"reason":"unknown"}}}`))
+	b, _ := refusalOf(errors.New(`x: {"jsonrpc":"2.0","error":{"code":-32002,"message":"Tool call denied"}}`))
 	if a == nil || b == nil || *a == *b {
 		t.Fatalf("%v and %v compare equal", a, b)
 	}
@@ -144,5 +144,13 @@ func TestSameJSONComparesNumbersByValue(t *testing.T) {
 	}
 	if sameJSON(map[string]any{"environment": "test"}, map[string]any{"environment": "production"}) {
 		t.Fatal("different arguments compared equal")
+	}
+}
+
+func TestBareHTTPErrorBodyIsNotARefusal(t *testing.T) {
+	for _, text := range []string{`x: {"error":{}}`, `x: {"error":{"code":-32002,"message":"denied"}}`, `x: {"jsonrpc":"2.0","error":{"code":0,"message":"denied"}}`} {
+		if _, ok := refusalOf(errors.New(text)); ok {
+			t.Errorf("accepted %s", text)
+		}
 	}
 }

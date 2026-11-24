@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 )
 
@@ -45,6 +46,7 @@ func (e *examples) proxies() []string {
 	for proxy := range e.tools {
 		out = append(out, proxy)
 	}
+	sort.Strings(out)
 	return out
 }
 

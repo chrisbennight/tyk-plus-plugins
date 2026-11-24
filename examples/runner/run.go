@@ -186,13 +186,16 @@ func refusalOf(err error) (*rpcError, bool) {
 	text := err.Error()
 	for i := strings.Index(text, "{"); i >= 0; {
 		var body struct {
-			Error *struct {
+			JSONRPC string `json:"jsonrpc"`
+			Error   *struct {
 				Code    int64           `json:"code"`
 				Message string          `json:"message"`
 				Data    json.RawMessage `json:"data"`
 			} `json:"error"`
 		}
-		if json.NewDecoder(strings.NewReader(text[i:])).Decode(&body) == nil && body.Error != nil {
+		// Only a well-formed JSON-RPC error counts: a bare HTTP error body does not.
+		if json.NewDecoder(strings.NewReader(text[i:])).Decode(&body) == nil && body.JSONRPC == "2.0" &&
+			body.Error != nil && body.Error.Code != 0 && body.Error.Message != "" {
 			return &rpcError{body.Error.Code, body.Error.Message, string(body.Error.Data)}, true
 		}
 		next := strings.Index(text[i+1:], "{")
@@ -270,7 +273,9 @@ func observe(server string) (observed, error) {
 	var o observed
 	body, err := get(fmt.Sprintf(setting("SERVER_URL", "http://%s:8000"), server) + "/requests")
 	if err == nil {
-		err = json.Unmarshal([]byte(body), &o)
+		dec := json.NewDecoder(strings.NewReader(body))
+		dec.UseNumber() // compare argument numbers exactly
+		err = dec.Decode(&o)
 	}
 	if err != nil {
 		return o, fmt.Errorf("reading what %s received: %w", server, err)

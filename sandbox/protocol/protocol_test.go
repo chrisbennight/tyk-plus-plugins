@@ -40,7 +40,9 @@ func TestDecodeRejectsUnknownFieldsAndTrailingData(t *testing.T) {
 	if err := Decode([]byte(`{"type":"start","path":"/etc"}`), &m); err == nil {
 		t.Error("an unknown field was accepted")
 	}
-	if err := Decode([]byte(`{"type":"start"} {"type":"start"}`), &m); err == nil {
-		t.Error("trailing data was accepted")
+	for _, line := range []string{`{"type":"start"} {"type":"start"}`, `{"type":"start"}}`, `{"type":"start"}]`} {
+		if err := Decode([]byte(line), &m); err == nil {
+			t.Errorf("trailing data was accepted: %s", line)
+		}
 	}
 }

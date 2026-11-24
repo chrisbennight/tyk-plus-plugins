@@ -101,7 +101,7 @@ func DecodeRequest(line []byte) (Request, error) {
 	if err := d.Decode(&r); err != nil {
 		return Request{}, err
 	}
-	if d.More() {
+	if d.Decode(&struct{}{}) != io.EOF {
 		return Request{}, errors.New("trailing data after request")
 	}
 	return r, nil
@@ -207,12 +207,11 @@ func New(ctx context.Context, config Config) *Launcher {
 // SelfTestProblem explains which isolation checks a self-test failed, or
 // returns "" when every check was blocked.
 func SelfTestProblem(results map[string]string) string {
-	if len(results) == 0 {
-		return "the self-test reported no results"
-	}
 	var allowed []string
-	for check, outcome := range results {
-		if outcome != "blocked" {
+	for _, check := range protocol.SelfTestChecks {
+		if outcome, ok := results[check]; !ok {
+			allowed = append(allowed, check+" (not reported)")
+		} else if outcome != "blocked" {
 			allowed = append(allowed, check)
 		}
 	}

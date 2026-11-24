@@ -66,6 +66,18 @@ func TestCallsBeyondTheLimitInOneTurnStopTheRun(t *testing.T) {
 	}
 }
 
+func TestMessagesOfAnyTypeAreBounded(t *testing.T) {
+	// The program changes how the bootstrap's messages serialize, so they no
+	// longer read as tool calls; the bridge must still stop accepting them.
+	m, _ := runCounting(t, `
+		Object.prototype.toJSON = function () { return { type: "other" }; };
+		for (let i = 0; i < 100000; i++) connectors.governed.lookup({ count: i });
+		await new Promise(() => {});`, ``, protocol.Limits{Calls: 3})
+	if m.Type != protocol.TypeFailed || (m.Failure.Kind != protocol.KindProtocol && m.Failure.Kind != protocol.KindLimit) {
+		t.Fatalf("got %s %+v", m.Type, m.Failure)
+	}
+}
+
 func TestConsoleLimitCountsUTF8Bytes(t *testing.T) {
 	// 6000 characters of two bytes each exceed a 10000-byte limit, and the
 	// run must stop before its next tool call reaches the host.

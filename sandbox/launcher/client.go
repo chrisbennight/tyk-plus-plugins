@@ -28,6 +28,9 @@ func (r *Run) Close() {
 	r.Conn.Close()
 }
 
+// startWait bounds how long the launcher may take to start a sandbox.
+const startWait = 30 * time.Second
+
 // Unavailable reports that the launcher could not start a sandbox.
 type Unavailable struct{ Reason string }
 
@@ -39,6 +42,9 @@ func Start(socket string, runMillis int64) (*Run, error) {
 	if err != nil {
 		return nil, Unavailable{"the launcher is unreachable: " + err.Error()}
 	}
+	// Starting a sandbox must answer promptly; the connection then stays open
+	// without a deadline for the run's lifetime.
+	c.SetDeadline(time.Now().Add(startWait))
 	if err := send(c, Request{Op: OpStart, RunMillis: runMillis}); err != nil {
 		c.Close()
 		return nil, err
@@ -58,6 +64,7 @@ func Start(socket string, runMillis int64) (*Run, error) {
 		}
 		return nil, Unavailable{"the launcher sent an unreadable reply"}
 	}
+	c.SetDeadline(time.Time{})
 	msgs, err := syscall.ParseSocketControlMessage(oob[:oobn])
 	if err != nil || len(msgs) != 1 {
 		c.Close()

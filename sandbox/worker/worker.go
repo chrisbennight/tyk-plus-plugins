@@ -294,9 +294,10 @@ func timeMillis(ms int64) time.Duration { return time.Duration(ms) * time.Millis
 
 // bridge receives what the bootstrap prints. Lines without the run's nonce
 // are ignored, so a program that reaches the engine's standard output some
-// other way cannot pose as the bootstrap. It enforces the call limit as each
-// call arrives, so a program cannot queue messages outside its WebAssembly
-// memory by making many calls in one turn.
+// other way cannot pose as the bootstrap. It bounds the messages it accepts as
+// they arrive, whatever their type, so a program cannot queue messages outside
+// its WebAssembly memory by sending many in one turn: at most one per allowed
+// tool call plus the final message.
 type bridge struct {
 	nonce   string
 	max     int
@@ -333,13 +334,14 @@ func (b *bridge) Write(p []byte) (int, error) {
 			b.fail(protocol.Failed(protocol.KindProtocol, "the bootstrap sent an unreadable message: %v", err))
 			continue
 		}
-		if m.Type == protocol.TypeCall {
-			b.seen++
-			if b.seen > b.calls {
-				f := protocol.Failed(protocol.KindLimit, "the run made more than %d tool calls", b.calls)
-				b.fail(f)
-				continue
-			}
+		b.seen++
+		if b.seen > b.calls+1 {
+			b.fail(protocol.Failed(protocol.KindLimit, "the run made more than %d tool calls", b.calls))
+			continue
+		}
+		if m.Type != protocol.TypeCall && m.Type != protocol.TypeDone && m.Type != protocol.TypeFailed {
+			b.fail(protocol.Failed(protocol.KindProtocol, "the bootstrap sent a %q message", m.Type))
+			continue
 		}
 		b.queue = append(b.queue, m)
 		if m.Type == protocol.TypeFailed && m.Failure != nil && m.Failure.Kind == protocol.KindLimit && b.halt != nil {

@@ -290,6 +290,7 @@ func probe() {
 	check(m["type"] == "done" && strings.Contains(string(result), `"fetch":"undefined"`) && strings.Contains(string(result), `"print":"undefined"`) &&
 		(strings.Contains(string(result), `"file":null`) || strings.Contains(string(result), `"file":"refused"`)), "capabilities: %v", m)
 	fmt.Println("The program found no host functions and could not open a file.")
+	settled("the capabilities run")
 
 	// Limits.
 	for _, c := range []struct {

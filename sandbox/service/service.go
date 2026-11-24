@@ -106,16 +106,31 @@ func New(cfg Config) *Service {
 	}
 }
 
-// Serve accepts connections until ln closes.
+// Serve accepts connections until ln closes. Connections beyond a bound,
+// counted before they authenticate, are closed at once, so idle or slow
+// clients cannot accumulate without limit.
 func (s *Service) Serve(ln net.Listener) error {
+	slots := make(chan struct{}, s.config.Capacity+connectionAllowance)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			return err
 		}
-		go s.Handle(c)
+		select {
+		case slots <- struct{}{}:
+			go func() {
+				defer func() { <-slots }()
+				s.Handle(c)
+			}()
+		default:
+			c.Close()
+		}
 	}
 }
+
+// connectionAllowance is how many connections beyond the run capacity may be
+// open at once, for health queries and runs that will be refused as busy.
+const connectionAllowance = 32
 
 // writeWait bounds each write to a gateway, so a gateway that stops reading
 // cannot hold a run, and its capacity slot, past the write.
@@ -207,27 +222,31 @@ func (s *Service) Handle(c net.Conn) {
 // message that ends it.
 func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWriter, start protocol.Message) protocol.Message {
 	limits := *start.Limits
+	// The worker enforces the run time from when its engine is ready; this
+	// bounds the whole run, including starting the sandbox, in case anything
+	// stops responding.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(limits.RunMillis)*time.Millisecond+startAllowance)
+	defer cancel()
 	run, err := s.launch(limits.RunMillis)
 	if err != nil {
 		return protocol.Failed(protocol.KindUnavailable, "no sandbox: %v", err)
 	}
 	defer run.Close()
-	worker := &lockedWriter{w: run.Stdin}
-	if err := worker.write(start); err != nil {
-		return protocol.Failed(protocol.KindUnavailable, "starting the program: %v", err)
-	}
-
-	// The worker enforces the run time from when its engine is ready; this is
-	// a backstop in case the sandbox stops responding.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(limits.RunMillis)*time.Millisecond+startAllowance)
-	defer cancel()
-	end := make(chan protocol.Message, 2)
+	end := make(chan protocol.Message, 3)
 	finish := func(m protocol.Message) {
 		select {
 		case end <- m:
 		default:
 		}
 	}
+	worker := &lockedWriter{w: run.Stdin}
+	// A stalled sandbox cannot block the run past its backstop: closing the
+	// run on return unblocks this write.
+	go func() {
+		if err := worker.write(start); err != nil {
+			finish(protocol.Failed(protocol.KindUnavailable, "starting the program: %v", err))
+		}
+	}()
 	var mu sync.Mutex
 	outstanding := map[int64]bool{}
 	calls := 0
@@ -242,8 +261,8 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 			}
 			switch m.Type {
 			case protocol.TypeCall:
-				if problem := checkCall(m, limits); problem != "" {
-					finish(protocol.Failed(protocol.KindProtocol, "%s", problem))
+				if f := checkCall(m, limits); f != nil {
+					finish(*f)
 					return
 				}
 				mu.Lock()
@@ -336,16 +355,22 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 	}
 }
 
-func checkCall(m protocol.Message, limits protocol.Limits) string {
+// checkCall returns the failure a malformed or oversized tool call causes, or
+// nil when the call is well formed.
+func checkCall(m protocol.Message, limits protocol.Limits) *protocol.Message {
+	fail := func(kind, format string, args ...any) *protocol.Message {
+		f := protocol.Failed(kind, format, args...)
+		return &f
+	}
 	switch {
 	case m.ID <= 0:
-		return "a tool call has no identifier"
+		return fail(protocol.KindProtocol, "a tool call has no identifier")
 	case m.Proxy == "" || m.Tool == "" || len(m.Proxy) > 256 || len(m.Tool) > 256:
-		return "a tool call has no valid proxy or tool name"
+		return fail(protocol.KindProtocol, "a tool call has no valid proxy or tool name")
 	case len(m.Arguments) > limits.ValueBytes:
-		return fmt.Sprintf("tool call arguments exceed %d bytes", limits.ValueBytes)
+		return fail(protocol.KindLimit, "tool call arguments exceed %d bytes", limits.ValueBytes)
 	case len(m.Arguments) > 0 && !json.Valid(m.Arguments):
-		return "tool call arguments are not JSON"
+		return fail(protocol.KindProtocol, "tool call arguments are not JSON")
 	}
-	return ""
+	return nil
 }

@@ -63,10 +63,15 @@ func TestSpecIsolatesTheSandbox(t *testing.T) {
 }
 
 func TestSelfTestProblem(t *testing.T) {
-	if p := SelfTestProblem(map[string]string{"network": "blocked", "host file": "blocked"}); p != "" {
+	all := map[string]string{"network": "blocked", "host file": "blocked", "write": "blocked", "processes": "blocked"}
+	if p := SelfTestProblem(all); p != "" {
 		t.Errorf("all blocked reported %q", p)
 	}
-	if p := SelfTestProblem(map[string]string{"network": "allowed", "host file": "blocked"}); !strings.Contains(p, "network") {
+	if p := SelfTestProblem(map[string]string{"network": "blocked", "host file": "blocked"}); !strings.Contains(p, "write (not reported)") {
+		t.Errorf("an incomplete report was accepted: %q", p)
+	}
+	all["network"] = "allowed: eth0"
+	if p := SelfTestProblem(all); !strings.Contains(p, "network") {
 		t.Errorf("allowed network reported %q", p)
 	}
 	if p := SelfTestProblem(nil); p == "" {

@@ -156,6 +156,10 @@ const (
 	TypeFailed = "failed"
 )
 
+// SelfTestChecks are the isolation checks a host's startup self-test must
+// report as blocked before the host takes runs.
+var SelfTestChecks = []string{"network", "host file", "write", "processes"}
+
 // Health reports whether a sandbox host can take runs.
 type Health struct {
 	Backend string `json:"backend"`
@@ -230,7 +234,7 @@ func Decode(line []byte, m *Message) error {
 	if err := d.Decode(m); err != nil {
 		return err
 	}
-	if d.More() {
+	if d.Decode(&struct{}{}) != io.EOF {
 		return errors.New("trailing data after message")
 	}
 	return nil

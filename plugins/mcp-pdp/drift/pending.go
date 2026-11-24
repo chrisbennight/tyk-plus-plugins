@@ -48,7 +48,10 @@ type Pending struct {
 	reviews      chan review
 	latest       atomic.Pointer[map[string]Declared]
 	counts       atomic.Pointer[entryCounts]
-	now          func() time.Time
+	// reviewed holds the review entries this gateway has written or found,
+	// so a change it already queued is not copied again on every list.
+	reviewed atomic.Pointer[map[string]bool]
+	now      func() time.Time
 }
 
 // Declared is a tool definition an upstream declared, by fingerprint, when a
@@ -97,9 +100,13 @@ type entryCounts struct {
 	byProxy    map[string]int
 }
 
-// queueLength bounds each queue of writes waiting for the writer. A write
-// offered when its queue is full is dropped and logged.
-const queueLength = 4096
+// queueLength and reviewQueueLength bound the writes waiting for the writer.
+// A write offered when its queue is full is dropped and logged. Review
+// entries carry whole definitions, so fewer wait.
+const (
+	queueLength       = 4096
+	reviewQueueLength = 256
+)
 
 // maxDeclarationFile bounds a declaration file the gateway reads, and
 // maxGatewaysPerTool the declaration files it reads for one tool.
@@ -115,6 +122,7 @@ var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 func OpenPending(dir, gateway string, limits Limits) (*Pending, error) {
 	p := &Pending{gateway: gateway, limits: limits, now: time.Now}
 	p.latest.Store(&map[string]Declared{})
+	p.reviewed.Store(&map[string]bool{})
 	p.counts.Store(&entryCounts{byProxy: map[string]int{}})
 	if dir == "" {
 		return p, nil
@@ -125,7 +133,7 @@ func OpenPending(dir, gateway string, limits Limits) (*Pending, error) {
 	}
 	p.root = root
 	p.declarations = make(chan declaration, queueLength)
-	p.reviews = make(chan review, queueLength)
+	p.reviews = make(chan review, reviewQueueLength)
 	go p.write()
 	return p, nil
 }
@@ -156,7 +164,8 @@ func (p *Pending) Saw(proxy, upstream, tool, fingerprint string, approved bool, 
 // larger than the limit, or one that could not be fingerprinted, is not
 // written.
 func (p *Pending) Changed(proxy, tool, fingerprint string, definition jsontext.Value) {
-	if !fingerprintPattern.MatchString(fingerprint) || len(definition) > p.limits.MaxDefinitionBytes || len(tool) > maxToolName {
+	if !fingerprintPattern.MatchString(fingerprint) || len(definition) > p.limits.MaxDefinitionBytes || len(tool) > maxToolName ||
+		(*p.reviewed.Load())[reviewKey(proxy, tool, fingerprint)] {
 		return
 	}
 	p.offerReview(review{tool: &ToolEntry{Proxy: proxy, Tool: tool, Fingerprint: fingerprint,
@@ -173,6 +182,10 @@ func (p *Pending) ChangedInstructions(proxy, fingerprint, instructions string) {
 		Instructions: instructions, FirstSeen: p.now().UTC(), Gateway: p.gateway}})
 }
 
+func reviewKey(proxy, tool, fingerprint string) string {
+	return proxy + "\x00" + tool + "\x00" + fingerprint
+}
+
 func (p *Pending) offerReview(r review) {
 	if p.reviews == nil {
 		return
@@ -184,10 +197,16 @@ func (p *Pending) offerReview(r review) {
 	}
 }
 
-// Latest returns the newest declaration of a tool any gateway shares.
-func (p *Pending) Latest(proxy, tool string) (Declared, bool) {
-	d, ok := (*p.latest.Load())[observationKey(proxy, tool)]
+// Latest returns the newest declaration of a tool from an upstream that any
+// gateway shares. Declarations from other upstreams are kept apart, so a
+// gateway still on a previous upstream cannot hide one from the reviewed one.
+func (p *Pending) Latest(proxy, tool, upstream string) (Declared, bool) {
+	d, ok := (*p.latest.Load())[declarationKey(proxy, tool, upstream)]
 	return d, ok
+}
+
+func declarationKey(proxy, tool, upstream string) string {
+	return observationKey(proxy, tool) + "\x00" + upstream
 }
 
 // writer holds what the background writer has written, which only it reads.
@@ -214,20 +233,14 @@ func (p *Pending) write() {
 	}
 }
 
-// writeDeclaration writes this gateway's declaration of a tool. A declaration
-// that repeats this gateway's last one is not written again, unless another
-// gateway has since shared a newer, different one, which this sighting must
-// override. Tools without approval are shared up to the per-proxy limit.
+// writeDeclaration writes this gateway's declaration of a tool, when it was
+// received after the last one written, so the file always holds the newest
+// sighting and its time, whatever other gateways shared since. Tools without
+// approval are shared up to the per-proxy limit.
 func (p *Pending) writeDeclaration(w *writer, d declaration) error {
 	key := observationKey(d.proxy, d.tool)
 	last, written := w.own[key]
-	if written && last.Fingerprint == d.declared.Fingerprint && last.Upstream == d.declared.Upstream {
-		shared, ok := p.Latest(d.proxy, d.tool)
-		if !ok || !shared.SeenAt.After(last.SeenAt) || shared.Fingerprint == last.Fingerprint {
-			return nil
-		}
-	}
-	if written && d.declared.SeenAt.Before(last.SeenAt) {
+	if written && !d.declared.SeenAt.After(last.SeenAt) {
 		return nil
 	}
 	if !d.approved && !written {
@@ -281,6 +294,9 @@ func (p *Pending) writeReview(w *writer, r review) error {
 	if err != nil {
 		return err
 	}
+	if r.tool != nil {
+		defer p.markReviewed(reviewKey(proxy, r.tool.Tool, r.tool.Fingerprint))
+	}
 	if _, err := p.root.Stat(path.Join(dir, name)); err == nil {
 		return nil
 	}
@@ -289,6 +305,21 @@ func (p *Pending) writeReview(w *writer, r review) error {
 	}
 	w.written[proxy]++
 	return nil
+}
+
+// markReviewed records a review entry that exists. Only the writer adds to
+// the set, publishing a new copy each time, so readers never lock.
+func (p *Pending) markReviewed(key string) {
+	current := *p.reviewed.Load()
+	if current[key] {
+		return
+	}
+	next := make(map[string]bool, len(current)+1)
+	for k := range current {
+		next[k] = true
+	}
+	next[key] = true
+	p.reviewed.Store(&next)
 }
 
 // publish writes a file whole: to a temporary file first, then linked or
@@ -358,7 +389,7 @@ func (p *Pending) Refresh(keep func(proxy, tool string) bool) {
 					(d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint)) {
 					continue
 				}
-				key := observationKey(proxy, tool)
+				key := declarationKey(proxy, tool, d.Upstream)
 				if newest, ok := latest[key]; !ok || d.SeenAt.After(newest.SeenAt) {
 					latest[key] = d
 				}

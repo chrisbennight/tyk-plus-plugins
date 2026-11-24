@@ -54,7 +54,7 @@ func driftSuite(k keys, version string) {
 	awaitSharedDeclaration("governed", "change", probeStarted)
 	time.Sleep(time.Second)
 	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
-	checkPendingChange("governed", "change")
+	checkPendingChange("governed", "change", catalog["change"])
 	check(sameJSON(listed["lookup"], catalog["lookup"]), "%s: lookup listed as %v", version, listed["lookup"])
 	call(c, k.support, "lookup", args("count", 1), "found")
 	changed := call(c, k.operator, "change", args("count", 2))
@@ -108,8 +108,9 @@ func driftSuite(k keys, version string) {
 }
 
 // checkPendingChange checks that the drift review directory holds an entry
-// for a changed tool, with its definition and fingerprint.
-func checkPendingChange(proxy, tool string) {
+// for a changed tool, holding exactly the definition the upstream declared,
+// filed under its fingerprint.
+func checkPendingChange(proxy, tool string, declared map[string]any) {
 	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
 	files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "tools", encode(tool), "*.json"))
 	check(len(files) > 0, "no review entry for %s on %s", tool, proxy)
@@ -117,10 +118,10 @@ func checkPendingChange(proxy, tool string) {
 		data, err := os.ReadFile(file)
 		var entry struct {
 			Proxy, Tool, Fingerprint string
-			Definition               struct{ Name string }
+			Definition               map[string]any
 		}
 		check(err == nil && json.Unmarshal(data, &entry) == nil, "review entry %s: %v", file, err)
-		check(entry.Proxy == proxy && entry.Tool == tool && entry.Definition.Name == tool &&
+		check(entry.Proxy == proxy && entry.Tool == tool && sameJSON(entry.Definition, declared) &&
 			regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(entry.Fingerprint) &&
 			filepath.Base(file) == entry.Fingerprint+".json", "review entry %s: %s", file, data)
 	}

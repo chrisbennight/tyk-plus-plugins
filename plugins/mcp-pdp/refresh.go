@@ -49,7 +49,12 @@ func init() {
 			interval = parsed
 		}
 	}
-	gateway, _ := os.Hostname()
+	// A stable name keeps a gateway's shared declarations in one file across
+	// restarts; without one, the host name is used.
+	gateway := os.Getenv("CEDAR_GATEWAY_ID")
+	if gateway == "" {
+		gateway, _ = os.Hostname()
+	}
 	pending, err := drift.OpenPending(os.Getenv("CEDAR_PENDING_DIR"), gateway, limits)
 	if err != nil {
 		// Calls are still decided on what this gateway sees itself.

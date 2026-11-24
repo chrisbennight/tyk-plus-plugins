@@ -134,7 +134,8 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 	var report Report
 	report.Seed, report.Version = seed, version
 	report.Set.Rules = countRules(files.Rules)
-	report.Set.Bytes = len(files.Rules) + len(files.Tools) + len(files.Instructions) + len(files.Checks)
+	in := files.inputs()
+	report.Set.Bytes = len(in.Rules) + len(in.Tools) + len(in.Instructions) + len(in.Checks)
 
 	before := heap()
 	var snapshot *policy.Snapshot

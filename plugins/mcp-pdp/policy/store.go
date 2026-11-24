@@ -218,15 +218,23 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 // to read rather than being silently skipped.
 func readSource(source string) (map[string][]byte, error) {
 	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(source, name)) }
-	present := func(name string) bool {
+	// Only "does not exist" means absent; any other lookup failure stops the
+	// publish rather than dropping a file the operator provided.
+	present := map[string]bool{}
+	for _, name := range []string{"approved_tools.json", "tools.json", "approved_instructions.json"} {
 		_, err := os.Lstat(filepath.Join(source, name))
-		return err == nil
+		switch {
+		case err == nil:
+			present[name] = true
+		case !errors.Is(err, os.ErrNotExist):
+			return nil, err
+		}
 	}
 	toolsFile := "approved_tools.json"
 	switch {
-	case present("approved_tools.json") && present("tools.json"):
+	case present["approved_tools.json"] && present["tools.json"]:
 		return nil, errors.New("source has both tools.json and approved_tools.json; keep only approved_tools.json")
-	case present("tools.json"):
+	case present["tools.json"]:
 		toolsFile = "tools.json"
 	}
 	contents := map[string][]byte{}
@@ -237,7 +245,7 @@ func readSource(source string) (map[string][]byte, error) {
 		}
 	}
 	contents["approved_instructions.json"] = []byte("{}\n")
-	if present("approved_instructions.json") {
+	if present["approved_instructions.json"] {
 		if contents["approved_instructions.json"], err = read("approved_instructions.json"); err != nil {
 			return nil, err
 		}

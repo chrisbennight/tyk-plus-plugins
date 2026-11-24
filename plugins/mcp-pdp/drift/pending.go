@@ -41,6 +41,7 @@ import (
 // Every list offers all its tools again, so a write dropped from a full queue
 // is made by the next list.
 type Pending struct {
+	dir          string
 	root         *os.Root
 	gateway      string
 	limits       Limits
@@ -122,25 +123,39 @@ const (
 
 var fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// OpenPending opens the shared directory. An empty dir disables sharing: the
-// returned value accepts and ignores writes and reports no declarations.
-func OpenPending(dir, gateway string, limits Limits) (*Pending, error) {
-	p := &Pending{gateway: gateway, limits: limits, now: time.Now}
+// OpenPending prepares the shared directory. An empty dir disables sharing:
+// the returned value accepts and ignores writes and reports no declarations.
+// A directory that cannot be opened yet is opened by a later Refresh; until
+// one succeeds the declarations are not current, so calls on proxies under
+// drift review are refused rather than decided without them.
+func OpenPending(dir, gateway string, limits Limits) *Pending {
+	p := &Pending{dir: dir, gateway: gateway, limits: limits, now: time.Now}
 	p.latest.Store(&sharedSnapshot{declared: map[string]Declared{}})
 	p.reviewed.Store(&map[string]bool{})
 	p.counts.Store(&entryCounts{byProxy: map[string]int{}})
 	if dir == "" {
-		return p, nil
+		return p
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return nil, err
-	}
-	p.root = root
 	p.declarations = make(chan declaration, queueLength)
 	p.reviews = make(chan review, reviewQueueLength)
+	p.open()
+	return p
+}
+
+// open opens the directory and starts the writer, once. Only the goroutine
+// that refreshes calls it.
+func (p *Pending) open() bool {
+	if p.root != nil {
+		return true
+	}
+	root, err := os.OpenRoot(p.dir)
+	if err != nil {
+		slog.Error("Could not open the drift review directory; calls under drift review are refused until it opens", "error", err)
+		return false
+	}
+	p.root = root
 	go p.write()
-	return p, nil
+	return true
 }
 
 func encodeName(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
@@ -221,7 +236,16 @@ type sharedSnapshot struct {
 // set with this version, so they cover every tool it reviews. Without a
 // shared directory there is nothing to read, and they always are.
 func (p *Pending) Current(version string) bool {
-	return p.root == nil || p.latest.Load().version == version
+	return p.dir == "" || p.latest.Load().version == version
+}
+
+// Lookup returns, from one consistent read, whether the shared declarations
+// were read for the policy set with this version and the newest declaration
+// of a tool from an upstream.
+func (p *Pending) Lookup(version, proxy, tool, upstream string) (current bool, d Declared, ok bool) {
+	snapshot := p.latest.Load()
+	d, ok = snapshot.declared[declarationKey(proxy, tool, upstream)]
+	return p.dir == "" || snapshot.version == version, d, ok
 }
 
 func declarationKey(proxy, tool, upstream string) string {
@@ -262,11 +286,9 @@ func (p *Pending) writeDeclaration(w *writer, d declaration) error {
 	if written && !d.declared.SeenAt.After(last.SeenAt) {
 		return nil
 	}
-	if !d.approved && !written {
-		if w.unapproved[d.proxy] >= p.limits.MaxUnapprovedPerProxy {
-			return nil
-		}
-		w.unapproved[d.proxy]++
+	charge := !d.approved && !written
+	if charge && w.unapproved[d.proxy] >= p.limits.MaxUnapprovedPerProxy {
+		return nil
 	}
 	dir := path.Join(encodeName(d.proxy), "latest", encodeName(d.tool))
 	if err := p.root.MkdirAll(dir, 0o775); err != nil {
@@ -278,6 +300,10 @@ func (p *Pending) writeDeclaration(w *writer, d declaration) error {
 	}
 	if err := p.publish(dir, encodeName(p.gateway)+".json", data, true); err != nil {
 		return err
+	}
+	// A tool without approval counts against the limit once its file exists.
+	if charge {
+		w.unapproved[d.proxy]++
 	}
 	w.own[key] = d.declared
 	return nil
@@ -383,13 +409,14 @@ func (p *Pending) publish(dir, name string, data []byte, replace bool) error {
 // read, the previous declarations are kept, so a failed read cannot release
 // a tool another gateway saw change.
 func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
-	if p.root == nil {
+	if p.dir == "" || !p.open() {
 		return
 	}
 	latest, counts := map[string]Declared{}, map[string]int{}
 	proxies, err := p.readDir(".")
 	if err != nil {
 		slog.Error("Could not read shared drift declarations", "error", err)
+		p.stale()
 		return
 	}
 	for _, encodedProxy := range proxies {
@@ -401,6 +428,7 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 		tools, err := p.readDir(path.Join(encodedProxy, "latest"))
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			slog.Error("Could not read shared drift declarations; keeping the previous ones", "error", err)
+			p.stale()
 			return
 		}
 		for _, encodedTool := range tools {
@@ -411,6 +439,7 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 			gateways, err := p.readDir(path.Join(encodedProxy, "latest", encodedTool))
 			if err != nil {
 				slog.Error("Could not read shared drift declarations; keeping the previous ones", "error", err)
+				p.stale()
 				return
 			}
 			for i, file := range gateways {
@@ -423,6 +452,7 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 					continue
 				case err != nil:
 					slog.Error("Could not read a shared drift declaration; keeping the previous ones", "error", err)
+					p.stale()
 					return
 				}
 				if d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint) {
@@ -437,6 +467,14 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 	}
 	p.latest.Store(&sharedSnapshot{version: version, declared: latest})
 	p.counts.Store(&entryCounts{generation: p.counts.Load().generation + 1, byProxy: counts})
+}
+
+// stale keeps the previous declarations but marks them as read for no set,
+// so calls under drift review are refused until a read succeeds; a
+// declaration recorded since could otherwise go unenforced.
+func (p *Pending) stale() {
+	previous := p.latest.Load()
+	p.latest.Store(&sharedSnapshot{declared: previous.declared})
 }
 
 // countEntries counts a proxy's review entries, stopping past the limit.

@@ -51,6 +51,10 @@ type Observation struct {
 
 func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 
+// ObservedProxy names a proxy and the upstream it targets, so what one
+// upstream declared is never taken for another's after a proxy is retargeted.
+func ObservedProxy(proxy, upstream string) string { return proxy + "\x00" + upstream }
+
 // Received numbers a reply as the gateway receives it, before checking it,
 // so a reply checked later cannot overwrite what a newer reply declared.
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }

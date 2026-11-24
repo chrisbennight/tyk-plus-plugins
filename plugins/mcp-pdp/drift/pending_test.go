@@ -20,11 +20,7 @@ func every(string, string) bool { return true }
 
 func openTestPending(t *testing.T, dir, gateway string) *Pending {
 	t.Helper()
-	p, err := OpenPending(dir, gateway, Limits{MaxDefinitionBytes: 1 << 10, MaxUnapprovedPerProxy: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
+	return OpenPending(dir, gateway, Limits{MaxDefinitionBytes: 1 << 10, MaxUnapprovedPerProxy: 2})
 }
 
 func newWriter() *writer {
@@ -292,8 +288,8 @@ func TestAFailedReadKeepsThePreviousDeclarations(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.Refresh("v2", every)
-	if _, ok := p.Latest("governed", "lookup", testUpstream); !ok || p.Current("v2") {
-		t.Fatal("a failed read dropped a declaration or claimed the new set")
+	if _, ok := p.Latest("governed", "lookup", testUpstream); !ok || p.Current("v2") || p.Current("v1") {
+		t.Fatal("a failed read dropped a declaration or left them current")
 	}
 }
 
@@ -305,5 +301,21 @@ func TestDeclarationsAreCurrentOnlyForTheSetTheyWereReadFor(t *testing.T) {
 	}
 	if !openTestPending(t, "", "one").Current("anything") {
 		t.Fatal("without a directory, declarations must never hold calls back")
+	}
+}
+
+func TestADirectoryThatCannotOpenHoldsCallsUntilItDoes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "later")
+	p := openTestPending(t, dir, "one")
+	p.Refresh("v1", every)
+	if p.Current("v1") {
+		t.Fatal("declarations were current without the directory")
+	}
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh("v1", every)
+	if !p.Current("v1") {
+		t.Fatal("the directory was not opened once it existed")
 	}
 }

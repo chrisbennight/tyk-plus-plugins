@@ -133,7 +133,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 				shared.Changed(proxy, tool, fingerprint, definition)
 			}
 		})
-		observed.RecordAt(proxy, received, receivedAt, declared, limits.MaxUnapprovedPerProxy)
+		observed.RecordAt(drift.ObservedProxy(proxy, upstream), received, receivedAt, declared, limits.MaxUnapprovedPerProxy)
 		return out
 	}
 	plainReceived, plainReceivedAt := observed.Received(), time.Now()

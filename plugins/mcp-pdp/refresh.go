@@ -65,13 +65,7 @@ func init() {
 	if gateway == "" {
 		gateway, _ = os.Hostname()
 	}
-	pending, err := drift.OpenPending(os.Getenv("CEDAR_PENDING_DIR"), gateway, limits)
-	if err != nil {
-		// Calls are still decided on what this gateway sees itself.
-		slog.Error("Could not open the drift review directory; declarations are not shared", "error", err)
-		pending, _ = drift.OpenPending("", gateway, limits)
-	}
-	shared = pending
+	shared = drift.OpenPending(os.Getenv("CEDAR_PENDING_DIR"), gateway, limits)
 	reloader := policy.NewReloader(storeRoot, os.Getenv("CEDAR_STATUS_FILE"), &active)
 	// A new set's shared declarations are read before it becomes active, so
 	// calls never use it without them.

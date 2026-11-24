@@ -83,18 +83,24 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		if validBody && call.Method == "tools/call" && call.Params.Name == name {
 			// Under drift enforcement a tool must be approved, and the
 			// definition its upstream last declared must be the approved one.
-			if view, enforcing := state.Drift(proxy); enforcing && !shared.Current(state.Version) {
-				// The set changed since the shared declarations were read,
-				// so they may not cover its tools yet; this lasts until the
-				// next refresh.
-				reason = drift.UnapprovedDefinition
-			} else if enforcing {
-				latest, at, seen := observed.LatestAt(proxy, name)
-				// Another gateway may have seen a newer declaration.
-				if d, ok := shared.Latest(proxy, name, view.Upstream()); ok && (!seen || d.SeenAt.After(at)) {
+			if view, enforcing := state.Drift(proxy); enforcing {
+				// What this gateway saw, and what any gateway shared, from the
+				// reviewed upstream; declarations from another upstream say
+				// nothing about its tools.
+				observedProxy := drift.ObservedProxy(proxy, view.Upstream())
+				latest, at, seen := observed.LatestAt(observedProxy, name)
+				current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream())
+				if ok && (!seen || d.SeenAt.After(at)) {
 					latest, seen = d.Fingerprint, true
 				}
-				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))
+				if !current {
+					// The shared declarations were not read for this set,
+					// after a set change or a failed read; calls wait for a
+					// read that succeeds.
+					reason = drift.UnapprovedDefinition
+				} else {
+					reason = drift.CallReason(view, name, latest, seen, observed.Complete(observedProxy))
+				}
 			} else {
 				reason = ""
 			}

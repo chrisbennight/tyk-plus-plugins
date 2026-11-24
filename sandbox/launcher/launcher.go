@@ -477,6 +477,16 @@ func (l *Launcher) start(c *net.UnixConn, limit time.Duration) {
 	case <-closed:
 		reason = "connection closed"
 	}
+	if reason == "time limit" || reason == "connection closed" {
+		// Stop the runtime's own command before clean-up, so the runtime has
+		// registered the sandbox, or given up, by the time destroy looks.
+		cmd.Process.Kill()
+		select {
+		case <-exited:
+		case <-time.After(cleanupWait):
+			slog.Warn("The runtime command did not exit after being killed", "run", id)
+		}
+	}
 	slog.Info("Sandbox ended", "run", id, "reason", reason)
 }
 

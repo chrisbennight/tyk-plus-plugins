@@ -191,6 +191,10 @@ func (s *Service) Handle(c net.Conn) {
 	reader := protocol.NewReader(c, s.config.Max.MaxLine())
 	var first protocol.Message
 	if err := reader.Read(&first); err != nil {
+		if errors.Is(err, protocol.ErrLineTooLong) {
+			client.write(protocol.Failed(protocol.KindLimit, "the start message exceeds %d bytes; the program may be at most %d bytes", s.config.Max.MaxLine(), s.config.Max.ProgramBytes))
+			return
+		}
 		client.write(protocol.Failed(protocol.KindProtocol, "unreadable first message: %v", err))
 		return
 	}

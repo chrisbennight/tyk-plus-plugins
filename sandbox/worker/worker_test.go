@@ -137,11 +137,15 @@ func TestProgramSeesNoHostCapabilities(t *testing.T) {
 			t.Errorf("global %s is %v", name, seen[name])
 		}
 	}
-	if seen["read"] != nil || seen["list"] != nil {
-		if s, ok := seen["read"].(string); !ok || !strings.HasPrefix(s, "refused") {
+	// The engine's modules may load, but they must reach nothing: opening a
+	// file yields nothing and listing the root fails.
+	if seen["read"] != nil {
+		if r, ok := seen["read"].(string); !ok || !strings.HasPrefix(r, "refused") {
 			t.Errorf("the program read a file: %v", seen["read"])
 		}
-		if s, ok := seen["list"].(string); !ok || !strings.HasPrefix(s, "refused") {
+	}
+	if seen["list"] != nil {
+		if r, ok := seen["list"].(string); !ok || !strings.HasPrefix(r, "refused") {
 			t.Errorf("the program listed a directory: %v", seen["list"])
 		}
 	}

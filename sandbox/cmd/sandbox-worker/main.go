@@ -28,8 +28,10 @@ type read struct {
 	err error
 }
 
-func newReplies(r *protocol.Reader) replies {
-	ch := make(chan read, 1)
+// newReplies buffers up to capacity replies, one per allowed tool call, so the
+// worker keeps reading replies while it is still sending calls.
+func newReplies(r *protocol.Reader, capacity int) replies {
+	ch := make(chan read, capacity)
 	go func() {
 		for {
 			var m protocol.Message
@@ -80,6 +82,6 @@ func main() {
 		// A missing or unreadable cache only costs compile time.
 		rt, _ = worker.NewRuntime("")
 	}
-	final := rt.Run(context.Background(), start, func(m protocol.Message) error { return protocol.Write(os.Stdout, m) }, newReplies(in))
+	final := rt.Run(context.Background(), start, func(m protocol.Message) error { return protocol.Write(os.Stdout, m) }, newReplies(in, start.Limits.Calls+1))
 	protocol.Write(os.Stdout, final)
 }

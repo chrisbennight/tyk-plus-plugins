@@ -15,7 +15,9 @@ the hosts that run them, in a tier separate from the gateways.
   the run finishes, times out or loses its connection.
 - **Worker** (`/worker` in every sandbox). Runs the program in QuickJS-NG
   compiled to WebAssembly, with no file system, environment, network or process
-  access. The program's only way out is a tool call, which the gateway checks
+  access. The engine's own `qjs:std` and `qjs:os` modules can be imported, but
+  find nothing to reach: no directories are mounted, the environment is empty,
+  and standard input is not connected. The program's only way out is a tool call, which the gateway checks
   exactly like a direct call from the same caller.
 
 The sandbox tier never holds caller credentials.

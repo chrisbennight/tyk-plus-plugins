@@ -21,15 +21,25 @@ var active atomic.Pointer[policy.Snapshot]
 // reading the store rarely.
 const defaultRefreshInterval = 5 * time.Second
 
-// reviewedTool reports whether the active set reviews a tool on a proxy under
-// drift review, so only declarations that can affect calls are read.
-func reviewedTool(proxy, tool string) bool {
-	state := current()
-	if state == nil {
-		return false
+// reviewedBy reports whether a set reviews a tool on a proxy under drift
+// review, so only declarations that can affect calls are read.
+func reviewedBy(state *policy.Snapshot) func(proxy, tool string) bool {
+	return func(proxy, tool string) bool {
+		if state == nil {
+			return false
+		}
+		view, ok := state.Drift(proxy)
+		return ok && view.Has(tool)
 	}
-	view, ok := state.Drift(proxy)
-	return ok && view.Has(tool)
+}
+
+// refreshShared reads the shared declarations for a set.
+func refreshShared(state *policy.Snapshot) {
+	version := ""
+	if state != nil {
+		version = state.Version
+	}
+	shared.Refresh(version, reviewedBy(state))
 }
 
 // current returns the active configuration without blocking.
@@ -63,12 +73,14 @@ func init() {
 	}
 	shared = pending
 	reloader := policy.NewReloader(storeRoot, os.Getenv("CEDAR_STATUS_FILE"), &active)
+	// A new set's shared declarations are read before it becomes active, so
+	// calls never use it without them.
+	reloader.BeforeActivate = refreshShared
 	reloader.Load()
-	shared.Refresh(reviewedTool)
 	go func() {
 		for range time.Tick(interval) {
 			reloader.Load()
-			shared.Refresh(reviewedTool)
+			refreshShared(current())
 		}
 	}()
 }

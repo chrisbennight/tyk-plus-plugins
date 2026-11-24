@@ -64,10 +64,16 @@ func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 // maxUnapproved such tools and its name is not unusually long; otherwise the
 // proxy is marked incomplete. A tool stops counting once it is approved.
 func (o *Observations) Record(proxy string, received uint64, declared []Observation, maxUnapproved int) {
+	o.RecordAt(proxy, received, time.Now(), declared, maxUnapproved)
+}
+
+// RecordAt is Record for a reply received at a known time, which the record
+// keeps as when the declarations were seen, so it orders them as the
+// gateways' shared declarations do.
+func (o *Observations) RecordAt(proxy string, received uint64, now time.Time, declared []Observation, maxUnapproved int) {
 	if len(declared) == 0 {
 		return
 	}
-	now := time.Now()
 	for {
 		previous := o.current.Load()
 		next := &observed{latest: map[string]entry{}, unapproved: map[string]int{}, incomplete: map[string]bool{}}

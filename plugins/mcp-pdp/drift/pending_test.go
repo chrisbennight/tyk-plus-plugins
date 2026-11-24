@@ -49,7 +49,7 @@ func TestTheNewestDeclarationOfAnyGatewayWins(t *testing.T) {
 	if err := one.writeDeclaration(w1, declare(fingerprintA, start, true)); err != nil {
 		t.Fatal(err)
 	}
-	reader.Refresh(every)
+	reader.Refresh("v", every)
 	d, ok := reader.Latest("governed", "lookup", testUpstream)
 	if !ok || d.Fingerprint != fingerprintB || d.Upstream != testUpstream {
 		t.Fatalf("read %+v, %v", d, ok)
@@ -70,7 +70,7 @@ func TestDeclarationsFromAnotherUpstreamAreKeptApart(t *testing.T) {
 	if err := two.writeDeclaration(newWriter(), other); err != nil {
 		t.Fatal(err)
 	}
-	one.Refresh(every)
+	one.Refresh("v", every)
 	if d, _ := one.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
 		t.Fatalf("read %+v", d)
 	}
@@ -87,7 +87,7 @@ func TestAnOlderSightingProcessedLateIsNotWritten(t *testing.T) {
 	if err := p.writeDeclaration(w, declare(fingerprintA, start, true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh(every)
+	p.Refresh("v", every)
 	if d, _ := p.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
 		t.Fatalf("read %+v", d)
 	}
@@ -109,7 +109,7 @@ func TestARepeatedSightingOverridesANewerDifferentOne(t *testing.T) {
 	if err := one.writeDeclaration(w1, declare(fingerprintA, start.Add(2*time.Minute), true)); err != nil {
 		t.Fatal(err)
 	}
-	one.Refresh(every)
+	one.Refresh("v", every)
 	if d, _ := one.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
 		t.Fatalf("read %+v", d)
 	}
@@ -121,7 +121,7 @@ func TestUnidentifiedDefinitionsAreShared(t *testing.T) {
 	if err := p.writeDeclaration(newWriter(), declare("", time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh(every)
+	p.Refresh("v", every)
 	if d, ok := p.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != "" {
 		t.Fatalf("read %+v, %v", d, ok)
 	}
@@ -133,7 +133,7 @@ func TestOnlyReviewedToolsAreRead(t *testing.T) {
 	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh(func(_, tool string) bool { return tool != "lookup" })
+	p.Refresh("v", func(_, tool string) bool { return tool != "lookup" })
 	if _, ok := p.Latest("governed", "lookup", testUpstream); ok {
 		t.Fatal("read a declaration of a tool the set does not review")
 	}
@@ -149,7 +149,7 @@ func TestToolsWithoutApprovalAreSharedUpToTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p.Refresh(every)
+	p.Refresh("v", every)
 	_, a := p.Latest("governed", "a", testUpstream)
 	_, c := p.Latest("governed", "c", testUpstream)
 	if !a || c {
@@ -236,7 +236,7 @@ func TestUnreadableDeclarationsAreSkipped(t *testing.T) {
 		}
 	}
 	p := openTestPending(t, dir, "one")
-	p.Refresh(every)
+	p.Refresh("v", every)
 	if _, ok := p.Latest("governed", "lookup", testUpstream); ok {
 		t.Fatal("read an unreadable declaration")
 	}
@@ -246,7 +246,7 @@ func TestWithoutADirectoryNothingIsShared(t *testing.T) {
 	p := openTestPending(t, "", "one")
 	p.Changed("governed", "lookup", fingerprintA, []byte(`{}`))
 	p.Saw("governed", testUpstream, "lookup", fingerprintA, true, time.Now())
-	p.Refresh(every)
+	p.Refresh("v", every)
 	if _, ok := p.Latest("governed", "lookup", testUpstream); ok {
 		t.Fatal("a declaration was shared without a directory")
 	}
@@ -255,8 +255,7 @@ func TestWithoutADirectoryNothingIsShared(t *testing.T) {
 func TestSightingsAreQueuedInOrderWithoutDropping(t *testing.T) {
 	// No writer drains these queues, so what was offered stays in them.
 	p := &Pending{declarations: make(chan declaration, 4), reviews: make(chan review, 4)}
-	latest := map[string]Declared{observationKey("governed", "lookup"): {Fingerprint: fingerprintB}}
-	p.latest.Store(&latest)
+	p.latest.Store(&sharedSnapshot{declared: map[string]Declared{declarationKey("governed", "lookup", testUpstream): {Fingerprint: fingerprintB}}})
 	// Even a sighting that matches the shared copy is queued, so a change
 	// queued before it cannot be the last word.
 	p.Saw("governed", testUpstream, "lookup", fingerprintA, true, time.Now())
@@ -277,5 +276,34 @@ func TestReviewEntriesAlreadyWrittenAreNotQueuedAgain(t *testing.T) {
 	p.Changed("governed", "lookup", fingerprintB, []byte(`{}`))
 	if len(p.reviews) != 1 {
 		t.Fatal("a new entry was not queued")
+	}
+}
+
+func TestAFailedReadKeepsThePreviousDeclarations(t *testing.T) {
+	dir := t.TempDir()
+	p := openTestPending(t, dir, "one")
+	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh("v1", every)
+	// A directory where a declaration file should be cannot be read, even
+	// by the superuser the tests may run as.
+	if err := os.Mkdir(filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"), "unreadable.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p.Refresh("v2", every)
+	if _, ok := p.Latest("governed", "lookup", testUpstream); !ok || p.Current("v2") {
+		t.Fatal("a failed read dropped a declaration or claimed the new set")
+	}
+}
+
+func TestDeclarationsAreCurrentOnlyForTheSetTheyWereReadFor(t *testing.T) {
+	p := openTestPending(t, t.TempDir(), "one")
+	p.Refresh("v1", every)
+	if !p.Current("v1") || p.Current("v2") {
+		t.Fatal("declarations were not tied to the set they were read for")
+	}
+	if !openTestPending(t, "", "one").Current("anything") {
+		t.Fatal("without a directory, declarations must never hold calls back")
 	}
 }

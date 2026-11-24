@@ -284,3 +284,24 @@ func TestKeyFileCreationIsAllOrNothing(t *testing.T) {
 		t.Fatalf("left %d files behind", len(entries))
 	}
 }
+
+// A deck claim is signed exactly as the deck writes it, even a number no
+// float64 can hold.
+func TestDeckNumbersAreSignedAsWritten(t *testing.T) {
+	d, err := loadDeck(writeDeck(t, `{"issuer":"i","audience":"a","lifetimeSeconds":60,"people":{"p":{"id":9007199254740993}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := publishedKey("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := newServer(d, key, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(get(t, s, http.MethodGet, "/token/p", "").Body.String(), ".")[1])
+	if err != nil || !strings.Contains(string(payload), `"id":9007199254740993`) {
+		t.Fatalf("payload %s, %v", payload, err)
+	}
+}

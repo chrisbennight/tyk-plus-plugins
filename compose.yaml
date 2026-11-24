@@ -8,6 +8,9 @@ services:
       MCP_UPSTREAM_URL: ${MCP_UPSTREAM_URL:-http://upstream.invalid/mcp}
       CEDAR_REFRESH_INTERVAL: ${CEDAR_REFRESH_INTERVAL:-5s}
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
+      # Drift review limits.
+      CEDAR_PENDING_MAX_DEFINITION_BYTES: ${CEDAR_PENDING_MAX_DEFINITION_BYTES:-262144}
+      CEDAR_PENDING_MAX_PER_PROXY: ${CEDAR_PENDING_MAX_PER_PROXY:-200}
       # Token callers: leave these unset to accept keys only.
       MCP_TOKEN_JWKS_URL: ${MCP_TOKEN_JWKS_URL:-}
       MCP_TOKEN_ISSUER: ${MCP_TOKEN_ISSUER:-}

@@ -73,12 +73,15 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 			if known && old.sequence > received {
 				continue
 			}
+			// A tool already recorded is always updated, since that adds
+			// nothing to the record; only new tools without approval count
+			// against the limit.
 			charged := known && old.charged
 			switch {
 			case d.Approved && charged:
 				next.unapproved[proxy]--
 				charged = false
-			case !d.Approved && !charged:
+			case !d.Approved && !known:
 				if next.unapproved[proxy] >= maxUnapproved || len(d.Tool) > maxToolName {
 					next.incomplete[proxy] = true
 					continue

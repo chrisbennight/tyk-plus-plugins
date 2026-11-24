@@ -448,3 +448,14 @@ func TestPlainRepliesAreNotRequests(t *testing.T) {
 		t.Fatal("misclassified a message")
 	}
 }
+
+func TestRecordedToolsAreUpdatedAtTheLimit(t *testing.T) {
+	var o Observations
+	o.Record("governed", o.Received(), []Observation{{Tool: "lookup", Fingerprint: "approved", Approved: true}, {Tool: "a"}}, 1)
+	// The limit is full, and lookup has lost its approval; its new
+	// definition must still replace the old one.
+	o.Record("governed", o.Received(), []Observation{{Tool: "lookup", Fingerprint: "changed"}}, 1)
+	if fp, _ := o.Latest("governed", "lookup"); fp != "changed" {
+		t.Fatalf("recorded %q", fp)
+	}
+}

@@ -29,7 +29,14 @@ func baseline(k keys, version string) {
 		"change": map[string]any{"arguments": args("count", "long")},
 	}}})
 	publish("activated", map[string]string{"rules.cedar": exampleRules, "tools.json": string(inventory), "checks.json": "[]"})
+	connectBefore, _ := observed()
 	c := connect(k.operator, version)
+	connectAfter, _ := observed()
+	if version == newerProtocol && discovery == discoveryUnsupported {
+		// The discovery attempt, the older handshake and its notification all
+		// reached the upstream: the fallback followed the upstream's own answer.
+		check(connectAfter-connectBefore == 3, "%s client: %d requests reached the upstream while connecting, want 3", version, connectAfter-connectBefore)
+	}
 	check(c.version == want, "%s client negotiated %s, want %s", version, c.version, want)
 	if version == newerProtocol {
 		check(c.discovery == discovery, "%s client saw discovery %q, want %q", version, c.discovery, discovery)
@@ -53,11 +60,17 @@ func baseline(k keys, version string) {
 
 	// Exact checks: where each call went and how it was refused.
 	call(c, k.support, "lookup", args("count", 1), "found")
+	// A permitted call's reply comes from the upstream, in the job's reply format.
+	check(c.lastStreamed == streamed, "%s client: streamed tool-call reply %v, want %v", version, c.lastStreamed, streamed)
 	// The gateway speaks to the upstream in the version the client negotiated.
 	check(upstreamVersion() == want, "%s client: the gateway used %q upstream, want %q", version, upstreamVersion(), want)
 	denied := call(c, k.support, "change", args("count", 2))
 	unknown := call(c, k.support, "unknown", args("count", 2))
 	check(sameRefusal(denied, unknown), "%s: hidden %v, unknown %v", version, denied, unknown)
+	// Malformed arguments must not reveal a hidden tool either.
+	malformedHidden := call(c, k.support, "change", args("count", "wrong"))
+	malformedUnknown := call(c, k.support, "unknown", args("count", "wrong"))
+	check(sameRefusal(malformedHidden, malformedUnknown) && sameRefusal(malformedHidden, denied), "%s: malformed hidden %v, unknown %v", version, malformedHidden, malformedUnknown)
 	call(c, k.operator, "change", args("count", 2), "updated")
 	supportToken := bearerCred(token("published", args("app_roles", []string{"support"})))
 	call(c, supportToken, "lookup", args(), "found")

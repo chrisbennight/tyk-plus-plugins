@@ -55,6 +55,10 @@ func driftSuite(k keys, version string) {
 	awaitSharedDeclaration("governed", "change", listedAt)
 	time.Sleep(time.Second)
 	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
+	// The peer never listed either tool, so it allows lookup only on the
+	// approved declaration it read from the shared directory.
+	awaitSharedDeclaration("governed", "lookup", listedAt)
+	call(connectAt(peerGateway, k.support, version), k.support, "lookup", args("count", 1), "found")
 	checkPendingChange("governed", "change", catalog["change"])
 	check(sameJSON(listed["lookup"], catalog["lookup"]), "%s: lookup listed as %v", version, listed["lookup"])
 	call(c, k.support, "lookup", args("count", 1), "found")

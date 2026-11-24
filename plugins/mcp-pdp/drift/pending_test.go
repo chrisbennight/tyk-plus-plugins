@@ -55,6 +55,7 @@ func TestTheNewestDeclarationOfAnyGatewayWins(t *testing.T) {
 
 func TestDeclarationsFromAnotherUpstreamAreKeptApart(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	one, two := openTestPending(t, dir, "one"), openTestPending(t, dir, "two")
 	start := time.Now()
 	if err := one.writeDeclaration(newWriter(), declare(fingerprintA, start, true)); err != nil {
@@ -67,14 +68,15 @@ func TestDeclarationsFromAnotherUpstreamAreKeptApart(t *testing.T) {
 	if err := two.writeDeclaration(newWriter(), other); err != nil {
 		t.Fatal(err)
 	}
-	one.Refresh("v", every)
-	if d, _ := one.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
+	reader.Refresh("v", every)
+	if d, _ := reader.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
 		t.Fatalf("read %+v", d)
 	}
 }
 
 func TestAnOlderSightingProcessedLateIsNotWritten(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	w := newWriter()
 	start := time.Now()
@@ -84,14 +86,15 @@ func TestAnOlderSightingProcessedLateIsNotWritten(t *testing.T) {
 	if err := p.writeDeclaration(w, declare(fingerprintA, start, true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v", every)
-	if d, _ := p.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
+	reader.Refresh("v", every)
+	if d, _ := reader.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
 		t.Fatalf("read %+v", d)
 	}
 }
 
 func TestARepeatedSightingOverridesANewerDifferentOne(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	one, two := openTestPending(t, dir, "one"), openTestPending(t, dir, "two")
 	w1, w2 := newWriter(), newWriter()
 	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -106,20 +109,21 @@ func TestARepeatedSightingOverridesANewerDifferentOne(t *testing.T) {
 	if err := one.writeDeclaration(w1, declare(fingerprintA, start.Add(2*time.Minute), true)); err != nil {
 		t.Fatal(err)
 	}
-	one.Refresh("v", every)
-	if d, _ := one.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
+	reader.Refresh("v", every)
+	if d, _ := reader.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintA {
 		t.Fatalf("read %+v", d)
 	}
 }
 
 func TestUnidentifiedDefinitionsAreShared(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	if err := p.writeDeclaration(newWriter(), declare("", time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v", every)
-	if d, ok := p.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != "" {
+	reader.Refresh("v", every)
+	if d, ok := reader.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != "" {
 		t.Fatalf("read %+v, %v", d, ok)
 	}
 }
@@ -138,6 +142,7 @@ func TestOnlyReviewedToolsAreRead(t *testing.T) {
 
 func TestToolsWithoutApprovalAreSharedUpToTheLimit(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	w := newWriter()
 	for _, tool := range []string{"a", "b", "c"} {
@@ -146,9 +151,9 @@ func TestToolsWithoutApprovalAreSharedUpToTheLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p.Refresh("v", every)
-	_, a := p.Latest("governed", "a", testUpstream)
-	_, c := p.Latest("governed", "c", testUpstream)
+	reader.Refresh("v", every)
+	_, a := reader.Latest("governed", "a", testUpstream)
+	_, c := reader.Latest("governed", "c", testUpstream)
 	if !a || c {
 		t.Fatalf("shared a=%v c=%v past a limit of two", a, c)
 	}
@@ -217,25 +222,44 @@ func TestNamesCannotLeaveTheDirectory(t *testing.T) {
 	}
 }
 
-func TestUnreadableDeclarationsAreSkipped(t *testing.T) {
+func TestInvalidDeclarationsHoldCalls(t *testing.T) {
+	for name, content := range map[string]string{
+		"garbled":   `{`,
+		"oversized": `{"fingerprint":"` + fingerprintA + `","pad":"` + strings.Repeat("x", maxDeclarationFile) + `"}`,
+		"notahash":  `{"fingerprint":"nope"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			tool := filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"))
+			if err := os.MkdirAll(tool, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(tool, name+".json"), []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			p := openTestPending(t, dir, "one")
+			p.Refresh("v", every)
+			if p.Current("v") {
+				t.Fatal("declarations were current with an invalid file")
+			}
+		})
+	}
+}
+
+func TestAGatewayDoesNotReadItsOwnDeclarations(t *testing.T) {
 	dir := t.TempDir()
-	tool := filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"))
-	if err := os.MkdirAll(tool, 0o755); err != nil {
+	p := openTestPending(t, dir, "one")
+	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
-	for name, content := range map[string]string{
-		"garbled.json":   `{`,
-		"oversized.json": `{"fingerprint":"` + fingerprintA + `","pad":"` + strings.Repeat("x", maxDeclarationFile) + `"}`,
-		"notahash.json":  `{"fingerprint":"nope"}`,
-	} {
-		if err := os.WriteFile(filepath.Join(tool, name), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	p := openTestPending(t, dir, "one")
 	p.Refresh("v", every)
-	if _, ok := p.Latest("governed", "lookup", testUpstream); ok {
-		t.Fatal("read an unreadable declaration")
+	if d, ok := p.Latest("governed", "lookup", testUpstream); ok {
+		t.Fatalf("read its own declaration %+v", d)
+	}
+	other := openTestPending(t, dir, "two")
+	other.Refresh("v", every)
+	if d, ok := other.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != fingerprintA {
+		t.Fatalf("another gateway read %+v, %v", d, ok)
 	}
 }
 
@@ -278,18 +302,19 @@ func TestReviewEntriesAlreadyWrittenAreNotQueuedAgain(t *testing.T) {
 
 func TestAFailedReadKeepsThePreviousDeclarations(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	if err := p.writeDeclaration(newWriter(), declare(fingerprintA, time.Now(), true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v1", every)
+	reader.Refresh("v1", every)
 	// A directory where a declaration file should be cannot be read, even
 	// by the superuser the tests may run as.
 	if err := os.Mkdir(filepath.Join(dir, encodeName("governed"), "latest", encodeName("lookup"), "unreadable.json"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v2", every)
-	if _, ok := p.Latest("governed", "lookup", testUpstream); !ok || p.Current("v2") || p.Current("v1") {
+	reader.Refresh("v2", every)
+	if _, ok := reader.Latest("governed", "lookup", testUpstream); !ok || reader.Current("v2") || reader.Current("v1") {
 		t.Fatal("a failed read dropped a declaration or left them current")
 	}
 }
@@ -323,6 +348,7 @@ func TestADirectoryThatCannotOpenHoldsCallsUntilItDoes(t *testing.T) {
 
 func TestAGatewayKeepsWhatEachUpstreamDeclared(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	w := newWriter()
 	start := time.Now()
@@ -334,8 +360,8 @@ func TestAGatewayKeepsWhatEachUpstreamDeclared(t *testing.T) {
 	if err := p.writeDeclaration(w, moved); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v", every)
-	if d, ok := p.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != fingerprintA {
+	reader.Refresh("v", every)
+	if d, ok := reader.Latest("governed", "lookup", testUpstream); !ok || d.Fingerprint != fingerprintA {
 		t.Fatalf("lost what the first upstream declared: %+v", d)
 	}
 }
@@ -361,6 +387,7 @@ func TestTooManyDeclarationFilesHoldCalls(t *testing.T) {
 
 func TestALateSightingFromOneUpstreamIsWrittenAfterAnotherUpstreams(t *testing.T) {
 	dir := t.TempDir()
+	reader := openTestPending(t, dir, "reader")
 	p := openTestPending(t, dir, "one")
 	w := newWriter()
 	start := time.Now()
@@ -377,8 +404,8 @@ func TestALateSightingFromOneUpstreamIsWrittenAfterAnotherUpstreams(t *testing.T
 	if err := p.writeDeclaration(w, declare(fingerprintB, start.Add(time.Second), true)); err != nil {
 		t.Fatal(err)
 	}
-	p.Refresh("v", every)
-	if d, _ := p.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
+	reader.Refresh("v", every)
+	if d, _ := reader.Latest("governed", "lookup", testUpstream); d.Fingerprint != fingerprintB {
 		t.Fatalf("the reviewed upstream's change was not shared: %+v", d)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -427,15 +428,16 @@ func (p *Pending) publish(dir, name string, data []byte, replace bool) error {
 // Refresh reads the newest declaration of every tool keep accepts, for the
 // policy set with this version, and counts each proxy's review entries. keep
 // limits reading to the tools of that set, so declarations of tools no longer
-// reviewed cannot crowd out current ones. Files that are not declarations,
-// or are larger than one can be, are skipped; if the directory cannot be
-// read, the previous declarations are kept, so a failed read cannot release
-// a tool another gateway saw change.
+// reviewed cannot crowd out current ones. Only other gateways' files are
+// read. If the directory or any declaration cannot be read, or a file is not
+// a valid declaration, the previous declarations are kept and marked stale,
+// so a failed read cannot release a tool another gateway saw change.
 func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 	if p.dir == "" || !p.open() {
 		return
 	}
 	latest, counts := map[string]Declared{}, map[string]int{}
+	own := encodeName(p.gateway) + "."
 	proxies, err := p.readDir(".")
 	if err != nil {
 		slog.Error("Could not read shared drift declarations", "error", err)
@@ -473,17 +475,23 @@ func (p *Pending) Refresh(version string, keep func(proxy, tool string) bool) {
 				return
 			}
 			for _, file := range gateways {
+				// This gateway's own sightings are decided from its own
+				// records, which order replies as they were received; its
+				// files are for the other gateways.
+				if strings.HasPrefix(file, own) {
+					continue
+				}
 				var d Declared
 				switch err := p.readJSON(path.Join(encodedProxy, "latest", encodedTool, file), &d); {
-				case errors.Is(err, errNotDeclaration):
-					continue
 				case err != nil:
 					slog.Error("Could not read a shared drift declaration; keeping the previous ones", "error", err)
 					p.stale()
 					return
 				}
 				if d.Fingerprint != "" && !fingerprintPattern.MatchString(d.Fingerprint) {
-					continue
+					slog.Error("A shared drift declaration is not valid; keeping the previous ones", "proxy", proxy, "tool", tool)
+					p.stale()
+					return
 				}
 				key := declarationKey(proxy, tool, d.Upstream)
 				if newest, ok := latest[key]; !ok || d.SeenAt.After(newest.SeenAt) {
@@ -540,7 +548,7 @@ func (p *Pending) readDir(dir string) ([]string, error) {
 }
 
 // errNotDeclaration marks a file that is too large or not JSON, which no
-// gateway wrote, as opposed to one that could not be read.
+// gateway writes.
 var errNotDeclaration = errors.New("not a declaration")
 
 func (p *Pending) readJSON(name string, v any) error {

@@ -1,0 +1,4 @@
+{
+  "indexer": {"issuer": "examples", "subject": "indexer", "roles": ["analyst"]},
+  "deployer": {"issuer": "examples", "subject": "deployer", "roles": ["admin"]}
+}

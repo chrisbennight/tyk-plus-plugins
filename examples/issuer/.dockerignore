@@ -1,0 +1,6 @@
+# Send the builder only the Go source, so a key file or deck saved here never
+# reaches an image build, whatever its name.
+*
+!*.go
+!go.mod
+!go.sum

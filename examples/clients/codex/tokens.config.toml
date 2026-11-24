@@ -1,0 +1,34 @@
+# The same servers as two people presenting tokens from the example issuer.
+# Tokens expire after an hour; print fresh ones as examples/README.md shows.
+
+[mcp_servers.directory_analyst]
+url = "http://127.0.0.1:8080/directory/"
+bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
+
+[mcp_servers.payments_analyst]
+url = "http://127.0.0.1:8080/payments/"
+bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
+
+[mcp_servers.notes_analyst]
+url = "http://127.0.0.1:8080/notes/"
+bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
+
+[mcp_servers.older_analyst]
+url = "http://127.0.0.1:8080/older/"
+bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
+
+[mcp_servers.directory_admin]
+url = "http://127.0.0.1:8080/directory/"
+bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
+
+[mcp_servers.payments_admin]
+url = "http://127.0.0.1:8080/payments/"
+bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
+
+[mcp_servers.notes_admin]
+url = "http://127.0.0.1:8080/notes/"
+bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
+
+[mcp_servers.older_admin]
+url = "http://127.0.0.1:8080/older/"
+bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"

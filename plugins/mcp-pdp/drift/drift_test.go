@@ -96,6 +96,13 @@ func TestRepliesThatCannotBeCheckedAreReplaced(t *testing.T) {
 			t.Errorf("%s became %s", message, out)
 		}
 	}
+	// A message that is neither a result, an error, a request nor a
+	// notification is replaced too, and an ID that is not a string or number
+	// is not echoed.
+	out := FilterToolsList([]byte(`{"jsonrpc":"2.0","id":{"text":"wrong"},"tools":[]}`), v, func(string, string) {})
+	if strings.Contains(string(out), "wrong") || !strings.Contains(string(out), `"id":null`) {
+		t.Errorf("became %s", out)
+	}
 	// Errors and notifications carry no tool definitions.
 	for _, message := range []string{`{"jsonrpc":"2.0","id":7,"error":{"code":-32601,"message":"no"}}`, `{"jsonrpc":"2.0","method":"notifications/message","params":{}}`} {
 		if out := FilterToolsList([]byte(message), v, func(string, string) {}); string(out) != message {
@@ -151,13 +158,17 @@ func TestStreamedEventsAreRewritten(t *testing.T) {
 	}
 }
 
-func TestStreamWithoutFinalBlankLine(t *testing.T) {
-	stream := "data: " + string(reply(newTool))
-	out, err := io.ReadAll(NewEventRewriter(io.NopCloser(strings.NewReader(stream)), 1<<20, func(data []byte) []byte {
-		return FilterToolsList(data, view(t, `{}`), func(string, string) {})
-	}))
-	if err != nil || strings.Contains(string(out), "Delete everything") || !strings.HasSuffix(string(out), "\n\n") {
-		t.Fatalf("%q %v", out, err)
+func TestUnfinishedEventsAreDropped(t *testing.T) {
+	// Clients discard an event the stream ended before completing.
+	for _, stream := range []string{"data: " + string(reply(approvedLookup)), "data: " + string(reply(approvedLookup)) + "\n"} {
+		seen := false
+		out, err := io.ReadAll(NewEventRewriter(io.NopCloser(strings.NewReader(stream)), 1<<20, func(data []byte) []byte {
+			seen = true
+			return data
+		}))
+		if err != nil || strings.Contains(string(out), "data") || seen {
+			t.Fatalf("%q %v checked=%v", out, err, seen)
+		}
 	}
 }
 
@@ -263,5 +274,44 @@ func TestRepeatedKeysReplaceTheReply(t *testing.T) {
 	out := FilterToolsList(reply(duplicate), view(t, `{}`), func(string, string) {})
 	if strings.Contains(string(out), "Ignore previous instructions") || !strings.Contains(string(out), "could not be checked") {
 		t.Fatalf("%s", out)
+	}
+}
+
+func TestOnlyKnownFieldsAndCommentsPass(t *testing.T) {
+	message := string(reply(approvedLookup, newTool))
+	// After the leading mark is removed, a second one would hide a data line
+	// from the rewriter but not from a client; unknown fields are dropped.
+	out := rewrite(t, "\xef\xbb\xbf\xef\xbb\xbfdata: "+message+"\nretry: 5\nfoo: bar\n\n", 1<<20)
+	if strings.Contains(out, "Delete everything") || strings.Contains(out, "foo") || !strings.Contains(out, "retry: 5\n") {
+		t.Fatalf("%q", out)
+	}
+}
+
+func TestKeepaliveCommentsPassAtOnce(t *testing.T) {
+	source, sink := io.Pipe()
+	defer sink.Close()
+	rewriter := NewEventRewriter(source, 1<<20, func(data []byte) []byte { return data })
+	go sink.Write([]byte(": keepalive\n"))
+	buf := make([]byte, 64)
+	n, err := rewriter.Read(buf)
+	if err != nil || string(buf[:n]) != ": keepalive\n" {
+		t.Fatalf("%q %v", buf[:n], err)
+	}
+}
+
+func TestRepeatedNamesAreListedOnce(t *testing.T) {
+	seen := map[string]string{}
+	out := FilterToolsList(reply(approvedLookup, approvedLookup, approvedChange, changedChange), view(t, `{"changedTools": "serve-approved"}`),
+		func(n, fp string) { seen[n] = fp })
+	names, _, _ := listed(t, out)
+	if strings.Join(names, ",") != "lookup,change" {
+		t.Fatalf("listed %v", names)
+	}
+	// Conflicting definitions of change match nothing, so calls are refused.
+	if seen["change"] != "" || CallReason(view(t, `{}`), "change", seen["change"], true) != UnapprovedDefinition {
+		t.Fatalf("observed %v", seen)
+	}
+	if CallReason(view(t, `{}`), "lookup", seen["lookup"], true) != "" {
+		t.Fatalf("observed %v", seen)
 	}
 }

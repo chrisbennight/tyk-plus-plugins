@@ -77,3 +77,19 @@ func replaceBody(res *http.Response, body []byte) {
 	res.ContentLength = int64(len(body))
 	res.Header.Set("Content-Length", strconv.Itoa(len(body)))
 }
+
+// underDriftReview reports whether CheckResponse will read this request's
+// reply: on a proxy under drift review, or on any proxy while the gateway has
+// no valid set and so cannot tell.
+func underDriftReview(req *http.Request) bool {
+	oas := ctx.GetOASDefinition(req)
+	if oas == nil || oas.GetTykExtension() == nil {
+		return false
+	}
+	state := current()
+	if state == nil {
+		return true
+	}
+	_, enforcing := state.Drift(oas.GetTykExtension().Info.ID)
+	return enforcing
+}

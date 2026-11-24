@@ -36,9 +36,11 @@ func CallReason(view policy.DriftView, name, latest string, seen bool) string {
 // whose upstream definition matches the approved one is sent as approved, so
 // even its unfingerprinted _meta is reviewed text. A changed tool is left
 // out, or shown with its approved definition when the proxy serves approved
-// definitions. New tools are left out. observe receives the fingerprint each
-// approved tool's upstream declared. A message that cannot be checked is
-// replaced with an error, so unchecked upstream text never reaches the client.
+// definitions. New tools are left out, and each tool is listed at most once.
+// observe receives the fingerprint each approved tool's upstream declared, or
+// "" when one reply declared it more than once with different definitions. A
+// message that cannot be checked is replaced with an error, so unchecked
+// upstream text never reaches the client.
 func FilterToolsList(message []byte, view policy.DriftView, observe func(name, fingerprint string)) []byte {
 	var envelope map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(message, &envelope); err != nil {
@@ -47,8 +49,14 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	raw, ok := envelope["result"]
 	if !ok {
 		// Error replies, and requests and notifications sharing the stream,
-		// carry no tool definitions.
-		return message
+		// carry no tool definitions. Anything else is not a valid message.
+		if _, isError := envelope["error"]; isError {
+			return message
+		}
+		if _, isRequest := envelope["method"]; isRequest {
+			return message
+		}
+		return checkFailed(envelope["id"])
 	}
 	var result map[string]jsontext.Value
 	if err := jsonv2.Unmarshal(raw, &result); err != nil {
@@ -63,7 +71,8 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 	if err := jsonv2.Unmarshal(listed, &tools); err != nil {
 		return checkFailed(envelope["id"])
 	}
-	kept := make([]jsontext.Value, 0, len(tools))
+	var order []string
+	declared := map[string]string{}
 	for _, definition := range tools {
 		var named struct {
 			Name string `json:"name"`
@@ -72,15 +81,28 @@ func FilterToolsList(message []byte, view policy.DriftView, observe func(name, f
 		if jsonv2.Unmarshal(definition, &named) != nil || named.Name == "" {
 			continue
 		}
-		approved, approvedDefinition, ok := view.Approved(named.Name)
-		if !ok {
+		if _, _, ok := view.Approved(named.Name); !ok {
 			continue
 		}
 		fingerprint, err := policy.DefinitionFingerprint(definition)
 		if err != nil {
-			continue
+			fingerprint = ""
 		}
-		observe(named.Name, fingerprint)
+		previous, repeated := declared[named.Name]
+		switch {
+		case !repeated:
+			order = append(order, named.Name)
+			declared[named.Name] = fingerprint
+		case previous != fingerprint:
+			// Conflicting definitions of one tool match nothing.
+			declared[named.Name] = ""
+		}
+	}
+	kept := make([]jsontext.Value, 0, len(order))
+	for _, name := range order {
+		fingerprint := declared[name]
+		observe(name, fingerprint)
+		approved, approvedDefinition, _ := view.Approved(name)
 		if fingerprint == approved || view.ServeApproved() {
 			kept = append(kept, jsontext.Value(approvedDefinition))
 		}
@@ -106,7 +128,9 @@ func CheckFailed(message []byte) []byte {
 
 // checkFailed is the error reply that replaces unchecked upstream text.
 func checkFailed(id jsontext.Value) []byte {
-	if len(id) == 0 {
+	// Only a string or number is kept, so no other upstream content can ride
+	// along in the gateway's own error.
+	if len(id) == 0 || (id[0] != '"' && id[0] != '-' && (id[0] < '0' || id[0] > '9')) {
 		id = jsontext.Value("null")
 	}
 	out, _ := jsonv2.Marshal(map[string]any{"jsonrpc": "2.0", "id": id,

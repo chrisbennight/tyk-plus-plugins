@@ -11,9 +11,9 @@ import (
 // server-sent event stream. Lines are read as the event-stream format defines
 // them: ended by CRLF, LF or CR, after an optional leading byte order mark.
 // Data spanning several lines is joined before the transform, and each line
-// of its result is written as its own data line. Other fields and comments
-// pass unchanged. An event larger than the limit cannot be checked, so it is
-// replaced with an error and the stream ends.
+// of its result is written as its own data line. An event larger than the
+// limit cannot be checked, so it is replaced with an error and the stream
+// ends.
 type EventRewriter struct {
 	source    *bufio.Reader
 	body      io.Closer
@@ -82,7 +82,11 @@ func (r *EventRewriter) readLine(size *int) ([]byte, error) {
 }
 
 // readEvent reads lines up to and including the blank line that ends an
-// event, and returns the event with its data transformed.
+// event, and returns the event with its data transformed. Only the fields the
+// event-stream format defines are passed on, and comments; clients ignore any
+// other field, so dropping it changes nothing for them and no line the
+// rewriter did not recognize reaches a client. A comment outside an event is
+// passed on at once, so keepalives are not held back.
 func (r *EventRewriter) readEvent() ([]byte, error) {
 	var out bytes.Buffer
 	var data [][]byte
@@ -96,29 +100,31 @@ func (r *EventRewriter) readEvent() ([]byte, error) {
 			r.started = true
 			line = bytes.TrimPrefix(line, []byte("\xef\xbb\xbf"))
 		}
-		ended := err == io.EOF
-		if err == nil && len(line) == 0 {
+		if err == io.EOF {
+			// Clients discard an event the stream ended before completing,
+			// so its data is neither checked nor passed on.
+			return out.Bytes(), io.EOF
+		}
+		if len(line) == 0 {
 			if data != nil {
 				out.Write(dataLines(r.transform(bytes.Join(data, []byte("\n")))))
 			}
 			out.WriteString("\n")
 			return out.Bytes(), nil
 		}
-		if len(line) > 0 {
-			field, value, _ := bytes.Cut(line, []byte(":"))
-			if len(field) > 0 && string(field) == "data" {
-				data = append(data, bytes.TrimPrefix(value, []byte(" ")))
-			} else {
-				out.Write(line)
-				out.WriteString("\n")
+		field, value, _ := bytes.Cut(line, []byte(":"))
+		switch string(field) {
+		case "data":
+			data = append(data, bytes.TrimPrefix(value, []byte(" ")))
+		case "":
+			out.Write(line)
+			out.WriteString("\n")
+			if data == nil && out.Len() == len(line)+1 {
+				return out.Bytes(), nil
 			}
-		}
-		if ended {
-			if data != nil {
-				out.Write(dataLines(r.transform(bytes.Join(data, []byte("\n")))))
-				out.WriteString("\n")
-			}
-			return out.Bytes(), io.EOF
+		case "event", "id", "retry":
+			out.Write(line)
+			out.WriteString("\n")
 		}
 	}
 }

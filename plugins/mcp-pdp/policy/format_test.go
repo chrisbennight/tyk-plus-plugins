@@ -237,6 +237,15 @@ func TestDeeplyNestedDefinitionsFingerprintQuickly(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("a %d-level definition took %s", depth, elapsed)
 	}
+	// A large value deep inside is written once, not once per enclosing level.
+	large := strings.Repeat(`{"items":`, depth) + `{"description":"` + strings.Repeat("x", 4<<20) + `"}` + strings.Repeat("}", depth)
+	start = time.Now()
+	if _, err := DefinitionFingerprint([]byte(`{"name":"lookup","inputSchema":` + large + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("a %d-level definition with a large value took %s", depth, elapsed)
+	}
 }
 
 func TestDriftSettingsAreValidated(t *testing.T) {

@@ -214,15 +214,19 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 // readSource reads policy files laid out as either format and returns them
 // as format-2 files. A format-1 directory has tools.json and no approved
 // instructions; approved_instructions.json is optional and defaults to none.
+// Presence is decided by name, so a broken link counts as present and fails
+// to read rather than being silently skipped.
 func readSource(source string) (map[string][]byte, error) {
 	read := func(name string) ([]byte, error) { return os.ReadFile(filepath.Join(source, name)) }
-	_, newErr := os.Stat(filepath.Join(source, "approved_tools.json"))
-	_, oldErr := os.Stat(filepath.Join(source, "tools.json"))
+	present := func(name string) bool {
+		_, err := os.Lstat(filepath.Join(source, name))
+		return err == nil
+	}
 	toolsFile := "approved_tools.json"
 	switch {
-	case newErr == nil && oldErr == nil:
+	case present("approved_tools.json") && present("tools.json"):
 		return nil, errors.New("source has both tools.json and approved_tools.json; keep only approved_tools.json")
-	case newErr != nil && oldErr == nil:
+	case present("tools.json"):
 		toolsFile = "tools.json"
 	}
 	contents := map[string][]byte{}
@@ -232,10 +236,11 @@ func readSource(source string) (map[string][]byte, error) {
 			return nil, err
 		}
 	}
-	if contents["approved_instructions.json"], err = read("approved_instructions.json"); errors.Is(err, os.ErrNotExist) {
-		contents["approved_instructions.json"] = []byte("{}\n")
-	} else if err != nil {
-		return nil, err
+	contents["approved_instructions.json"] = []byte("{}\n")
+	if present("approved_instructions.json") {
+		if contents["approved_instructions.json"], err = read("approved_instructions.json"); err != nil {
+			return nil, err
+		}
 	}
 	return contents, nil
 }

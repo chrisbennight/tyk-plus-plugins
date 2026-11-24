@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const formatTools = `{"governed": {"upstream": "https://u.example/mcp", "tools": {
@@ -206,5 +207,34 @@ forbid (principal, action, resource) when { resource.upstreamAnnotations.numbers
 		if got := compileCost(t, rules, "1e400", format); got != "permitted" {
 			t.Errorf("format %d, cost 1e400: %s", format, got)
 		}
+	}
+}
+
+func TestBrokenLinksInASourceAreNotSkipped(t *testing.T) {
+	for _, name := range []string{"approved_tools.json", "approved_instructions.json"} {
+		root, source := t.TempDir(), t.TempDir()
+		for file, text := range map[string]string{"rules.cedar": formatRules, "tools.json": formatTools, "checks.json": "[]"} {
+			if err := os.WriteFile(filepath.Join(source, file), []byte(text), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.Symlink(filepath.Join(source, "missing"), filepath.Join(source, name)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Promote(root, source, "", epoch); err == nil {
+			t.Errorf("a broken %s link was ignored", name)
+		}
+	}
+}
+
+func TestDeeplyNestedDefinitionsFingerprintQuickly(t *testing.T) {
+	const depth = 5000
+	schema := strings.Repeat(`{"items":`, depth) + `{"type":"string","description":"` + strings.Repeat("x", 1000) + `"}` + strings.Repeat("}", depth)
+	start := time.Now()
+	if _, err := DefinitionFingerprint([]byte(`{"name":"lookup","inputSchema":` + schema + `}`)); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("a %d-level definition took %s", depth, elapsed)
 	}
 }

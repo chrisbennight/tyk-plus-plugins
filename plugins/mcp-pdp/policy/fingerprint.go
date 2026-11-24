@@ -1,12 +1,14 @@
 package policy
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"slices"
+	"strings"
 
-	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 )
 
@@ -17,80 +19,97 @@ import (
 // compared by their text rather than their escapes, and numbers keep their
 // exact written form, so no two different values share a fingerprint.
 func DefinitionFingerprint(definition []byte) (string, error) {
-	var fields map[string]jsontext.Value
-	if err := jsonv2.Unmarshal(definition, &fields); err != nil || fields == nil {
-		return "", errors.New("definition must be a JSON object without repeated keys")
+	// The decoder rejects repeated keys at any depth and reads each token once.
+	dec := jsontext.NewDecoder(bytes.NewReader(definition))
+	if dec.PeekKind() != '{' {
+		return "", errors.New("definition must be a JSON object")
 	}
-	delete(fields, "_meta")
-	canonical, err := canonicalObject(nil, fields)
+	canonical, err := canonicalValue(dec, true)
 	if err != nil {
 		return "", err
+	}
+	if _, err := dec.ReadToken(); err != io.EOF {
+		return "", errors.New("definition has data after the object")
 	}
 	sum := sha256.Sum256(canonical)
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func canonicalObject(out []byte, fields map[string]jsontext.Value) ([]byte, error) {
-	keys := make([]string, 0, len(fields))
-	for key := range fields {
-		keys = append(keys, key)
-	}
-	slices.Sort(keys)
-	out = append(out, '{')
-	for i, key := range keys {
-		if i > 0 {
-			out = append(out, ',')
-		}
-		var err error
-		if out, err = jsontext.AppendQuote(out, key); err != nil {
-			return nil, err
-		}
-		out = append(out, ':')
-		if out, err = canonicalValue(out, fields[key]); err != nil {
-			return nil, err
-		}
-	}
-	return append(out, '}'), nil
-}
-
-// canonicalValue appends one value. The JSON library rejects repeated keys
-// at every depth while decoding.
-func canonicalValue(out []byte, value jsontext.Value) ([]byte, error) {
-	switch value.Kind() {
+// canonicalValue reads one value from the decoder and returns its canonical
+// form. At the top level the _meta member is left out.
+func canonicalValue(dec *jsontext.Decoder, top bool) ([]byte, error) {
+	switch dec.PeekKind() {
 	case '{':
-		var fields map[string]jsontext.Value
-		if err := jsonv2.Unmarshal(value, &fields); err != nil {
+		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		return canonicalObject(out, fields)
-	case '[':
-		var items []jsontext.Value
-		if err := jsonv2.Unmarshal(value, &items); err != nil {
+		type member struct {
+			key   string
+			value []byte
+		}
+		var members []member
+		for dec.PeekKind() != '}' {
+			token, err := dec.ReadToken()
+			if err != nil {
+				return nil, err
+			}
+			key := token.String()
+			value, err := canonicalValue(dec, false)
+			if err != nil {
+				return nil, err
+			}
+			if top && key == "_meta" {
+				continue
+			}
+			members = append(members, member{key, value})
+		}
+		if _, err := dec.ReadToken(); err != nil {
 			return nil, err
 		}
-		out = append(out, '[')
-		for i, item := range items {
+		slices.SortFunc(members, func(a, b member) int { return strings.Compare(a.key, b.key) })
+		out := []byte{'{'}
+		for i, m := range members {
 			if i > 0 {
 				out = append(out, ',')
 			}
 			var err error
-			if out, err = canonicalValue(out, item); err != nil {
+			if out, err = jsontext.AppendQuote(out, m.key); err != nil {
 				return nil, err
 			}
+			out = append(append(out, ':'), m.value...)
+		}
+		return append(out, '}'), nil
+	case '[':
+		if _, err := dec.ReadToken(); err != nil {
+			return nil, err
+		}
+		out := []byte{'['}
+		for first := true; dec.PeekKind() != ']'; first = false {
+			value, err := canonicalValue(dec, false)
+			if err != nil {
+				return nil, err
+			}
+			if !first {
+				out = append(out, ',')
+			}
+			out = append(out, value...)
+		}
+		if _, err := dec.ReadToken(); err != nil {
+			return nil, err
 		}
 		return append(out, ']'), nil
 	case '"':
-		var text string
-		if err := jsonv2.Unmarshal(value, &text); err != nil {
+		token, err := dec.ReadToken()
+		if err != nil {
 			return nil, err
 		}
-		return jsontext.AppendQuote(out, text)
+		return jsontext.AppendQuote(nil, token.String())
 	default:
 		// Numbers, true, false and null keep their exact text.
-		compact := value.Clone()
-		if err := compact.Compact(); err != nil {
+		value, err := dec.ReadValue()
+		if err != nil {
 			return nil, err
 		}
-		return append(out, compact...), nil
+		return append([]byte(nil), value...), nil
 	}
 }

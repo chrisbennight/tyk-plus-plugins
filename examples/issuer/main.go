@@ -181,6 +181,9 @@ func loadDeck(path string) (*deck, error) {
 		if !personName.MatchString(name) {
 			return nil, fmt.Errorf("person %q: names use lowercase letters, digits and hyphens", name)
 		}
+		if claims == nil {
+			return nil, fmt.Errorf("person %q: claims must be an object, even an empty one", name)
+		}
 		for _, claim := range reserved {
 			if _, ok := claims[claim]; ok {
 				return nil, fmt.Errorf("person %q: %q is set by the deck, not per person", name, claim)

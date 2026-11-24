@@ -52,6 +52,7 @@ func TestLoadDeckRejectsMistakes(t *testing.T) {
 		"missing people":        `{"issuer":"i","audience":"a","lifetimeSeconds":1}`,
 		"stray closing bracket": `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}}} ]`,
 		"lifetime over a year":  `{"issuer":"i","audience":"a","lifetimeSeconds":31536001,"people":{"p":{}}}`,
+		"null claims":           `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":null}}`,
 		"duplicate person":      `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{},"p":{}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {

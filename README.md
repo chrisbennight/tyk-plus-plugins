@@ -22,7 +22,7 @@ To see the gateway working with example policy, mock MCP servers, and Claude Cod
 
 ## Code Mode sandbox host
 
-Code Mode programs run on a separate [sandbox host](sandbox/README.md): one gVisor sandbox per run, reached from gateways over mutual TLS. Start it locally with `docker compose --profile codemode up -d sandbox-launcher sandbox` after providing its certificates. Gateways do not call it yet.
+Code Mode programs run on a separate [sandbox host](sandbox/README.md): one gVisor sandbox per run, reached from gateways over mutual TLS. Start it with `docker compose -f sandbox/compose.yaml up -d` after providing its certificates. Gateways do not call it yet.
 
 ## Supported MCP versions
 

@@ -35,9 +35,12 @@ with no network interface other than loopback.
 The sandbox service reports its backend to gateways at the start of every run,
 so a gateway can refuse a backend it does not accept.
 
-When the launcher starts, it runs a self-test sandbox that tries to reach the
-network, read a file from the launcher's container, and write to its own file
-system. If any attempt succeeds, the host refuses every run and reports why.
+When the launcher starts, it runs a self-test sandbox. The test passes only on
+evidence of each boundary: no network interface but loopback, a world-readable
+file in the launcher's container that does not exist inside the sandbox, a
+world-writable directory that the read-only file system refuses, and no
+processes but its own. If any check fails, the host refuses every run and
+reports why.
 
 ### Launcher privileges
 
@@ -55,24 +58,25 @@ launcher privileged. Use it only for development.
 
 ## Run it
 
-The services are in the repository's `compose.yaml` under the `codemode`
-profile. They need a TLS directory holding:
+`compose.yaml` in this directory runs both services and needs no gateway
+configuration. They need a TLS directory holding:
 
 | File | Contents |
 |---|---|
 | `server.pem`, `server-key.pem` | The sandbox service's certificate and key |
 | `client-ca.pem` | The authority that signs gateway client certificates |
 
-Point `SANDBOX_TLS_DIR` at it (default `./sandbox/tls`, which Git ignores), then:
+Point `SANDBOX_TLS_DIR` at it (default `sandbox/tls`, which Git ignores), then,
+from the repository root:
 
 ```sh
-docker compose --profile codemode up -d sandbox-launcher sandbox
+docker compose -f sandbox/compose.yaml up -d
 ```
 
 On a machine without gVisor, add the development backend:
 
 ```sh
-docker compose -f compose.yaml -f sandbox/compose.runc.yaml --profile codemode up -d sandbox-launcher sandbox
+docker compose -f sandbox/compose.yaml -f sandbox/compose.runc.yaml up -d
 ```
 
 At scale, run sandbox hosts on their own machines behind a load balancer.

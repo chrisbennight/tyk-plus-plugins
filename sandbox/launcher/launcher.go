@@ -223,13 +223,14 @@ func SelfTestProblem(results map[string]string) string {
 }
 
 func (l *Launcher) runSelfTest(ctx context.Context) (map[string]string, string) {
-	if err := os.WriteFile(canary, []byte("must not be readable from a sandbox"), 0o600); err != nil {
+	// Readable by everyone, so only its absence from the sandbox blocks it.
+	if err := os.WriteFile(canary, []byte("must not be visible from a sandbox"), 0o644); err != nil {
 		return nil, "writing the canary file: " + err.Error()
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	id := newID()
-	cmd, err := l.prepare(id, []string{"/worker", "selftest", canary})
+	cmd, err := l.prepare(id, []string{"/worker", "selftest", canary, "/scratch"})
 	if err != nil {
 		return nil, err.Error()
 	}

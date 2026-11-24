@@ -9,7 +9,8 @@ COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go vet ./... && go test -race ./... && \
     CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/sandbox-launcher ./cmd/sandbox-service ./cmd/sandbox-worker && \
-    mkdir -p /rootfs/proc /rootfs/dev && cp /out/sandbox-worker /rootfs/worker && \
+    mkdir -p /rootfs/proc /rootfs/dev /rootfs/scratch && chmod 0777 /rootfs/scratch && \
+    cp /out/sandbox-worker /rootfs/worker && \
     /out/sandbox-worker precompile /rootfs/cache
 
 FROM debian:bookworm-slim AS gvisor

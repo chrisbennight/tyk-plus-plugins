@@ -13,10 +13,11 @@ import (
 // tools answers tool calls the way the gateway would.
 type tools struct {
 	calls   chan protocol.Message
+	sent    int
 	answers map[string]func(protocol.Message) protocol.Message
 }
 
-func (t *tools) send(m protocol.Message) error { t.calls <- m; return nil }
+func (t *tools) send(m protocol.Message) error { t.sent++; t.calls <- m; return nil }
 
 func (t *tools) Next(ctx context.Context) (protocol.Message, error) {
 	select {
@@ -32,6 +33,13 @@ func (t *tools) Next(ctx context.Context) (protocol.Message, error) {
 
 func run(t *testing.T, source string, input string, limits protocol.Limits) protocol.Message {
 	t.Helper()
+	m, _ := runCounting(t, source, input, limits)
+	return m
+}
+
+// runCounting also reports how many tool calls reached the host.
+func runCounting(t *testing.T, source string, input string, limits protocol.Limits) (protocol.Message, int) {
+	t.Helper()
 	rt, err := NewRuntime("")
 	if err != nil {
 		t.Fatal(err)
@@ -45,7 +53,29 @@ func run(t *testing.T, source string, input string, limits protocol.Limits) prot
 		},
 	}}
 	l := limits.Within(protocol.DefaultLimits)
-	return rt.Run(context.Background(), protocol.Message{Type: protocol.TypeStart, Source: source, Input: json.RawMessage(input), Limits: &l}, tl.send, tl)
+	m := rt.Run(context.Background(), protocol.Message{Type: protocol.TypeStart, Source: source, Input: json.RawMessage(input), Limits: &l}, tl.send, tl)
+	return m, tl.sent
+}
+
+func TestCallsBeyondTheLimitInOneTurnStopTheRun(t *testing.T) {
+	m, sent := runCounting(t, `
+		for (let i = 0; i < 100000; i++) connectors.governed.lookup({ count: i });
+		await new Promise(() => {});`, ``, protocol.Limits{Calls: 3})
+	if m.Type != protocol.TypeFailed || !strings.Contains(m.Failure.Message, "more than 3 tool calls") || sent > 3 {
+		t.Fatalf("got %+v after %d calls reached the host", m.Failure, sent)
+	}
+}
+
+func TestConsoleLimitCountsUTF8Bytes(t *testing.T) {
+	// 6000 characters of two bytes each exceed a 10000-byte limit, and the
+	// run must stop before its next tool call reaches the host.
+	m, sent := runCounting(t, `
+		console.log("é".repeat(6000));
+		await connectors.governed.lookup({ count: 1 });
+		return 1;`, ``, protocol.Limits{ConsoleBytes: 10000})
+	if m.Type != protocol.TypeFailed || !strings.Contains(m.Failure.Message, "console") || sent != 0 {
+		t.Fatalf("got %+v after %d calls reached the host", m.Failure, sent)
+	}
 }
 
 func TestEngineVersionHasTheSecurityFixes(t *testing.T) {

@@ -95,9 +95,10 @@ func (l Limits) Valid() bool {
 
 // MaxLine is the longest line any message of a run can need under limits l:
 // the program and input together, or a final result with its console output,
-// plus room for the surrounding fields.
+// plus room for the surrounding fields. JSON escaping can turn one byte into
+// six (a control character becomes \u00XX), so the bound allows for that.
 func (l Limits) MaxLine() int {
-	return l.ProgramBytes + l.ValueBytes + l.ConsoleBytes + 64<<10
+	return 6*(l.ProgramBytes+l.ValueBytes+l.ConsoleBytes) + 64<<10
 }
 
 // Error is a refused or failed tool call, as a direct caller would see it.
@@ -237,10 +238,22 @@ func Decode(line []byte, m *Message) error {
 
 // Write encodes m as one line.
 func Write(w io.Writer, m Message) error {
-	data, err := json.Marshal(m)
-	if err != nil {
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(m); err != nil {
 		return err
 	}
-	_, err = w.Write(append(data, '\n'))
+	_, err := w.Write(buf.Bytes())
 	return err
+}
+
+// ConsoleBytes is the size of console output as the limit counts it: each
+// line's UTF-8 bytes plus one for its line break.
+func ConsoleBytes(lines []string) int {
+	n := 0
+	for _, l := range lines {
+		n += len(l) + 1
+	}
+	return n
 }

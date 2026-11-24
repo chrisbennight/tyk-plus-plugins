@@ -1,8 +1,8 @@
 // Command sandbox-worker runs inside a sandbox. Started without arguments it
 // reads one start message from standard input, runs the program, exchanges
 // tool calls over standard input and output, and writes the final message.
-// "selftest PATH" reports whether the sandbox blocks the network, reading
-// PATH and writing files; "precompile DIR" prepares the engine cache at build
+// "selftest PATH DIR" reports whether the sandbox isolates the network and
+// processes, hides PATH and keeps DIR read-only; "precompile DIR" prepares the engine cache at build
 // time.
 package main
 
@@ -53,8 +53,8 @@ func (r replies) Next(ctx context.Context) (protocol.Message, error) {
 }
 
 func main() {
-	if len(os.Args) == 3 && os.Args[1] == "selftest" {
-		json.NewEncoder(os.Stdout).Encode(worker.SelfTest(os.Args[2]))
+	if len(os.Args) == 4 && os.Args[1] == "selftest" {
+		json.NewEncoder(os.Stdout).Encode(worker.SelfTest(os.Args[2], os.Args[3]))
 		return
 	}
 	if len(os.Args) == 3 && os.Args[1] == "precompile" {

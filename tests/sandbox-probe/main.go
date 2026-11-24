@@ -245,7 +245,7 @@ func probe() {
 	want := env("EXPECT_BACKEND", "gvisor")
 	check(h["backend"] == want && h["ready"] == true, "health: %v (want backend %s, ready)", h, want)
 	selfTest, _ := h["self_test"].(map[string]any)
-	for _, name := range []string{"network", "host file", "write"} {
+	for _, name := range []string{"network", "host file", "write", "processes"} {
 		check(selfTest[name] == "blocked", "self-test %q: %v", name, selfTest)
 	}
 	fmt.Printf("Health: backend %s, self-test %v.\n", h["backend"], selfTest)

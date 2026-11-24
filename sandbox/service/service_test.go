@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/launcher"
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/protocol"
@@ -91,5 +92,18 @@ func TestHealthQuery(t *testing.T) {
 	_, answer := exchange(t, s, protocol.Message{Type: protocol.TypeHealth})
 	if answer.Type != protocol.TypeHealth || answer.Health.Backend != "runc" || answer.Health.Active != 2 {
 		t.Errorf("got %+v", answer)
+	}
+}
+
+func TestWritesToAGatewayThatStopsReadingTimeOut(t *testing.T) {
+	writeWait = 100 * time.Millisecond
+	defer func() { writeWait = 10 * time.Second }()
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	started := time.Now()
+	err := (&lockedWriter{w: server}).write(protocol.Message{Type: protocol.TypeHello})
+	if err == nil || time.Since(started) > 5*time.Second {
+		t.Fatalf("a write to a gateway that never reads returned %v after %v", err, time.Since(started))
 	}
 }

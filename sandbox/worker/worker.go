@@ -102,7 +102,7 @@ func (rt *Runtime) Run(ctx context.Context, start protocol.Message, send func(pr
 	if _, err := rand.Read(nonce); err != nil {
 		return protocol.Failed(protocol.KindUnavailable, "creating a nonce: %v", err)
 	}
-	b := &bridge{nonce: hex.EncodeToString(nonce), max: limits.MaxLine()}
+	b := &bridge{nonce: hex.EncodeToString(nonce), max: limits.MaxLine(), calls: limits.Calls}
 	stderr := &capped{max: 16 << 10}
 	// No stdin, file system, environment or arguments: the engine's standard
 	// library finds nothing to open.
@@ -145,28 +145,23 @@ func (rt *Runtime) Run(ctx context.Context, start protocol.Message, send func(pr
 	}
 
 	pending := map[int64]bool{}
-	calls := 0
 	for {
 		result, err := q.LoopOnce(ctx)
 		messages := b.take()
+		if f := b.failure(); f != nil {
+			return *f
+		}
 		if err != nil || result == quickjs.LoopError {
 			for _, m := range messages {
 				if m.Type == protocol.TypeFailed {
 					return classify(m)
 				}
 			}
-			if b.failed != nil {
-				return *b.failed
-			}
 			return stopped(ctx, q, stderr, err)
 		}
 		for _, m := range messages {
 			switch m.Type {
 			case protocol.TypeCall:
-				calls++
-				if calls > limits.Calls {
-					return protocol.Failed(protocol.KindLimit, "the run made more than %d tool calls", limits.Calls)
-				}
 				pending[m.ID] = true
 				if err := send(m); err != nil {
 					return protocol.Failed(protocol.KindProtocol, "sending a tool call: %v", err)
@@ -175,16 +170,13 @@ func (rt *Runtime) Run(ctx context.Context, start protocol.Message, send func(pr
 				if len(m.Result) > limits.ValueBytes {
 					return protocol.Failed(protocol.KindLimit, "the result exceeds %d bytes", limits.ValueBytes)
 				}
-				if n := consoleBytes(m.Console); n > limits.ConsoleBytes {
+				if n := protocol.ConsoleBytes(m.Console); n > limits.ConsoleBytes {
 					return protocol.Failed(protocol.KindLimit, "console output exceeds %d bytes", limits.ConsoleBytes)
 				}
 				return m
 			case protocol.TypeFailed:
 				return classify(m)
 			}
-		}
-		if b.failed != nil {
-			return *b.failed
 		}
 		if result == 0 {
 			continue
@@ -298,22 +290,18 @@ func jsonString(text []byte) string {
 	return string(quoted)
 }
 
-func consoleBytes(lines []string) int {
-	n := 0
-	for _, l := range lines {
-		n += len(l) + 1
-	}
-	return n
-}
-
 func timeMillis(ms int64) time.Duration { return time.Duration(ms) * time.Millisecond }
 
 // bridge receives what the bootstrap prints. Lines without the run's nonce
 // are ignored, so a program that reaches the engine's standard output some
-// other way cannot pose as the bootstrap.
+// other way cannot pose as the bootstrap. It enforces the call limit as each
+// call arrives, so a program cannot queue messages outside its WebAssembly
+// memory by making many calls in one turn.
 type bridge struct {
 	nonce   string
 	max     int
+	calls   int
+	seen    int
 	mu      sync.Mutex
 	partial []byte
 	queue   []protocol.Message
@@ -329,8 +317,7 @@ func (b *bridge) Write(p []byte) (int, error) {
 		i := bytes.IndexByte(b.partial, '\n')
 		if i < 0 {
 			if len(b.partial) > b.max {
-				f := protocol.Failed(protocol.KindLimit, "a message from the program exceeds %d bytes", b.max)
-				b.failed = &f
+				b.fail(protocol.Failed(protocol.KindLimit, "a message from the program exceeds %d bytes", b.max))
 				b.partial = nil
 			}
 			return len(p), nil
@@ -343,9 +330,16 @@ func (b *bridge) Write(p []byte) (int, error) {
 		}
 		var m protocol.Message
 		if err := protocol.Decode(rest, &m); err != nil {
-			f := protocol.Failed(protocol.KindProtocol, "the bootstrap sent an unreadable message: %v", err)
-			b.failed = &f
+			b.fail(protocol.Failed(protocol.KindProtocol, "the bootstrap sent an unreadable message: %v", err))
 			continue
+		}
+		if m.Type == protocol.TypeCall {
+			b.seen++
+			if b.seen > b.calls {
+				f := protocol.Failed(protocol.KindLimit, "the run made more than %d tool calls", b.calls)
+				b.fail(f)
+				continue
+			}
 		}
 		b.queue = append(b.queue, m)
 		if m.Type == protocol.TypeFailed && m.Failure != nil && m.Failure.Kind == protocol.KindLimit && b.halt != nil {
@@ -354,10 +348,28 @@ func (b *bridge) Write(p []byte) (int, error) {
 	}
 }
 
+// fail records the first failure, drops queued messages and stops the engine.
+// The caller holds b.mu.
+func (b *bridge) fail(f protocol.Message) {
+	if b.failed == nil {
+		b.failed = &f
+	}
+	b.queue = nil
+	if b.halt != nil {
+		b.halt()
+	}
+}
+
 func (b *bridge) setHalt(halt context.CancelFunc) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.halt = halt
+}
+
+func (b *bridge) failure() *protocol.Message {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.failed
 }
 
 func (b *bridge) take() []protocol.Message {

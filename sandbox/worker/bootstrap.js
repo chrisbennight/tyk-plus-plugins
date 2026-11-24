@@ -21,10 +21,22 @@
       return String(value);
     }
   };
+  // The limit is in UTF-8 bytes, as the host counts them.
+  const utf8Length = (s) => {
+    let n = 0;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 0x80) n += 1;
+      else if (c < 0x800) n += 2;
+      else if (c >= 0xd800 && c <= 0xdbff && i + 1 < s.length) { n += 4; i++; }
+      else n += 3;
+    }
+    return n;
+  };
   const log = (...values) => {
     if (overflowed) return;
     const line = values.map(text).join(" ");
-    used += line.length + 1;
+    used += utf8Length(line) + 1;
     if (used > consoleLimit) {
       overflowed = true;
       send({ type: "failed", failure: { kind: "limit", message: "console output exceeds " + consoleLimit + " bytes" } });

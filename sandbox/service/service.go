@@ -117,6 +117,10 @@ func (s *Service) Serve(ln net.Listener) error {
 	}
 }
 
+// writeWait bounds each write to a gateway, so a gateway that stops reading
+// cannot hold a run, and its capacity slot, past the write.
+var writeWait = 10 * time.Second
+
 // lockedWriter lets several goroutines write whole messages to one peer.
 type lockedWriter struct {
 	mu sync.Mutex
@@ -126,6 +130,9 @@ type lockedWriter struct {
 func (l *lockedWriter) write(m protocol.Message) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if c, ok := l.w.(net.Conn); ok {
+		c.SetWriteDeadline(time.Now().Add(writeWait))
+	}
 	return protocol.Write(l.w, m)
 }
 
@@ -260,6 +267,10 @@ func (s *Service) run(c net.Conn, fromClient *protocol.Reader, client *lockedWri
 			case protocol.TypeDone:
 				if len(m.Result) > limits.ValueBytes || !json.Valid(m.Result) {
 					finish(protocol.Failed(protocol.KindLimit, "the result must be JSON of at most %d bytes", limits.ValueBytes))
+					return
+				}
+				if protocol.ConsoleBytes(m.Console) > limits.ConsoleBytes {
+					finish(protocol.Failed(protocol.KindLimit, "console output exceeds %d bytes", limits.ConsoleBytes))
 					return
 				}
 				finish(protocol.Message{Type: protocol.TypeDone, Result: m.Result, Console: m.Console})

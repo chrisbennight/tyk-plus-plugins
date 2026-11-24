@@ -3,6 +3,7 @@ package bench
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"math"
 	"runtime"
 	"runtime/debug"
@@ -87,6 +88,16 @@ type Report struct {
 		// or deny can fall short of it.
 		TargetPermitRatio float64 `json:"targetPermitRatio"`
 	} `json:"decisions"`
+	// Visibility is the time to decide which of one proxy's tools a caller
+	// may see in its list: First for the caller's first list after a set
+	// change, Cached for a later one. The proxy is the one with the most
+	// tools.
+	Visibility struct {
+		Proxy  string    `json:"proxy"`
+		Tools  int       `json:"tools"`
+		First  Durations `json:"first"`
+		Cached Durations `json:"cached"`
+	} `json:"visibility"`
 	Memory struct {
 		// SetHeapBytes is the heap retained by the compiled set.
 		SetHeapBytes uint64 `json:"setHeapBytes"`
@@ -193,6 +204,7 @@ func Run(files Files, version string, vocab Vocabulary, seed int64, sizes Sizes,
 	}
 	report.Decisions.Durations = summarize(samples)
 	report.Decisions.Outcomes = outcomes
+	measureVisibility(&report, snapshot, tools, requests)
 	report.Memory.PeakRSSBytes = peakRSS()
 
 	report.Build.Go = runtime.Version()
@@ -225,4 +237,37 @@ func peakRSS() uint64 {
 		return uint64(usage.Maxrss)
 	}
 	return uint64(usage.Maxrss) * 1024
+}
+
+// measureVisibility times the first and a cached visibility check of the
+// largest proxy for up to 50 of the requests' distinct callers.
+func measureVisibility(report *Report, snapshot *policy.Snapshot, tools []policy.ToolRef, requests []Request) {
+	perProxy := map[string]int{}
+	for _, t := range tools {
+		perProxy[t.Proxy]++
+	}
+	for proxy, count := range perProxy {
+		if count > report.Visibility.Tools || count == report.Visibility.Tools && proxy < report.Visibility.Proxy {
+			report.Visibility.Proxy, report.Visibility.Tools = proxy, count
+		}
+	}
+	if report.Visibility.Tools == 0 {
+		return
+	}
+	seen := map[string]bool{}
+	var first, cached []time.Duration
+	for _, r := range requests {
+		key := fmt.Sprint(r.Caller)
+		if seen[key] || len(seen) == 50 {
+			continue
+		}
+		seen[key] = true
+		start := time.Now()
+		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy)
+		first = append(first, time.Since(start))
+		start = time.Now()
+		snapshot.VisibleTools(r.Caller, report.Visibility.Proxy)
+		cached = append(cached, time.Since(start))
+	}
+	report.Visibility.First, report.Visibility.Cached = summarize(first), summarize(cached)
 }

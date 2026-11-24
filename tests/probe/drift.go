@@ -59,6 +59,16 @@ func driftSuite(k keys, version string) {
 	inventory(map[string]any{}, tools)
 	call(c, k.operator, "change", args("count", 2), "updated")
 
+	// Each caller is listed only the tools it could call: support may call
+	// only read-only tools, and guest no tool at all.
+	for _, want := range []struct {
+		cred  credential
+		tools []string
+	}{{k.operator, []string{"change", "lookup"}}, {k.support, []string{"lookup"}}, {k.guest, []string{}}} {
+		listed := catalogOf(c, want.cred)
+		check(slices.Equal(slices.Sorted(maps.Keys(listed)), want.tools), "%s: listed %v, want %v", version, slices.Collect(maps.Keys(listed)), want.tools)
+	}
+
 	// A tool that is no longer approved is hidden and refused.
 	delete(tools, "lookup")
 	inventory(map[string]any{}, tools)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -294,5 +295,59 @@ func TestAnExistingSetsDirectoryIsLeftAsItIs(t *testing.T) {
 	}
 	if info, _ := os.Stat(filepath.Join(store, setsDir)); info.Mode().Perm() != 0o700 {
 		t.Fatalf("sets mode changed to %v", info.Mode().Perm())
+	}
+}
+
+func TestPublishedFilesAreNeverWrittenThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileSynced(filepath.Join(dir, "rules.cedar"), []byte("changed"), 0o644); err == nil {
+		t.Fatal("wrote through a link")
+	}
+	if data, _ := os.ReadFile(target); string(data) != "keep" {
+		t.Fatalf("target changed to %q", data)
+	}
+}
+
+func TestARepairThatMayNotBeDurableKeepsTheDamagedSet(t *testing.T) {
+	store := t.TempDir()
+	source := writeSource(t, permitAll, "{}", "[]")
+	set, err := Promote(store, source, "first", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(store, setsDir, set, "rules.cedar")); err != nil {
+		t.Fatal(err)
+	}
+	renamed := false
+	renameSet = func(from, to string) error { renamed = true; return os.Rename(from, to) }
+	syncDir = func(dir string) error {
+		if renamed && dir == filepath.Join(store, setsDir) {
+			return errors.New("injected sync failure")
+		}
+		return syncDirectory(dir)
+	}
+	defer func() { renameSet, syncDir = os.Rename, syncDirectory }()
+	if _, err := Promote(store, source, "", epoch); err == nil {
+		t.Fatal("the sync failure was not reported")
+	}
+	entries, err := os.ReadDir(filepath.Join(store, setsDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var damaged int
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".damaged-") {
+			damaged++
+		}
+	}
+	if damaged != 1 {
+		t.Fatalf("damaged copies kept: %d", damaged)
 	}
 }

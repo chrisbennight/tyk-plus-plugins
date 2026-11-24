@@ -285,6 +285,12 @@ func openStore(root string) (*store, error) {
 	if err := createDir(root, 0o755); err != nil {
 		return nil, err
 	}
+	// The root's own entry is synced on every publish, so a publish that
+	// follows a failed or concurrent creation cannot report success before
+	// the new store is durable.
+	if err := syncDir(filepath.Dir(root)); err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return nil, err
@@ -384,7 +390,7 @@ func (s *store) activate(set string, now func() time.Time) error {
 // lockStore takes an exclusive lock on the store, released when the returned
 // function is called or the process exits. The publisher that creates the
 // lock file gives it the store's file mode, so its umask cannot keep other
-// publishers out. A shared lock needs only read access.
+// publishers out.
 func lockStore(root string, mode os.FileMode) (func(), error) {
 	path := filepath.Join(root, ".lock")
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
@@ -394,7 +400,13 @@ func lockStore(root string, mode os.FileMode) (func(), error) {
 	} else if err != nil {
 		return nil, err
 	}
-	file, err := os.Open(path)
+	// Some file systems, such as NFS, grant an exclusive lock only on a
+	// writable descriptor; a member with only read access can still lock on
+	// a local file system.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if errors.Is(err, os.ErrPermission) {
+		file, err = os.Open(path)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -449,8 +461,8 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 	if _, _, err := ReadSet(s.root, set); err == nil {
 		return syncDir(sets)
 	}
-	if _, err := os.Stat(final); err == nil {
-		if previous, err := readManifest(final); err == nil {
+	if _, statErr := os.Stat(final); statErr == nil {
+		if previous, readErr := readManifest(final); readErr == nil {
 			manifest.Label = previous.Label
 		}
 		damaged := filepath.Join(sets, fmt.Sprintf(".damaged-%s-%d", set, time.Now().UnixNano()))
@@ -458,8 +470,14 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 			return err
 		}
 		defer func() {
-			if _, statErr := os.Stat(final); statErr == nil {
+			// The damaged set is deleted only once its replacement is
+			// durable, restored if no replacement is in place, and otherwise
+			// left beside it.
+			if err == nil {
 				os.RemoveAll(damaged)
+				return
+			}
+			if _, statErr := os.Stat(final); statErr == nil {
 				return
 			}
 			if restoreErr := os.Rename(damaged, final); restoreErr != nil {
@@ -472,9 +490,11 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 		return err
 	}
 	defer os.RemoveAll(staging)
-	// The final mode is set before writing, so a publisher whose umask
-	// removes its own search permission can still write the files.
-	if err := os.Chmod(staging, s.dirMode); err != nil {
+	// Until the set is complete only the publisher may change the staging
+	// directory, so no other member can place entries, such as links, among
+	// the files being written. This mode is set explicitly, so a umask that
+	// removes the publisher's own search permission does not matter.
+	if err := os.Chmod(staging, 0o700|s.dirMode&os.ModeSetgid); err != nil {
 		return err
 	}
 	files, _ := filesFor(manifest.Format)
@@ -490,6 +510,9 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 	if err := writeFileSynced(filepath.Join(staging, manifestFile), append(data, '\n'), s.fileMode); err != nil {
 		return err
 	}
+	if err := os.Chmod(staging, s.dirMode); err != nil {
+		return err
+	}
 	if err := syncDir(staging); err != nil {
 		return err
 	}
@@ -503,8 +526,10 @@ func (s *store) writeSet(set string, manifest Manifest, contents map[string][]by
 // failed replacement.
 var renameSet = os.Rename
 
+// writeFileSynced creates a new file; it never opens an existing one, so it
+// cannot follow a link to a file elsewhere.
 func writeFileSynced(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}

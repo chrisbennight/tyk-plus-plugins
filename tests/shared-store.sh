@@ -48,8 +48,12 @@ second=$(source_dir '// second')
 # The first publisher's restrictive umask must not lock anyone else out.
 set_a=$(as alice 077 cedar-policy promote -store "$store" -label first "$first") || fail "alice could not publish into a new store"
 set_b=$(as bob 0177 cedar-policy promote -store "$store" -label second "$second") || fail "bob could not publish after alice"
+active_is() { grep -q "\"set\": \"$1\"" "$store/active" || fail "active does not name $1 after $2"; }
+active_is "$set_b" "bob's publish"
 as alice 077 cedar-policy activate -store "$store" "$set_a" >/dev/null || fail "alice could not roll back"
+active_is "$set_a" "alice's rollback"
 as bob 022 cedar-policy activate -store "$store" "$set_b" >/dev/null || fail "bob could not roll back"
+active_is "$set_b" "bob's rollback"
 
 # A member can repair a damaged set another member published.
 rm "$store/sets/$set_a/rules.cedar"

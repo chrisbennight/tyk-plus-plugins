@@ -35,7 +35,8 @@ The deck is a JSON file naming each example person and the claims their token ca
 - `sub` is the person's name unless the person sets their own `sub`.
 - A person may carry any other claims. The deck owns `iss`, `aud`, `exp`, `iat` and `nbf`, so a person who sets one of these is an error.
 - Names use lowercase letters, digits and hyphens.
-- The issuer refuses to start when the deck has an unknown field, a person listed twice, or a missing setting, and names the problem.
+- `lifetimeSeconds` is at most one year.
+- The issuer refuses to start when the deck has an unknown field, a name listed twice, data after the deck, or a missing setting, and names the problem.
 
 ## Settings
 

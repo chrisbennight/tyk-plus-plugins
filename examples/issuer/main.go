@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -30,9 +31,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
+
+	jsonv2 "github.com/go-json-experiment/json"
 )
 
 func main() {
@@ -101,17 +104,38 @@ func publishedKey(path string) (*rsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
-	// O_EXCL keeps a second issuer sharing the file from replacing a key the
-	// first already published.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err := createExclusive(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
+		return nil, err
+	}
+	return key, nil
+}
+
+// createExclusive writes data to path only if nothing is there yet, and never
+// leaves a partly written file at path. The data goes to a temporary file in
+// the same directory first; linking it into place fails if path exists, so a
+// second issuer sharing the file cannot replace a key the first published.
+func createExclusive(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".issuer-key-*")
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if err := pem.Encode(f, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
-		f.Close()
-		return nil, err
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
 	}
-	return key, f.Close()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Link(tmp.Name(), path)
 }
 
 // deck lists the example people the issuer can sign tokens for, by name.
@@ -128,35 +152,28 @@ var personName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // reserved claims are set from the deck itself, so a person cannot override them.
 var reserved = []string{"iss", "aud", "exp", "iat", "nbf"}
 
+// maxLifetimeSeconds bounds a token's lifetime. Example tokens never need more
+// than a year, and the bound keeps iat plus the lifetime well inside int64.
+const maxLifetimeSeconds = 365 * 24 * 60 * 60
+
 func loadDeck(path string) (*deck, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
-	dec.DisallowUnknownFields()
-	dec.UseNumber()
+	// This decoder rejects a name repeated anywhere in the deck, a field it does
+	// not know and data after the deck, so a typo cannot silently change a token.
 	var d deck
-	if err := dec.Decode(&d); err != nil {
+	if err := jsonv2.Unmarshal(data, &d, jsonv2.RejectUnknownMembers(true)); err != nil {
 		return nil, err
-	}
-	if dec.More() {
-		return nil, errors.New("unexpected data after the deck")
-	}
-	if name, err := duplicatePerson(f); err != nil || name != "" {
-		if err != nil {
-			return nil, err
-		}
-		return nil, fmt.Errorf("person %q is listed twice", name)
 	}
 	switch {
 	case d.Issuer == "":
 		return nil, errors.New("issuer is required")
 	case d.Audience == "":
 		return nil, errors.New("audience is required")
-	case d.LifetimeSeconds <= 0:
-		return nil, errors.New("lifetimeSeconds must be positive")
+	case d.LifetimeSeconds <= 0 || d.LifetimeSeconds > maxLifetimeSeconds:
+		return nil, fmt.Errorf("lifetimeSeconds must be between 1 and %d", maxLifetimeSeconds)
 	case len(d.People) == 0:
 		return nil, errors.New("people must list at least one person")
 	}
@@ -176,40 +193,6 @@ func loadDeck(path string) (*deck, error) {
 		}
 	}
 	return &d, nil
-}
-
-// duplicatePerson rereads the deck and returns a name listed twice under
-// "people". The standard decoder silently keeps the last entry of a repeated
-// key, which would hide one of the two people.
-func duplicatePerson(f *os.File) (string, error) {
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", err
-	}
-	var top struct{ People json.RawMessage }
-	if err := json.NewDecoder(f).Decode(&top); err != nil {
-		return "", err
-	}
-	dec := json.NewDecoder(strings.NewReader(string(top.People)))
-	if _, err := dec.Token(); err != nil { // the opening brace
-		return "", err
-	}
-	seen := map[string]bool{}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return "", err
-		}
-		name, _ := tok.(string)
-		if seen[name] {
-			return name, nil
-		}
-		seen[name] = true
-		var skip json.RawMessage
-		if err := dec.Decode(&skip); err != nil {
-			return "", err
-		}
-	}
-	return "", nil
 }
 
 type server struct {
@@ -251,8 +234,9 @@ func (s *server) signBody(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "claims must be at most 64 KiB", http.StatusRequestEntityTooLarge)
 		return
 	}
-	var claims map[string]any
-	if json.Unmarshal(body, &claims) != nil || claims == nil {
+	// Check the shape only, without decoding numbers, so a test can sign any
+	// JSON object exactly as written.
+	if !json.Valid(body) || !bytes.HasPrefix(bytes.TrimSpace(body), []byte("{")) {
 		http.Error(w, "claims must be a JSON object", http.StatusBadRequest)
 		return
 	}

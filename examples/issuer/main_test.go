@@ -37,18 +37,22 @@ func writeDeck(t *testing.T, content string) string {
 
 func TestLoadDeckRejectsMistakes(t *testing.T) {
 	for name, content := range map[string]string{
-		"unknown field":     `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}},"extra":1}`,
-		"trailing data":     `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}}} {}`,
-		"no issuer":         `{"audience":"a","lifetimeSeconds":1,"people":{"p":{}}}`,
-		"no audience":       `{"issuer":"i","lifetimeSeconds":1,"people":{"p":{}}}`,
-		"zero lifetime":     `{"issuer":"i","audience":"a","lifetimeSeconds":0,"people":{"p":{}}}`,
-		"negative lifetime": `{"issuer":"i","audience":"a","lifetimeSeconds":-5,"people":{"p":{}}}`,
-		"no people":         `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{}}`,
-		"bad name":          `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"Alice Smith":{}}}`,
-		"reserved claim":    `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"exp":1}}}`,
-		"empty subject":     `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"sub":""}}}`,
-		"numeric subject":   `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"sub":7}}}`,
-		"duplicate person":  `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{},"p":{}}}`,
+		"unknown field":         `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}},"extra":1}`,
+		"trailing data":         `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}}} {}`,
+		"no issuer":             `{"audience":"a","lifetimeSeconds":1,"people":{"p":{}}}`,
+		"no audience":           `{"issuer":"i","lifetimeSeconds":1,"people":{"p":{}}}`,
+		"zero lifetime":         `{"issuer":"i","audience":"a","lifetimeSeconds":0,"people":{"p":{}}}`,
+		"negative lifetime":     `{"issuer":"i","audience":"a","lifetimeSeconds":-5,"people":{"p":{}}}`,
+		"no people":             `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{}}`,
+		"bad name":              `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"Alice Smith":{}}}`,
+		"reserved claim":        `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"exp":1}}}`,
+		"empty subject":         `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"sub":""}}}`,
+		"numeric subject":       `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{"sub":7}}}`,
+		"repeated people field": `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}},"people":{"p":{"roles":["admin"]}}}`,
+		"missing people":        `{"issuer":"i","audience":"a","lifetimeSeconds":1}`,
+		"stray closing bracket": `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}}} ]`,
+		"lifetime over a year":  `{"issuer":"i","audience":"a","lifetimeSeconds":31536001,"people":{"p":{}}}`,
+		"duplicate person":      `{"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{},"p":{}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadDeck(writeDeck(t, content)); err == nil {
@@ -242,5 +246,40 @@ func TestLoopbackAddresses(t *testing.T) {
 		if isLoopback(host) != want {
 			t.Errorf("isLoopback(%q) = %v", host, !want)
 		}
+	}
+}
+
+// A test can sign any JSON object exactly as written, including numbers no
+// float64 can hold.
+func TestBodyNumbersAreSignedAsWritten(t *testing.T) {
+	s := newTestServer(t, time.Now())
+	body := `{"sub":"alice","n":123456789012345678901234567890}`
+	rec := get(t, s, http.MethodPost, "/token", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(rec.Body.String(), ".")[1])
+	if err != nil || string(payload) != body {
+		t.Fatalf("signed %q, want %q", payload, body)
+	}
+}
+
+// Creating the key file never replaces an existing file and leaves nothing
+// behind when it cannot complete.
+func TestKeyFileCreationIsAllOrNothing(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "issuer.pem")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createExclusive(path, []byte("second")); err == nil {
+		t.Fatal("replaced an existing key file")
+	}
+	if got, _ := os.ReadFile(path); string(got) != "first" {
+		t.Fatalf("key file now holds %q", got)
+	}
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 1 {
+		t.Fatalf("left %d files behind", len(entries))
 	}
 }

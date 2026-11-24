@@ -91,7 +91,11 @@ func policySuite(k keys) {
 		staged[name] = string(data)
 	}
 	check(strings.TrimSpace(staged["rules.cedar"]) == "", "the gateway must ship without rules")
-	check(strings.TrimSpace(staged["tools.json"]) == "{}" && strings.TrimSpace(staged["checks.json"]) == "[]", "shipped %v", staged)
+	var shippedTools map[string]any
+	var shippedChecks []any
+	check(json.Unmarshal([]byte(staged["tools.json"]), &shippedTools) == nil && shippedTools != nil && len(shippedTools) == 0 &&
+		json.Unmarshal([]byte(staged["checks.json"]), &shippedChecks) == nil && shippedChecks != nil && len(shippedChecks) == 0,
+		"the gateway must ship an empty inventory and no checks: %v", staged)
 	// The shipped pointer is checked as shipped, without rewriting it.
 	awaitReport(shipped, "activated")
 	call(c, k.operator, "lookup", args())
@@ -248,7 +252,7 @@ permit (principal, action, resource) when {
 	noExpiry := tok(args("app_roles", []string{"support"}, "exp", nil))
 	refused(c, noExpiry)
 	r := c.rpc(noExpiry, "tools/list", map[string]any{})
-	check(r.Status == http.StatusForbidden && string(r.ID) == "1", "tools/list with no expiry: %v", r)
+	check(r.Status == http.StatusForbidden && r.Error != nil && len(r.ID) > 0, "tools/list with no expiry: %v", r)
 	// With a valid key and a valid token, the key is tried first and identifies the
 	// caller. Neither credential reaches the upstream, which rejects any it sees.
 	// The token's guest role would permit this change, so a denial shows that the

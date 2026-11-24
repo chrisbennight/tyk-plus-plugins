@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -46,13 +47,17 @@ func baseline(k keys, version string) {
 	// A caller that cannot be identified is refused on every method.
 	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
 	call(c, unidentified, "lookup", args())
-	methods := []string{"tools/list"}
-	if c.version == newerProtocol {
-		methods = append(methods, "server/discover")
-	}
-	for _, method := range methods {
-		r := c.rpc(unidentified, method, map[string]any{})
-		check(r.Status == http.StatusForbidden && r.Error != nil && string(r.ID) == "1", "%s: unidentified caller allowed %s: %v", version, method, r)
+	r := c.rpc(unidentified, "tools/list", map[string]any{})
+	check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified", "%s: unidentified caller listed tools: %v", version, r)
+	// Neither handshake lets an unidentified caller reach the upstream.
+	for _, handshake := range []struct{ version, method string }{{olderProtocol, "initialize"}, {newerProtocol, "server/discover"}} {
+		before, _ := observed()
+		fresh := &conn{version: handshake.version}
+		r := fresh.rpc(unidentified, handshake.method, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
+			"clientInfo": map[string]any{"name": "probe", "version": "1"}})
+		after, _ := observed()
+		check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified" && after == before,
+			"%s: unidentified caller's %s was not refused before the upstream: %v (requests %d -> %d)", version, handshake.method, r, before, after)
 	}
 
 	// The same checks through a real MCP client.
@@ -85,10 +90,11 @@ func sdkBaseline(k keys, version, want string) {
 	client := mcp.NewClient(&mcp.Implementation{Name: "probe-sdk", Version: "1"}, nil)
 	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
 	transport := &mcp.StreamableClientTransport{Endpoint: gateway, HTTPClient: &http.Client{Transport: withHeaders{unidentified}}}
-	if session, err := client.Connect(ctx, transport, &mcp.ClientSessionOptions{ProtocolVersion: version}); err == nil {
+	session, err := client.Connect(ctx, transport, &mcp.ClientSessionOptions{ProtocolVersion: version})
+	if err == nil {
 		session.Close()
-		panic(fmt.Sprintf("%s SDK client connected without an identifiable caller", version))
 	}
+	check(err != nil && isRefusal(err), "%s SDK client without an identifiable caller: %v", version, err)
 
 	for _, caller := range []struct {
 		name string
@@ -122,9 +128,16 @@ func sdkBaseline(k keys, version, want string) {
 			before, _ = observed()
 			called, err = session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args("count", 41)})
 			after, _ = observed()
-			check(err != nil || (called != nil && called.IsError), "%s SDK client (%s) call to %s succeeded: %+v", version, caller.name, name, called)
+			check(err != nil && isRefusal(err), "%s SDK client (%s) call to %s was not refused by the gateway: %v %+v", version, caller.name, name, err, called)
 			check(after == before, "%s SDK client (%s): call to %s reached the upstream (%d -> %d)", version, caller.name, name, before, after)
 		}
 		session.Close()
 	}
+}
+
+// isRefusal reports whether an SDK error is one of the gateway's refusals
+// rather than a transport failure.
+func isRefusal(err error) bool {
+	text := err.Error()
+	return strings.Contains(text, "Tool call denied") || strings.Contains(text, "Caller not identified") || strings.Contains(text, "403")
 }

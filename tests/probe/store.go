@@ -160,7 +160,7 @@ func call(c *conn, cred credential, name string, arguments map[string]any, expec
 	before, _ := observed()
 	r := c.rpc(cred, "tools/call", map[string]any{"name": name, "arguments": arguments})
 	after, args := observed()
-	check(string(r.ID) == "1", "%s: reply ID %s does not match the request", name, r.ID)
+	check(len(r.ID) > 0, "%s: reply has no ID: %v", name, r)
 	if len(expected) == 0 {
 		check(r.Status == http.StatusForbidden && r.Error != nil && after == before, "%s: expected refusal with no dispatch, got %v (requests %d -> %d)", name, r, before, after)
 		return r
@@ -192,10 +192,19 @@ func refused(c *conn, cred credential) {
 	check((r.Status == http.StatusUnauthorized || r.Status == http.StatusForbidden) && after == before, "expected refusal, got %v", r)
 }
 
-// sameRefusal reports whether two refusals are indistinguishable to a client.
+// sameRefusal reports whether two refusals are indistinguishable to a client:
+// the same status and the same reply body apart from the echoed request ID.
 func sameRefusal(a, b response) bool {
-	return a.Error != nil && b.Error != nil && len(a.ID) > 0 && a.Status == b.Status &&
-		reflect.DeepEqual(a.Error, b.Error) && string(a.ID) == string(b.ID) && string(a.Result) == string(b.Result)
+	body := func(r response) map[string]any {
+		var m map[string]any
+		if json.Unmarshal(r.Raw, &m) != nil {
+			return nil
+		}
+		delete(m, "id")
+		return m
+	}
+	ab, bb := body(a), body(b)
+	return a.Error != nil && b.Error != nil && ab != nil && a.Status == b.Status && reflect.DeepEqual(ab, bb)
 }
 
 func must(err error) {

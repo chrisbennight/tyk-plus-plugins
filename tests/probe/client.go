@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,7 +17,10 @@ const (
 	gateway        = "http://gateway:8080/mcp/"
 	olderProtocol  = "2025-11-25"
 	newerProtocol  = "2026-07-28"
-	unsupportedErr = -32022
+	methodNotFound = -32601
+	// tykInvalidDiscovery is the error Tyk returns when an upstream cannot
+	// answer server/discover.
+	tykInvalidDiscovery = -33006
 )
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
@@ -42,9 +46,12 @@ func (c credential) with(other credential) credential {
 // event in a streamed response.
 type response struct {
 	Status int
-	ID     json.RawMessage `json:"id"`
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
+	// Raw is the whole JSON-RPC message, so refusals can be compared exactly.
+	Raw     json.RawMessage `json:"-"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  json.RawMessage `json:"result"`
+	Error   *struct {
 		Code    int             `json:"code"`
 		Message string          `json:"message"`
 		Data    json.RawMessage `json:"data,omitempty"`
@@ -57,6 +64,7 @@ type response struct {
 type conn struct {
 	version string // the version actually in use after negotiation
 	session string
+	lastID  int
 	// discovery records what server/discover did for a newer client: the
 	// newer version was offered, only older versions were offered, or the
 	// method was not supported at all.
@@ -86,9 +94,14 @@ func connect(cred credential, version string) *conn {
 				c.discovery = discoveryNewer
 				return c
 			}
+			check(slices.Contains(discovered.SupportedVersions, olderProtocol), "server/discover offered neither supported version: %v", discovered.SupportedVersions)
 			c.discovery = discoveryOlderOnly
 		} else {
-			check(r.Error != nil, "server/discover failed without a JSON-RPC error: %v", r)
+			// An upstream that does not know the newer protocol answers "method
+			// not found". Tyk replaces that answer with its own error saying the
+			// upstream's discovery response is invalid; clients fall back on either.
+			check(r.Error != nil && (r.Error.Code == methodNotFound || r.Error.Code == tykInvalidDiscovery),
+				"server/discover failed for another reason: %v", r)
 			c.discovery = discoveryUnsupported
 		}
 		c.version = olderProtocol
@@ -96,10 +109,11 @@ func connect(cred credential, version string) *conn {
 	r := c.rpc(cred, "initialize", map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
 		"clientInfo": map[string]any{"name": "probe", "version": "1"}})
 	var initialized struct {
-		ServerInfo struct{ Name string } `json:"serverInfo"`
+		ProtocolVersion string                `json:"protocolVersion"`
+		ServerInfo      struct{ Name string } `json:"serverInfo"`
 	}
 	check(r.Status == http.StatusOK && r.Error == nil && json.Unmarshal(r.Result, &initialized) == nil &&
-		initialized.ServerInfo.Name == "test-upstream", "initialize failed: %v", r)
+		initialized.ServerInfo.Name == "test-upstream" && initialized.ProtocolVersion == olderProtocol, "initialize failed: %v", r)
 	if c.session != "" {
 		c.notify(cred, "notifications/initialized")
 	}
@@ -140,9 +154,12 @@ func (c *conn) params(params map[string]any) map[string]any {
 	return out
 }
 
+// rpc sends one request with a fresh ID. A JSON-RPC reply must echo that ID.
 func (c *conn) rpc(cred credential, method string, params map[string]any) response {
 	name, _ := params["name"].(string)
-	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": c.params(params)})
+	c.lastID++
+	id := c.lastID
+	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": c.params(params)})
 	req, _ := http.NewRequest(http.MethodPost, gateway, bytes.NewReader(body))
 	req.Header = c.headers(cred, method, name)
 	res, err := httpClient.Do(req)
@@ -151,7 +168,11 @@ func (c *conn) rpc(cred credential, method string, params map[string]any) respon
 	if id := res.Header.Get("Mcp-Session-Id"); id != "" && method == "initialize" {
 		c.session = id
 	}
-	return decode(res)
+	r := decode(res, id)
+	if r.JSONRPC != "" {
+		check(string(r.ID) == strconv.Itoa(id), "%s: reply ID %s does not match request %d", method, r.ID, id)
+	}
+	return r
 }
 
 func (c *conn) notify(cred credential, method string) {
@@ -164,8 +185,9 @@ func (c *conn) notify(cred credential, method string) {
 	res.Body.Close()
 }
 
-// decode reads a plain JSON reply or the first message event of a stream.
-func decode(res *http.Response) response {
+// decode reads a plain JSON reply, or the message in a stream that answers
+// the request, skipping any notifications sent before it.
+func decode(res *http.Response, id int) response {
 	var r response
 	data, err := io.ReadAll(res.Body)
 	check(err == nil, "reading reply: %v", err)
@@ -174,7 +196,14 @@ func decode(res *http.Response) response {
 		scanner.Buffer(make([]byte, 1<<20), 1<<20)
 		data = nil
 		for scanner.Scan() {
-			if line, ok := strings.CutPrefix(scanner.Text(), "data:"); ok {
+			line, ok := strings.CutPrefix(scanner.Text(), "data:")
+			if !ok {
+				continue
+			}
+			var message struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if json.Unmarshal([]byte(line), &message) == nil && string(message.ID) == strconv.Itoa(id) {
 				data = []byte(strings.TrimSpace(line))
 				break
 			}
@@ -182,6 +211,7 @@ func decode(res *http.Response) response {
 	}
 	if len(bytes.TrimSpace(data)) > 0 {
 		check(json.Unmarshal(data, &r) == nil, "unreadable reply %d: %s", res.StatusCode, data)
+		r.Raw = data
 	}
 	r.Status = res.StatusCode
 	return r

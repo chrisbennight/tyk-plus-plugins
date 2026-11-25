@@ -57,7 +57,7 @@ Each server is behind its own proxy at `http://127.0.0.1:8080/<server>/`. The `w
 | `older` | The `directory` tools on FastMCP 2, which speaks only protocol `2025-11-25`, with sessions and streamed replies | A newer client falls back to the older protocol. |
 | `changing` | `lookup` (read-only), `update` (writes) and `report` (read-only), and server instructions, at version 0 | Drift. The server can switch to versions that change what it declares; see [Drift](#drift). |
 
-Every server reports, outside MCP at `GET /requests`, how many MCP requests it received, how many tool calls it ran, and the last call's arguments. It also refuses any request that still carries a caller's credential.
+Every server reports, outside MCP at `GET /requests`, how many MCP POST requests it received (the streams clients open for notifications are not counted), how many tool calls it ran, and the last call's arguments. It also refuses any request that still carries a caller's credential.
 
 ## Code Mode
 

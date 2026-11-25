@@ -404,6 +404,16 @@ func TestReviseConvertsTheActiveSetAndLeavesTheStoreUnchangedOnError(t *testing.
 	}
 }
 
+func TestAnEmptyDecisionLogHasNoEntries(t *testing.T) {
+	store := t.TempDir()
+	if err := os.WriteFile(filepath.Join(store, logFile), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := ReadLog(store); err != nil || len(entries) != 0 {
+		t.Fatalf("ReadLog = %v, %v", entries, err)
+	}
+}
+
 func TestTheDecisionLogKeepsTheStoresModeAndRecoversFromACutLine(t *testing.T) {
 	store := t.TempDir()
 	if err := os.Chmod(store, 0o770); err != nil {

@@ -106,6 +106,9 @@ func ReadLog(root string) ([]LogEntry, error) {
 	// Lines are split without a length limit, so no single long entry can
 	// hide the ones after it.
 	for line, text := range bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n")) {
+		if len(text) == 0 {
+			continue
+		}
 		var e LogEntry
 		if err := json.Unmarshal(text, &e); err != nil {
 			problems = append(problems, fmt.Errorf("decision log line %d is not a valid entry", line+1))

@@ -516,6 +516,12 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 		}
 		d.Definition = entry.Definition
 	}
+	// The change page offers approval of long text only once it is shown in
+	// full; the form says whether it was.
+	if d.Approve && max(len(d.Definition), len(d.Text)) > longDefinition && r.PostFormValue("full") != "1" {
+		s.fail(w, sess, http.StatusBadRequest, "This text is long: open it in full before approving it.")
+		return
+	}
 	label := fmt.Sprintf("dashboard %s %s %s by %s", action, driftreview.Describe(d), short(fingerprint), sess.actor.Name)
 	back := s.auth.link("/queue?proxy=" + url.QueryEscape(proxy))
 	set, err := driftreview.Apply(s.cfg.store, base, label, sess.actor, s.now, []driftreview.Decision{d})
@@ -524,7 +530,10 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
 		return
 	case err != nil:
-		slog.Error("A decision failed", "proxy", proxy, "fingerprint", fingerprint, "error", err)
+		// A failure after the new set became active leaves the decision in
+		// force without its log line; this record names who made it.
+		slog.Error("A decision failed", "action", action, "proxy", proxy, "tool", tool, "instructions", instructions, "fingerprint", fingerprint,
+			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject, "error", err)
 		s.fail(w, sess, http.StatusInternalServerError, driftreview.ShownName(err.Error()))
 		return
 	}

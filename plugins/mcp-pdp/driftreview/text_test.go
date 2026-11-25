@@ -21,6 +21,16 @@ func TestNamesStayOnOneLine(t *testing.T) {
 	}
 }
 
+func TestNamesMarkEveryLookAlikeLetter(t *testing.T) {
+	// Spelled wholly in Cyrillic, the name reads as "change".
+	if got := ShownName("сhаngе"); got != "с⟨U+0441⟩hа⟨U+0430⟩ngе⟨U+0435⟩" {
+		t.Fatalf("ShownName = %q", got)
+	}
+	if got := ShownName("lookup_v2"); got != "lookup_v2" {
+		t.Fatalf("ShownName = %q", got)
+	}
+}
+
 func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
 	for text, want := range map[string]string{
 		"привет мир":  "привет мир",

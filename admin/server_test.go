@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/driftreview"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
 
@@ -237,6 +238,50 @@ func TestToolsSayWhyCallsAreRefused(t *testing.T) {
 	overview := body(t, d.get("/", cookie))
 	if !strings.Contains(overview, "1 waiting") || !strings.Contains(overview, "1 refused") || !strings.Contains(overview, "one") {
 		t.Fatalf("overview:\n%s", overview)
+	}
+}
+
+func TestAnUnreadableDeclarationRefusesEveryReviewedTool(t *testing.T) {
+	d := newDashboard(t)
+	lookup := `{"name":"lookup","description":"Look a record up","inputSchema":{"type":"object"}}`
+	fp := d.queue("lookup", lookup)
+	d.queue("change", approvedChange)
+	if _, err := driftreview.Apply(d.cfg.store, active(t, d.cfg.store), "approve lookup", policy.Actor{Issuer: "local", Subject: "test"}, time.Now,
+		[]driftreview.Decision{{Proxy: "governed", Tool: "lookup", Fingerprint: fp, Definition: []byte(lookup), Approve: true}}); err != nil {
+		t.Fatal(err)
+	}
+	cookie, _ := d.signIn(viewer)
+	if page := body(t, d.get("/tools?proxy=governed", cookie)); strings.Count(page, "Allowed by drift review") != 2 {
+		t.Fatalf("tools page before:\n%s", page)
+	}
+	// A gateway that cannot read the change tool's declaration refuses
+	// calls to lookup too.
+	sum := sha256.Sum256([]byte(upstream))
+	broken := filepath.Join(d.cfg.pending, encode("governed"), "latest", encode("change"), encode("one")+"."+hex.EncodeToString(sum[:8])+".json")
+	if err := os.WriteFile(broken, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	page := html.UnescapeString(body(t, d.get("/tools?proxy=governed", cookie)))
+	if strings.Contains(page, "Allowed by drift review") || !strings.Contains(page, "gateways cannot read the shared declarations of change") {
+		t.Fatalf("tools page after:\n%s", page)
+	}
+}
+
+func TestLongTextMustBeOpenedBeforeApproval(t *testing.T) {
+	d := newDashboard(t)
+	long := `{"name":"change","description":"` + strings.Repeat("Change a record. ", 200) + `","inputSchema":{"type":"object"}}`
+	fp := d.queue("change", long)
+	cookie, csrf := d.signIn(reviewer)
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {fp}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
+	if res := d.post("/decide", cookie, form); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("approving long text unopened: %d", res.StatusCode)
+	}
+	if page := body(t, d.get("/change?proxy=governed&tool=change&fp="+fp+"&full=1", cookie)); !strings.Contains(page, `name="full" value="1"`) {
+		t.Fatalf("the opened page's form does not say so:\n%s", page)
+	}
+	form.Set("full", "1")
+	if res := d.post("/decide", cookie, form); res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("approving long text opened: %d %s", res.StatusCode, body(t, res))
 	}
 }
 

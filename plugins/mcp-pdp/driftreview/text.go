@@ -25,19 +25,19 @@ import (
 // letter. Words written in a single script, such as café or привет, are
 // left alone.
 func Visible(text string) (out string, invisible, lookAlike int) {
-	return written(text, true)
+	return written(text, true, false)
 }
 
 // VisibleLine is visible for text shown on one line, such as a name.
 func VisibleLine(text string) string {
-	out, _, _ := written(text, false)
+	out, _, _ := written(text, false, false)
 	return out
 }
 
-func written(text string, keepLines bool) (out string, invisible, lookAlike int) {
+func written(text string, keepLines, everyLetter bool) (out string, invisible, lookAlike int) {
 	var b strings.Builder
 	for _, word := range splitWords(text) {
-		mixed := mixesScripts(word)
+		mixed := everyLetter || mixesScripts(word)
 		for _, r := range word {
 			switch {
 			case r == ' ' || (r == '\n' && keepLines):
@@ -359,7 +359,12 @@ func unionKeys(a, b map[string]jsontext.Value) []string {
 	return keys
 }
 
-func ShownName(name string) string { return VisibleLine(name) }
+func ShownName(name string) string {
+	// A name can be spelled wholly in look-alike letters of another
+	// script, so every non-ASCII letter in it is followed by its code point.
+	out, _, _ := written(name, false, true)
+	return out
+}
 
 func ShownValue(value jsontext.Value) string {
 	if len(value) == 0 {

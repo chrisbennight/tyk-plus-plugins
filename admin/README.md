@@ -32,7 +32,7 @@ An account in neither group is refused. Sessions are held in memory for at most 
 | --- | --- |
 | `ADMIN_PUBLIC_URL` | The dashboard's address as browsers reach it, for example `https://gateway.example.com/extensions/admin`. Required. Use `https` outside a local or test network, so session cookies are only sent securely. |
 | `ADMIN_OIDC_ISSUER` | The identity provider's issuer, as its tokens name it. Required. |
-| `ADMIN_OIDC_DISCOVERY_URL` | Where to fetch the provider's configuration when it is reached at another address than its issuer, as on a private network. Optional. |
+| `ADMIN_OIDC_DISCOVERY_URL` | Where to fetch the provider's configuration when it is reached at another address than its issuer, as on a private network. Optional. The configuration names the keys that verify ID tokens and where the client secret is sent, so use `https`, or a network no one else can alter; the dashboard warns at start when either address is not `https`. |
 | `ADMIN_OIDC_CLIENT_ID` | The dashboard's client ID at the provider. Required. |
 | `ADMIN_OIDC_CLIENT_SECRET_FILE` | A file holding the client secret. `ADMIN_OIDC_CLIENT_SECRET` is read when no file is set. One is required. |
 | `ADMIN_GROUPS_CLAIM` | The ID token claim listing the operator's groups. Defaults to `groups`. |

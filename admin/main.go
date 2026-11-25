@@ -83,6 +83,13 @@ func main() {
 	if public.Scheme != "https" {
 		slog.Warn("ADMIN_PUBLIC_URL is not https: session cookies are sent without the Secure flag. Use this only on a local or test network.")
 	}
+	for _, provider := range []string{cfg.issuer, cfg.discoveryURL} {
+		if provider != "" && !strings.HasPrefix(provider, "https://") {
+			// The provider's configuration names the keys that verify ID
+			// tokens and the endpoint that receives the client secret.
+			slog.Warn("The identity provider is reached without https: whoever can alter that traffic can sign in as anyone. Use this only on a local or test network.", "url", provider)
+		}
+	}
 	srv := &http.Server{
 		Addr:              cfg.listen,
 		Handler:           newServer(cfg, newAuth(cfg, public)).routes(),

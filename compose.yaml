@@ -49,9 +49,10 @@ services:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     # The policy store and the drift directory are volumes, so approvals and
     # queued changes outlast the container, and the review dashboard shares
-    # them. A new volume starts with the image's contents.
+    # them. A new volume starts with the image's contents. The gateway only
+    # reads the store, so only reviewers, through the dashboard, change it.
     volumes:
-      - policy:/opt/tyk-gateway/cedar
+      - policy:/opt/tyk-gateway/cedar:ro
       - pending:/opt/tyk-gateway/cedar-pending
     depends_on:
       redis:

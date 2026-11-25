@@ -87,6 +87,11 @@ func ToolStates(review *drift.Review, view policy.DriftView, proxy string) ([]To
 		newest, found, err := review.Newest(proxy, tool, view.Upstream())
 		s.Problem = err
 		s.Found, s.Declared, s.Seen = found, newest.Fingerprint, newest.SeenAt
+		if s.Approved != "" && s.Waiting != s.Declared {
+			// For an approved tool, only an entry for what the upstream
+			// declares now resolves a refusal.
+			s.Waiting = ""
+		}
 		switch {
 		case err != nil:
 			s.Reason = "Refused: the shared declarations of this tool cannot be read."
@@ -110,6 +115,21 @@ func ToolStates(review *drift.Review, view policy.DriftView, proxy string) ([]To
 			s.Reason = "Refused: the upstream declares a changed definition; no review entry has been shared yet."
 		}
 		states = append(states, s)
+	}
+	// A gateway that cannot read one reviewed tool's declarations refuses
+	// every call under drift review until it can. It reads only those of
+	// tools the active set reviews.
+	for _, problem := range states {
+		if problem.Problem == nil || !view.Has(problem.Tool) {
+			continue
+		}
+		for i := range states {
+			if states[i].Callable {
+				states[i].Callable = false
+				states[i].Reason = "Refused: gateways cannot read the shared declarations of " + ShownName(problem.Tool) + ", so they refuse every call under drift review until they can."
+			}
+		}
+		break
 	}
 	return states, nil
 }

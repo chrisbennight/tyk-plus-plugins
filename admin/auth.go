@@ -160,17 +160,34 @@ func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	state, nonce, verifier := randomToken(), randomToken(), oauth2.GenerateVerifier()
 	a.mu.Lock()
-	a.expireLogins()
+	a.expire()
+	if len(a.logins) >= maxPendingLogins {
+		a.mu.Unlock()
+		http.Error(w, "Too many sign-ins are in progress; try again in a few minutes.", http.StatusServiceUnavailable)
+		return
+	}
 	a.logins[state] = &pendingLogin{nonce: nonce, verifier: verifier, next: localPath(r.URL.Query().Get("next")), expires: a.now().Add(loginTimeout)}
 	a.mu.Unlock()
 	http.SetCookie(w, a.cookie(loginCookie, state, loginTimeout))
 	http.Redirect(w, r, oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
 }
 
-func (a *auth) expireLogins() {
+// maxPendingLogins bounds the sign-ins begun but not finished, which anyone
+// can start; each lasts at most loginTimeout.
+const maxPendingLogins = 1000
+
+// expire forgets finished sign-in attempts and sessions. The caller holds
+// the lock.
+func (a *auth) expire() {
+	now := a.now()
 	for state, l := range a.logins {
-		if a.now().After(l.expires) {
+		if now.After(l.expires) {
 			delete(a.logins, state)
+		}
+	}
+	for id, s := range a.sessions {
+		if now.After(s.expires) {
+			delete(a.sessions, id)
 		}
 	}
 }

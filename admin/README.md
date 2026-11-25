@@ -45,7 +45,7 @@ An account in neither group is refused. A sign-in in progress is kept only in th
 
 ## Running it
 
-The repository's [`compose.yaml`](../compose.yaml) runs it with the `admin` profile, sharing the gateway's store and drift directory volumes:
+The repository's [`compose.yaml`](../compose.yaml) runs it with the `admin` profile, sharing the gateway's store and drift directory volumes. The `policy` volume is filled from the gateway image only when it is first created; after that, publish policy changes with `cedar-policy promote` into the volume, or remove the volume to fill it again from a rebuilt image:
 
 ```sh
 export ADMIN_PUBLIC_URL=https://gateway.example.com/extensions/admin

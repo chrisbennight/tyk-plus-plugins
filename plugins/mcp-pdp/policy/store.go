@@ -274,20 +274,18 @@ func Revise(root, label string, actor Actor, now func() time.Time, change func(s
 	if err := store.writeSet(set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, files); err != nil {
 		return "", err
 	}
-	if err := store.activate(set, now); err != nil {
-		return "", err
-	}
+	// The decision is logged before its set becomes active, so no set is
+	// ever enforced without a record of who decided. A failure to activate
+	// after logging leaves a line naming a set that never became active.
 	at := now().UTC().Format(time.RFC3339Nano)
 	for i := range entries {
 		entries[i].Time, entries[i].Actor, entries[i].Base, entries[i].Set, entries[i].Label = at, actor, pointer.Set, set, label
 	}
 	if err := store.appendLog(entries); err != nil {
-		// A decision is either in force and logged, or neither: the set that
-		// was active is put back, so nothing is enforced without its record.
-		if restoreErr := store.writePointer(pointer); restoreErr != nil {
-			return set, fmt.Errorf("set %s is active, but the decision log could not be written (%w), and the previous set could not be restored: %w", set, err, restoreErr)
-		}
 		return "", fmt.Errorf("the decision log could not be written, so the decision was not made: %w", err)
+	}
+	if err := store.activate(set, now); err != nil {
+		return "", fmt.Errorf("the decision is logged, but its set %s could not be made active: %w", set, err)
 	}
 	return set, nil
 }

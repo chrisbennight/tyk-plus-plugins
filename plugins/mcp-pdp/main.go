@@ -12,6 +12,7 @@ import (
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/codemode"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/identity"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 	jsonv2 "github.com/go-json-experiment/json"
 )
 
@@ -66,7 +67,9 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			// gateway's own errors.
 			rememberRequestID(r)
 			rememberCaller(r, who)
-			if underDriftReview(r) {
+			// Every tools/list reply is read, to keep reserved names out
+			// and add Code Mode's tools.
+			if underDriftReview(r) || ctx.GetMCPMethod(r) == "tools/list" {
 				r.Header.Del("Accept-Encoding")
 			}
 		}
@@ -104,7 +107,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		// Code Mode tools ship with the plug-in, so they are not drift
 		// reviewed, but the caller's rules must permit them like any tool.
 		reason = "unknown_tool"
-		if validBody && call.Method == "tools/call" && call.Params.Name == name && name == codemode.ExecuteTool {
+		if validBody && call.Method == "tools/call" && call.Params.Name == name && codemode.IsTool(name) {
 			builtIn = true
 			reason, rules = state.DecideBuiltIn(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name)
 		}
@@ -117,29 +120,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		reason = "invalid_call"
 		proxy := oas.GetTykExtension().Info.ID
 		if validBody && call.Method == "tools/call" && call.Params.Name == name {
-			// Under drift enforcement a tool must be approved, and the
-			// definition its upstream last declared must be the approved one.
-			if view, enforcing := state.Drift(proxy); enforcing {
-				// What this gateway saw, and what any gateway shared, from the
-				// reviewed upstream; declarations from another upstream say
-				// nothing about its tools.
-				observedProxy := drift.ObservedProxy(proxy, view.Upstream())
-				latest, at, seen := observed.LatestAt(observedProxy, name)
-				current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream(), seen)
-				if ok && (!seen || d.SeenAt.After(at)) {
-					latest, seen = d.Fingerprint, true
-				}
-				if !current {
-					// The shared declarations were not read for this set,
-					// after a set change or a failed read; calls wait for a
-					// read that succeeds.
-					reason = drift.UnapprovedDefinition
-				} else {
-					reason = drift.CallReason(view, name, latest, seen, observed.Complete(observedProxy))
-				}
-			} else {
-				reason = ""
-			}
+			reason = driftReason(state, proxy, name)
 			if reason == "" {
 				reason, rules = state.Decide(who, proxy, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
 			}
@@ -155,13 +136,38 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			Params json.RawMessage `json:"params"`
 		}
 		_ = json.Unmarshal(body, &outer)
-		execute(w, r, call.ID, outer.Params, who, method, oas.GetTykExtension().Info.ID)
+		answerCodeMode(w, r, call.ID, name, outer.Params, who, method, oas.GetTykExtension().Info.ID)
 		return
 	}
 	if reason == "permitted" {
 		return
 	}
 	refuse(w, call.ID, "Tool call denied")
+}
+
+// driftReason returns why a tool on a proxy under drift enforcement may not
+// be called, or "" when Cedar decides: the tool must be approved, and the
+// definition its upstream last declared must be the approved one.
+func driftReason(state *policy.Snapshot, proxy, name string) string {
+	view, enforcing := state.Drift(proxy)
+	if !enforcing {
+		return ""
+	}
+	// What this gateway saw, and what any gateway shared, from the reviewed
+	// upstream; declarations from another upstream say nothing about its
+	// tools.
+	observedProxy := drift.ObservedProxy(proxy, view.Upstream())
+	latest, at, seen := observed.LatestAt(observedProxy, name)
+	current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream(), seen)
+	if ok && (!seen || d.SeenAt.After(at)) {
+		latest, seen = d.Fingerprint, true
+	}
+	if !current {
+		// The shared declarations were not read for this set, after a set
+		// change or a failed read; calls wait for a read that succeeds.
+		return drift.UnapprovedDefinition
+	}
+	return drift.CallReason(view, name, latest, seen, observed.Complete(observedProxy))
 }
 
 // readBody reads the request body up to the MCP ingress limit of the pinned

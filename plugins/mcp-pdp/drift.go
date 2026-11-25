@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/TykTechnologies/tyk/ctx"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/codemode"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 	jsonv2 "github.com/go-json-experiment/json"
@@ -67,6 +68,10 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		return
 	}
 	if !underDriftReview(req) {
+		if method == "tools/list" {
+			editList(res, req)
+			return
+		}
 		// The stream passes unparsed, but if drift review starts while it is
 		// open, it ends rather than deliver an unchecked list.
 		if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
@@ -127,6 +132,9 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool, definition jsontext.Value) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+			if isCodeModeTool(tool) {
+				reportReserved(proxy)(tool)
+			}
 			approvedFingerprint, _, _ := view.Approved(tool)
 			shared.Saw(proxy, upstream, tool, fingerprint, approved, receivedAt)
 			if fingerprint != approvedFingerprint && !view.Rejected(tool, fingerprint) {
@@ -134,7 +142,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			}
 		})
 		observed.RecordAt(drift.ObservedProxy(proxy, upstream), received, receivedAt, declared, limits.MaxUnapprovedPerProxy)
-		return out
+		return codemode.EditList(out, codeModeListing(req, state, proxy, upstream), reportReserved(proxy))
 	}
 	plainReceived, plainReceivedAt := observed.ReceivedAt()
 	// The reply now depends on the gateway's approvals as well as the
@@ -234,12 +242,69 @@ func rememberRequestID(r *http.Request) {
 		return
 	}
 	var envelope struct {
-		ID jsontext.Value `json:"id"`
+		ID     jsontext.Value `json:"id"`
+		Params struct {
+			Cursor jsontext.Value `json:"cursor"`
+		} `json:"params"`
 	}
 	if jsonv2.Unmarshal(body, &envelope) != nil || len(envelope.ID) == 0 {
 		return
 	}
-	*r = *r.WithContext(context.WithValue(r.Context(), requestIDKey{}, envelope.ID))
+	remembered := context.WithValue(r.Context(), requestIDKey{}, envelope.ID)
+	if len(envelope.Params.Cursor) > 0 && string(envelope.Params.Cursor) != "null" {
+		remembered = context.WithValue(remembered, laterPageKey{}, true)
+	}
+	*r = *r.WithContext(remembered)
+}
+
+// laterPageKey marks a list request that asks for a page after the first.
+type laterPageKey struct{}
+
+// firstPage reports whether a list request asks for the first page.
+func firstPage(r *http.Request) bool {
+	later, _ := r.Context().Value(laterPageKey{}).(bool)
+	return !later
+}
+
+// editList edits a tools/list reply on a proxy not under drift review: it
+// hides upstream tools that use the reserved Code Mode prefix and, on a Code
+// Mode proxy, adds the Code Mode tools the caller may use. The reply then
+// depends on the caller, so it is marked private.
+func editList(res *http.Response, req *http.Request) {
+	oas := ctx.GetOASDefinition(req)
+	if oas == nil || oas.GetTykExtension() == nil {
+		return
+	}
+	proxy, upstream := oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL
+	// Authorize asked for an uncompressed reply. One compressed anyway cannot
+	// be edited, so it is not passed on, as under drift review.
+	if res.Header.Get("Content-Encoding") != "" {
+		res.Body.Close()
+		replaceBody(res, drift.Failed(requestID(req)))
+		res.Header.Del("Content-Encoding")
+		slog.Warn("Refused a compressed tool list", "proxy", proxy)
+		return
+	}
+	add := codeModeListing(req, current(), proxy, upstream)
+	edit := func(message []byte) []byte { return codemode.EditList(message, add, reportReserved(proxy)) }
+	res.Header.Del("ETag")
+	res.Header.Del("Last-Modified")
+	res.Header.Set("Cache-Control", "private, no-cache")
+	if mediaType, _, _ := mime.ParseMediaType(res.Header.Get("Content-Type")); mediaType == "text/event-stream" {
+		// If drift review starts while the stream is open, it ends rather
+		// than deliver an unchecked list.
+		res.Body = drift.UntilReview(drift.NewEventRewriter(res.Body, maxReply, drift.Failed(requestID(req)), edit), func() bool { return underDriftReview(req) })
+		res.Header.Del("Content-Length")
+		res.ContentLength = -1
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxReply+1))
+	res.Body.Close()
+	if err != nil || len(body) > maxReply {
+		replaceBody(res, drift.Failed(requestID(req)))
+		return
+	}
+	replaceBody(res, edit(body))
 }
 
 // requestID returns the ID rememberRequestID recorded, or nil.

@@ -22,7 +22,7 @@ To see the gateway working with example policy, mock MCP servers, and Claude Cod
 
 ## Code Mode
 
-[Code Mode](gateway/code-mode.md) lets a client run a short JavaScript program with `codemode.execute` that calls several tools and returns one result. Every call the program makes goes back through the gateway as the caller, with the same decision a direct call gets. Programs run on a separate [sandbox host](sandbox/README.md): one gVisor sandbox per run, reached from gateways over mutual TLS. Start it with `docker compose -f sandbox/compose.yaml up -d` after providing its certificates, then point the gateway at it with the [Code Mode settings](gateway/code-mode.md#settings).
+[Code Mode](gateway/code-mode.md) lets a client find the tools it can use with `codemode.search` and `codemode.describe`, then run a short JavaScript program with `codemode.execute` that calls several tools and returns one result. Every call the program makes goes back through the gateway as the caller, with the same decision a direct call gets. Programs run on a separate [sandbox host](sandbox/README.md): one gVisor sandbox per run, reached from gateways over mutual TLS. Start it with `docker compose -f sandbox/compose.yaml up -d` after providing its certificates, then point the gateway at it with the [Code Mode settings](gateway/code-mode.md#settings).
 
 ## Supported MCP versions
 

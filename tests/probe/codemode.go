@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -18,7 +19,7 @@ const (
 )
 
 // codeModeRules extend the example rules: support and operator callers may
-// run programs, and guests may not. Code Mode tools have no reviewed facts,
+// use Code Mode, support without codemode.limits, and guests may not. Code Mode tools have no reviewed facts,
 // so the forbid on tools not marked read-only leaves them out by name.
 const codeModeRules = `
 @id("support-read")
@@ -35,7 +36,7 @@ when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !pr
 
 @id("support-code-mode")
 permit (principal, action == Action::"tools/call", resource)
-when { principal.roles.contains("support") && resource.name == "codemode.execute" };
+when { principal.roles.contains("support") && resource.name like "codemode.*" && resource.name != "codemode.limits" };
 `
 
 // tryCall is a program that makes one call named by its input and returns
@@ -132,6 +133,9 @@ func codeModeSuite(k keys) {
 	for _, version := range []string{olderProtocol, newerProtocol} {
 		c := connect(k.support, version)
 
+		listingChecks(c, k, version)
+		discoveryChecks(c, k, supportToken, version)
+
 		// Starting a run needs a permit: a guest is refused like any tool
 		// call, and nothing reaches the upstream.
 		before, _ := observed()
@@ -214,8 +218,14 @@ return [a.content[0].text, b.content[0].text];`, nil, nil)
 		fmt.Printf("Verified Code Mode runs with the %s protocol.\n", version)
 	}
 
-	// A gateway without Code Mode treats codemode.execute as an unknown tool.
+	// A gateway without Code Mode lists none of its tools, still hides
+	// upstream tools under the reserved prefix, and treats codemode.execute
+	// as an unknown tool.
 	peer := connectAt(peerGateway, k.support, olderProtocol)
+	for _, name := range listNames(peer, k.operator) {
+		check(!strings.HasPrefix(name, "codemode."), "the peer gateway listed %s", name)
+	}
+	call(peer, k.operator, "codemode.spoof", args())
 	before, _ := observed()
 	off := execute(peer, k.support, "return 1", nil, nil)
 	after, _ := observed()
@@ -236,4 +246,129 @@ func quiet() {
 		last = now
 	}
 	panic("the upstream kept receiving requests")
+}
+
+// codeModeTools are the tools the gateway adds on Code Mode proxies.
+var codeModeTools = map[string]bool{"codemode.search": true, "codemode.describe": true, "codemode.limits": true, codeMode: true}
+
+// listNames lists every tool name a caller is shown, in order.
+func listNames(c *conn, cred credential) []string {
+	r := c.rpc(cred, "tools/list", map[string]any{})
+	var listing struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	check(r.Status == http.StatusOK && json.Unmarshal(r.Result, &listing) == nil, "tools/list: %v", r)
+	var names []string
+	for _, t := range listing.Tools {
+		names = append(names, t.Name)
+	}
+	return names
+}
+
+// codeModeCall calls a Code Mode tool and returns its structured result, or
+// the tool error's message.
+func codeModeCall(c *conn, cred credential, tool string, arguments map[string]any) (map[string]any, string) {
+	r := c.rpc(cred, "tools/call", map[string]any{"name": tool, "arguments": arguments})
+	check(r.Status == http.StatusOK && r.Error == nil, "%s: %v", tool, r)
+	var result struct {
+		IsError    bool           `json:"isError"`
+		Structured map[string]any `json:"structuredContent"`
+	}
+	check(json.Unmarshal(r.Result, &result) == nil, "%s: unreadable %v", tool, r)
+	if result.IsError {
+		e, _ := result.Structured["error"].(map[string]any)
+		message, _ := e["message"].(string)
+		return nil, message
+	}
+	return result.Structured, ""
+}
+
+// searchNames returns the proxy/name of every tool a search finds, following
+// its pages.
+func searchNames(c *conn, cred credential, query string) []string {
+	var names []string
+	cursor := ""
+	for range 20 {
+		arguments := map[string]any{"query": query, "limit": 1}
+		if cursor != "" {
+			arguments["cursor"] = cursor
+		}
+		found, failed := codeModeCall(c, cred, "codemode.search", arguments)
+		check(failed == "", "search %q: %s", query, failed)
+		tools, _ := found["tools"].([]any)
+		for _, t := range tools {
+			tool := t.(map[string]any)
+			names = append(names, tool["proxy"].(string)+"/"+tool["name"].(string))
+		}
+		next, more := found["nextCursor"].(string)
+		if !more {
+			return names
+		}
+		cursor = next
+	}
+	panic("search did not finish")
+}
+
+// listingChecks checks that each caller is listed exactly the Code Mode tools
+// its rules permit, once, and never an upstream tool under the reserved
+// prefix, which is also refused.
+func listingChecks(c *conn, k keys, version string) {
+	for _, want := range []struct {
+		name string
+		cred credential
+		mode []string
+	}{
+		{"operator", k.operator, []string{"codemode.describe", "codemode.execute", "codemode.limits", "codemode.search"}},
+		{"support", k.support, []string{"codemode.describe", "codemode.execute", "codemode.search"}},
+		{"guest", k.guest, nil},
+	} {
+		var mode []string
+		for _, name := range listNames(c, want.cred) {
+			check(name != "codemode.spoof", "%s %s: the upstream's reserved-name tool was listed", version, want.name)
+			if strings.HasPrefix(name, "codemode.") {
+				mode = append(mode, name)
+			}
+		}
+		slices.Sort(mode)
+		check(slices.Equal(mode, want.mode), "%s %s: listed Code Mode tools %v, want %v", version, want.name, mode, want.mode)
+	}
+	call(c, k.operator, "codemode.spoof", args())
+}
+
+// discoveryChecks checks search, describe and limits.
+func discoveryChecks(c *conn, k keys, supportToken credential, version string) {
+	// Search offers exactly the tools each caller could call, on every Code
+	// Mode proxy its Tyk session may use.
+	for _, want := range []struct {
+		name  string
+		cred  credential
+		tools []string
+	}{
+		{"operator", k.operator, []string{"governed/change", "governed/lookup", "governed2/change", "governed2/lookup"}},
+		{"support", k.support, []string{"governed/lookup", "governed2/lookup"}},
+		// Token callers have no access right to the second proxy.
+		{"support token", supportToken, []string{"governed/lookup"}},
+	} {
+		found := searchNames(c, want.cred, "")
+		check(slices.Equal(found, want.tools), "%s %s: search found %v, want %v", version, want.name, found, want.tools)
+	}
+	check(slices.Equal(searchNames(c, k.operator, "LOOK"), []string{"governed/lookup", "governed2/lookup"}), "%s: search by name", version)
+
+	// Describe gives a call form that works unchanged in a program, and
+	// describes a hidden tool exactly as a missing one.
+	described, failed := codeModeCall(c, k.support, "codemode.describe", map[string]any{"proxy": "governed2", "name": "lookup"})
+	check(failed == "" && described["call"] == `connectors["governed2"]["lookup"]`, "%s: describe %v %s", version, described, failed)
+	run := execute(c, k.support, "const r = await "+described["call"].(string)+"({ count: 7 }); return r.content[0].text;", nil, nil)
+	run.succeeded(version+" describe's call form", "found")
+	_, hidden := codeModeCall(c, k.support, "codemode.describe", map[string]any{"proxy": "governed", "name": "change"})
+	_, missing := codeModeCall(c, k.support, "codemode.describe", map[string]any{"proxy": "governed", "name": "nothing"})
+	_, elsewhere := codeModeCall(c, supportToken, "codemode.describe", map[string]any{"proxy": "governed2", "name": "lookup"})
+	check(hidden != "" && hidden == missing && hidden == elsewhere, "%s: describe hidden %q, missing %q, no access %q", version, hidden, missing, elsewhere)
+
+	// Limits report the operator maximums to callers permitted to read them.
+	limits, failed := codeModeCall(c, k.operator, "codemode.limits", map[string]any{})
+	check(failed == "" && limits["calls"] == float64(64) && limits["calls_at_once"] == float64(6), "%s: limits %v %s", version, limits, failed)
+	call(c, k.support, "codemode.limits", args())
 }

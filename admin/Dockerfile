@@ -1,4 +1,4 @@
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.10-trixie AS build
 WORKDIR /src
 COPY --from=mcp-pdp . ./plugins/mcp-pdp
 COPY --from=sandbox-protocol . ./sandbox/protocol
@@ -8,7 +8,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 # Runs as the same user as the gateway, which owns the policy store and the
 # shared drift directory in the gateway image.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /cedar-admin /cedar-admin
 EXPOSE 8000
 ENTRYPOINT ["/cedar-admin"]

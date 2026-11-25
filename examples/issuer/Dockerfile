@@ -1,4 +1,4 @@
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.10-trixie AS build
 WORKDIR /src
 COPY . .
 RUN go vet ./... && go test -race ./... && CGO_ENABLED=0 go build -mod=readonly -trimpath -o /issuer .

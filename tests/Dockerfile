@@ -1,17 +1,17 @@
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.10-trixie AS build
 WORKDIR /src
 COPY upstream/ .
 RUN CGO_ENABLED=0 go build -mod=readonly -o /upstream .
 
 # The older-only upstream is the same server built on an SDK release that
 # speaks only the older protocol.
-FROM golang:1.26.10-bookworm AS legacy-build
+FROM golang:1.26.10-trixie AS legacy-build
 WORKDIR /src
 COPY upstream-legacy/go.mod upstream-legacy/go.sum ./
 COPY upstream/main.go .
 RUN CGO_ENABLED=0 go build -mod=readonly -o /upstream .
 
-FROM golang:1.26.10-bookworm AS probe-build
+FROM golang:1.26.10-trixie AS probe-build
 WORKDIR /src
 COPY probe/ .
 RUN CGO_ENABLED=0 go build -mod=readonly -o /probe .
@@ -33,7 +33,7 @@ COPY --from=probe-build /probe /probe
 COPY --from=probe-build /cedar-policy /cedar-policy
 ENTRYPOINT ["/probe"]
 
-FROM golang:1.26.10-bookworm AS sandbox-probe-build
+FROM golang:1.26.10-trixie AS sandbox-probe-build
 WORKDIR /src
 COPY sandbox-probe/ .
 RUN CGO_ENABLED=0 go build -mod=readonly -o /sandbox-probe .

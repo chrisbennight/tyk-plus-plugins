@@ -1,5 +1,5 @@
 FROM --platform=linux/amd64 tykio/tyk-plugin-compiler:v5.16.0 AS tyk
-FROM golang:1.26.10-bookworm AS compiler
+FROM golang:1.26.10-trixie AS compiler
 WORKDIR /src
 COPY --from=tyk /go/src/github.com/TykTechnologies/tyk ./tyk
 COPY --from=mcp-pdp . ./plugins/mcp-pdp

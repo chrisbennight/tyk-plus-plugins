@@ -52,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Publish into a shared policy store as several users
-        run: docker run --rm -v "$PWD":/w -w /w golang:1.26.10-bookworm bash tests/shared-store.sh
+        run: docker run --rm -v "$PWD":/w -w /w golang:1.26.10-trixie bash tests/shared-store.sh
   sandbox:
     runs-on: ubuntu-latest
     timeout-minutes: 20

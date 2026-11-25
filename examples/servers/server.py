@@ -197,8 +197,9 @@ def changing():
     state = {"version": None, "tools": []}
     # Sessions of the older protocol, which receive notifications only on
     # their own session stream. Clients often leave without ending their
-    # session, so only the most recent are kept.
-    sessions = deque(maxlen=64)
+    # session, so only the most recent are kept: enough that a client left
+    # connected through many runner passes is still told of changes.
+    sessions = deque(maxlen=1000)
 
     class KeepSessions(Middleware):
         async def on_initialize(self, context, call_next):

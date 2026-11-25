@@ -60,12 +60,12 @@ Every proxy is under drift review, and `changing` exists to show it. The example
 | 3 | `lookup` gains a parameter | The same |
 | 4 | `update` now claims to be read-only | `update` is hidden and refused; the review shows the annotation change |
 | 5 | A new tool, `delete`, appears | `delete` is hidden and refused as new |
-| 6 | `report` is no longer listed | `report` is missing; the other tools are unaffected |
+| 6 | `report` is no longer listed | `report` is missing; the other tools are unaffected. Nothing waits for review, since a tool the upstream stops listing needs no approval |
 | 7 | `report` is renamed `summary` | `summary` is hidden and refused as new |
 | 8 | Only the server instructions change | The approved instructions are still given |
 | 9 | Only `lookup`'s `_meta` changes | Nothing; `_meta` is not part of a definition |
 | 10 | `lookup`'s description gains different text | Held separately from version 1's change |
-| 0 | Back to the approved version | Every tool works again |
+| 0 | Back to the approved version | Every tool works again. The earlier changes stay in the review queue, marked superseded, until a reviewer rejects them |
 
 Each switch tells connected clients that the tool list changed, in both protocol versions: on `subscriptions/listen` streams for `2026-07-28` clients, and on the session stream for `2025-11-25` clients. Clients that connect later see the change at once. Set `CHANGING_VERSION` before `docker compose up` to start the server at a later version, so drift is visible on first connect.
 
@@ -76,7 +76,7 @@ The `drift` section of `expected.json` states what the `deployer` caller sees at
 Connect a client to `changing` as described in [Connect Claude Code or Codex](#connect-claude-code-or-codex), then:
 
 ```sh
-docker compose run --rm runner version 1   # lookup changes
+docker compose run --rm runner version 2   # lookup's description gains hidden characters
 ```
 
 The client is told the tool list changed. Ask it to list the tools on `changing` again: `lookup` is gone, and the gateway, having seen the change, queues it for review. A change waits for review only once the gateway has seen it in a tool list.
@@ -85,7 +85,7 @@ The client is told the tool list changed. Ask it to list the tools on `changing`
 docker compose run --rm review             # list what waits for review
 ```
 
-`review` runs `cedar-policy drift` against the gateway's store and its queue of changes; with no arguments it lists the queue. Show one change with its labelled diff, then approve or reject it by the fingerprint the list printed:
+`review` runs `cedar-policy drift` against the gateway's store and its queue of changes; with no arguments it lists the queue. Show the change with its labelled diff, which writes out the invisible and look-alike characters, then approve or reject it by the fingerprint the list printed:
 
 ```sh
 docker compose run --rm review show -store /store -pending /pending -proxy changing -tool lookup FINGERPRINT
@@ -116,7 +116,7 @@ Approving a change makes a new policy set active, so the runner's expectations n
 
 [`policy/`](policy) is the example policy set: [rules](policy/rules.cedar), [approved tools](policy/approved_tools.json), approved instructions and activation checks. The [policy guide](../gateway/policy/README.md) explains the format.
 
-Every proxy is under drift review, so clients see only the approved tool definitions, and each caller sees only the tools it could call. A tool that was never approved, such as `notes.archive`, is neither listed nor callable. The approved tool definitions are copied exactly from each server's `tools/list`; a tool whose definition differs from what the server declares is hidden, and its calls are refused once the gateway has seen the difference in a tool list, until the new definition is approved.
+Every proxy is under drift review, so clients see only the approved tool definitions, and each caller sees only the tools it could call. A tool that was never approved, such as `notes.archive`, is neither listed nor callable. The approved tool definitions are copied exactly from each server's `tools/list`; a tool whose definition differs from what the server declares is hidden, and its calls are refused once the gateway has seen the difference in a tool list, until the new definition is approved or the server declares the approved one again. A tool's top-level `_meta` is not part of its definition, and clients are given the approved one.
 
 The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`. Regenerate the checks whenever you change `expected.json` or the approved tools, so the published policy is checked against the current expectations. After changing `expected.json`, regenerate the checks and publish again:
 

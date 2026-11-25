@@ -112,6 +112,7 @@ func TestListedUnapprovedToolIsAnError(t *testing.T) {
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unapproved tool was accepted")
 	}
+	e, _ = load("..")
 	e.expected.Listed["admin"]["nowhere"] = nil
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unknown proxy was accepted")

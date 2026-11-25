@@ -37,6 +37,24 @@ func DefinitionFingerprint(definition []byte) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil)), nil
 }
 
+// Canonical returns any JSON value in the canonical form fingerprints use,
+// keeping every member, so two values compare equal exactly when they would
+// fingerprint alike.
+func Canonical(value []byte) (string, error) {
+	dec := jsontext.NewDecoder(bytes.NewReader(value))
+	root, err := canonicalValue(dec, false)
+	if err != nil {
+		return "", err
+	}
+	if _, err := dec.ReadToken(); err != io.EOF {
+		return "", errors.New("value has data after it")
+	}
+	var out bytes.Buffer
+	w := bufio.NewWriter(&out)
+	root.writeTo(w)
+	return out.String(), nil
+}
+
 // InstructionsFingerprint identifies server instructions by the SHA-256 of
 // their UTF-8 text.
 func InstructionsFingerprint(text string) string {

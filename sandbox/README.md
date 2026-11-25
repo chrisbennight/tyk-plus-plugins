@@ -115,7 +115,9 @@ raise them. Reaching a limit ends the run with an error that names it.
 
 ## Protocol
 
-Every hop carries one JSON object per line.
+Every hop carries one JSON object per line. The messages are defined in
+[protocol/](protocol/), a module of its own with no dependencies, which the
+gateway plug-in shares.
 
 1. The service sends `{"type":"hello","backend":"gvisor"}`.
 2. The gateway sends `{"type":"start","source":"...","input":{...},"limits":{...}}`,

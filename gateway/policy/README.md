@@ -53,7 +53,7 @@ Give each service account a Tyk key with access to `governed`. Set the following
 
 ## Tools and reviewed facts
 
-Add approved tools to [approved_tools.json](approved_tools.json), keyed by proxy ID and exact upstream tool name. A tool that is not in the inventory is denied even if a rule broadly permits access.
+Add approved tools to [approved_tools.json](approved_tools.json), keyed by proxy ID and exact upstream tool name. A tool that is not in the inventory is denied even if a rule broadly permits access. The exceptions are [Code Mode](#code-mode) tools, which the plug-in answers itself.
 
 ```json
 {
@@ -98,6 +98,24 @@ when { principal.roles.contains("admin") };
 forbid (principal, action == Action::"tools/call", resource)
 when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !principal.roles.contains("admin") };
 ```
+
+### Code Mode
+
+[Code Mode](../code-mode.md) adds tools the plug-in answers itself, such as `codemode.execute`. Rules grant them as they grant any tool, by name, proxy or caller. They ship with the plug-in rather than an upstream, so they have no reviewed facts, tags or upstream annotations, and their arguments are never facts.
+
+That means a forbid on tools without some reviewed fact also forbids Code Mode tools. The example above reserves every tool not marked read-only for admins, so to let analysts run programs, leave Code Mode tools out of that forbid by name:
+
+```cedar
+@id("admin-required-for-changes")
+forbid (principal, action == Action::"tools/call", resource)
+when { !resource.reviewed.flags.contains({name: "readOnly", value: true}) && !principal.roles.contains("admin") && !(resource.name like "codemode.*") };
+
+@id("analyst-code-mode")
+permit (principal, action == Action::"tools/call", resource)
+when { principal.roles.contains("analyst") && resource.name == "codemode.execute" };
+```
+
+Every tool a program calls is still decided by the caller's own rules, so running a program never grants a call the caller could not make directly.
 
 ## Activation checks
 

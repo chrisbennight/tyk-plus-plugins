@@ -285,7 +285,9 @@ func Revise(root, label string, actor Actor, now func() time.Time, change func(s
 		return "", fmt.Errorf("the decision log could not be written, so the decision was not made: %w", err)
 	}
 	if err := store.activate(set, now); err != nil {
-		return "", fmt.Errorf("the decision is logged, but its set %s could not be made active: %w", set, err)
+		// The pointer may have been replaced before a later step failed, so
+		// the set may be active after all.
+		return "", fmt.Errorf("the decision is logged, but making set %s active failed, so it may or may not be active: %w", set, err)
 	}
 	return set, nil
 }

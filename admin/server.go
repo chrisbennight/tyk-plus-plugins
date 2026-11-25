@@ -562,8 +562,14 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 				s.fail(w, sess, http.StatusServiceUnavailable, driftreview.ShownName(err.Error()))
 				return
 			}
-			if len(waiting) > 1 {
+			switch {
+			case len(waiting) > 1:
 				http.Redirect(w, r, back+"&done=several-instructions", http.StatusSeeOther)
+				return
+			case len(waiting) != 1 || waiting[0].Fingerprint != fingerprint:
+				// A page left open after its text was rejected names a text
+				// that no longer waits.
+				http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
 				return
 			}
 		}

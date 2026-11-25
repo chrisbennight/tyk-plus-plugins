@@ -33,7 +33,7 @@ docker compose run --build --rm runner
 
 The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It runs the Code Mode programs in [Code Mode](#code-mode). It sets `changing` to version 0 first, and at the end walks it through each of its versions, as [Drift](#drift) describes, leaving it at version 0 again. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
 
-Code Mode programs run on a sandbox host that uses gVisor. On a machine without gVisor, such as Docker Desktop on macOS, use the development backend instead; it runs the launcher privileged, so use it only on your own machine:
+Code Mode programs run on a sandbox host that uses gVisor. On a machine where gVisor cannot run, use the development backend instead; it runs the launcher privileged, so use it only on your own machine:
 
 ```sh
 export SANDBOX_BACKEND=runc COMPOSE_FILE=compose.yaml:../sandbox/compose.runc.yaml

@@ -32,7 +32,7 @@ with no network interface other than loopback.
 | Backend | Runtime | Use |
 |---|---|---|
 | `gvisor` | gVisor `runsc`, systrap platform | Production |
-| `runc` | Docker's standard runtime | Development where gVisor is unavailable, such as Docker Desktop on macOS |
+| `runc` | Docker's standard runtime | Development where gVisor cannot run; only in the image's `dev` target |
 
 The sandbox service reports its backend to gateways at the start of every run,
 so a gateway can refuse a backend it does not accept.
@@ -56,7 +56,10 @@ and all runs on a host share the launcher container's memory and process
 limits (`SANDBOX_HOST_MEMORY`).
 
 The `runc` backend needs writable cgroups, so `compose.runc.yaml` runs the
-launcher privileged. Use it only for development.
+launcher privileged. Use it only for development. It exists only in the
+image's `dev` target, which `compose.runc.yaml` builds: the released image is
+built on a distroless base with no shell or package manager, contains neither
+`runc` nor the launcher's `runc` backend, and refuses `SANDBOX_BACKEND=runc`.
 
 ## Run it
 
@@ -96,7 +99,7 @@ layer can have bugs, which is why there are several.
 
 | Variable | Service | Default | Meaning |
 |---|---|---|---|
-| `SANDBOX_BACKEND` | launcher | `gvisor` | `gvisor` or `runc` |
+| `SANDBOX_BACKEND` | launcher | `gvisor` | `gvisor`, or `runc` in the `dev` target |
 | `SANDBOX_MAX_RUN_MS` | launcher | `120000` | Longest run the launcher will start |
 | `SANDBOX_MEMORY_BYTES` | launcher | 512 MiB | Memory limit per sandbox where the runtime enforces one (`runc`) |
 | `SANDBOX_MAX_RUNS` | launcher | `16` | Sandboxes the launcher runs at once, whatever the service asks for |

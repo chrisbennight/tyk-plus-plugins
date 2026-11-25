@@ -111,33 +111,24 @@ func DecodeRequest(line []byte) (Request, error) {
 }
 
 // RuntimeCommand returns the runtime binary and arguments that run bundle id.
-// Only fixed values and the generated id appear in it.
+// Only fixed values and the generated id appear in it. The runc backend exists
+// only in development builds; see runc.go.
 func RuntimeCommand(backend, op, id string) (string, []string) {
-	if backend == protocol.BackendGVisor {
-		// Without --privileged, Docker's cgroup files are read-only, so gVisor
-		// runs without per-sandbox cgroups; the container's own limits apply.
-		args := []string{"--root=" + stateDir + "/runsc", "--network=none", "--platform=systrap", "--ignore-cgroups"}
-		switch op {
-		case "run":
-			return "runsc", append(args, "run", "--bundle", bundleDir(id), id)
-		case "kill":
-			return "runsc", append(args, "kill", id, "KILL")
-		case "delete":
-			return "runsc", append(args, "delete", "--force", id)
-		default:
-			return "runsc", append(args, "list", "-quiet")
-		}
+	if backend != protocol.BackendGVisor {
+		return runcCommand(op, id)
 	}
-	args := []string{"--root=" + stateDir + "/runc"}
+	// Without --privileged, Docker's cgroup files are read-only, so gVisor
+	// runs without per-sandbox cgroups; the container's own limits apply.
+	args := []string{"--root=" + stateDir + "/runsc", "--network=none", "--platform=systrap", "--ignore-cgroups"}
 	switch op {
 	case "run":
-		return "runc", append(args, "run", "--bundle", bundleDir(id), id)
+		return "runsc", append(args, "run", "--bundle", bundleDir(id), id)
 	case "kill":
-		return "runc", append(args, "kill", id, "KILL")
+		return "runsc", append(args, "kill", id, "KILL")
 	case "delete":
-		return "runc", append(args, "delete", "--force", id)
+		return "runsc", append(args, "delete", "--force", id)
 	default:
-		return "runc", append(args, "list", "-q")
+		return "runsc", append(args, "list", "-quiet")
 	}
 }
 
@@ -196,6 +187,10 @@ func New(ctx context.Context, config Config) *Launcher {
 		return l
 	}
 	if config.Backend == protocol.BackendRunc {
+		if !RuncBuilt {
+			l.problem = "this launcher was built without the runc backend, which only development builds include"
+			return l
+		}
 		if err := delegateCgroups(); err != nil {
 			l.problem = "delegating cgroups: " + err.Error()
 			return l
@@ -512,21 +507,4 @@ func peerUID(c *net.UnixConn) (uint32, error) {
 		return 0, credErr
 	}
 	return cred.Uid, nil
-}
-
-// delegateCgroups moves the launcher out of its container's root cgroup so
-// the root can delegate memory, CPU and process controllers to sandboxes.
-func delegateCgroups() error {
-	if err := os.MkdirAll("/sys/fs/cgroup/launcher", 0o755); err != nil {
-		return err
-	}
-	procs, err := os.ReadFile("/sys/fs/cgroup/cgroup.procs")
-	if err != nil {
-		return err
-	}
-	for _, pid := range strings.Fields(string(procs)) {
-		// A process may exit between reading and moving it.
-		_ = os.WriteFile("/sys/fs/cgroup/launcher/cgroup.procs", []byte(pid), 0o644)
-	}
-	return os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+memory +pids +cpu"), 0o644)
 }

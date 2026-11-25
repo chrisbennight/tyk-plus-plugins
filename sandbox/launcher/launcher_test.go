@@ -38,10 +38,6 @@ func TestRuntimeCommandsUseOnlyFixedValues(t *testing.T) {
 	if got != want {
 		t.Errorf("gVisor run command\n got %s\nwant %s", got, want)
 	}
-	name, args = RuntimeCommand(protocol.BackendRunc, "delete", "run-0011")
-	if got := name + " " + strings.Join(args, " "); got != "runc --root=/run/sandbox/runc delete --force run-0011" {
-		t.Errorf("runc delete command: %s", got)
-	}
 }
 
 func TestSpecIsolatesTheSandbox(t *testing.T) {

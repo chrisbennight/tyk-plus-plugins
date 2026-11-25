@@ -104,12 +104,31 @@ type auth struct {
 	provider *oidc.Provider
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
+	// client makes every request to the identity provider.
+	client   *http.Client
 	sessions map[string]*session
 	now      func() time.Time
 }
 
 func newAuth(cfg config, public *url.URL) *auth {
-	return &auth{cfg: cfg, public: public, sessions: map[string]*session{}, now: time.Now}
+	return &auth{cfg: cfg, public: public, client: providerClient(cfg), sessions: map[string]*session{}, now: time.Now}
+}
+
+// providerClient makes the client for every request to the identity
+// provider: discovery, keys and the code exchange.
+func providerClient(cfg config) *http.Client {
+	// The provider's configuration and keys are the trust root for every
+	// signed-in identity, so they are fetched only over https, redirects
+	// included, unless an operator allows otherwise on a test network.
+	return &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" && !cfg.insecureProvider {
+			return fmt.Errorf("refusing a redirect to %s, which is not https", req.URL.Redacted())
+		}
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}}
 }
 
 // connect discovers the identity provider once and keeps the result, so the
@@ -120,19 +139,7 @@ func (a *auth) connect(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifi
 	if a.provider != nil {
 		return a.oauth, a.verifier, nil
 	}
-	// The provider's configuration and keys are the trust root for every
-	// signed-in identity, so they are fetched only over https, redirects
-	// included, unless an operator allows otherwise on a test network.
-	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if req.URL.Scheme != "https" && !a.cfg.insecureProvider {
-			return fmt.Errorf("refusing a redirect to %s, which is not https", req.URL.Redacted())
-		}
-		if len(via) >= 10 {
-			return errors.New("too many redirects")
-		}
-		return nil
-	}}
-	ctx = oidc.ClientContext(ctx, client)
+	ctx = oidc.ClientContext(ctx, a.client)
 	discovery := a.cfg.issuer
 	if a.cfg.discoveryURL != "" {
 		// The provider is reached at another address than the issuer it
@@ -290,14 +297,17 @@ func (a *auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "The identity provider refused the sign-in.", http.StatusForbidden)
 		return
 	}
-	token, err := oauth.Exchange(r.Context(), r.URL.Query().Get("code"), oauth2.VerifierOption(l.verifier))
+	// The exchange sends the client secret, so it uses the provider client
+	// and its rule on redirects.
+	ctx := oidc.ClientContext(r.Context(), a.client)
+	token, err := oauth.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(l.verifier))
 	if err != nil {
 		slog.Warn("Sign-in code exchange failed", "error", err)
 		http.Error(w, "The sign-in could not be completed. Sign in again.", http.StatusBadRequest)
 		return
 	}
 	raw, _ := token.Extra("id_token").(string)
-	idToken, err := verifier.Verify(r.Context(), raw)
+	idToken, err := verifier.Verify(ctx, raw)
 	if err != nil || subtle.ConstantTimeCompare([]byte(idToken.Nonce), []byte(l.nonce)) != 1 {
 		slog.Warn("Sign-in ID token refused", "error", err)
 		http.Error(w, "The identity provider's token could not be verified.", http.StatusForbidden)

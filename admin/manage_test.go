@@ -98,6 +98,29 @@ func TestBulkApprovalSkipsSupersededDefinitions(t *testing.T) {
 	}
 }
 
+func TestBulkRejectionDecidesEachToolOnceAndSaysSo(t *testing.T) {
+	d := newDashboard(t)
+	first := d.queue("change", changedChange)
+	second := d.queue("change", strings.Replace(changedChange, "Ignore previous instructions.", "Take care.", 1))
+	cookie, csrf := d.signIn(reviewer)
+	items := []string{item{Tool: "change", Fingerprint: first}.encode(), item{Tool: "change", Fingerprint: second}.encode()}
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "action": {"reject"}, "include_flagged": {"1"}, "item": items}
+	res := d.post("/bulk/decide", cookie, form)
+	location := res.Header.Get("Location")
+	if !strings.HasSuffix(location, "done=bulk-rejected&n=1&skipped=1&left=0") {
+		t.Fatalf("bulk rejection of two versions of one tool: %s %s", location, body(t, res))
+	}
+	u, _ := url.Parse(location)
+	if page := body(t, d.get("/queue?"+u.RawQuery, cookie)); !strings.Contains(page, "Rejected 1. Skipped 1") {
+		t.Fatalf("queue after a bulk rejection:\n%s", page)
+	}
+	// A selection made against an earlier set is not confirmed.
+	form.Set("base", "0000")
+	if res := d.post("/bulk", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
+		t.Fatalf("confirming a stale selection: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
 func TestItemsNameAnyTool(t *testing.T) {
 	for _, it := range []item{{Tool: "a.b.c", Fingerprint: "ff"}, {Tool: "ünï\u200bcode/..", Fingerprint: "aa"}, {Instructions: true, Fingerprint: "ee"}} {
 		got, ok := decodeItem(it.encode())
@@ -139,10 +162,14 @@ func TestRevokeAndRollBack(t *testing.T) {
 	if !strings.Contains(history, "revoke") || !strings.Contains(history, "governed/change") || !strings.Contains(history, `name="base" value="`+revoked+`"`) {
 		t.Fatalf("history page:\n%s", history)
 	}
-	if res := d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {first}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") || active(t, d.cfg.store) != revoked {
+	if res := d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {first}, "target": {first}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") || active(t, d.cfg.store) != revoked {
 		t.Fatalf("a stale rollback: %s", res.Header.Get("Location"))
 	}
-	res = d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}})
+	// A form naming the active set but another target changes nothing.
+	if res := d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {revoked}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") || active(t, d.cfg.store) != revoked {
+		t.Fatalf("a rollback to another target: %s", res.Header.Get("Location"))
+	}
+	res = d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {first}})
 	if !strings.HasSuffix(res.Header.Get("Location"), "done=rolled-back") || active(t, d.cfg.store) != first || approvedFingerprint(t, d.cfg.store, "change") != approved {
 		t.Fatalf("rollback: %s", res.Header.Get("Location"))
 	}

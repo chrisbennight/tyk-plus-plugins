@@ -461,7 +461,7 @@ func TestRevokeWithdrawsTheApprovedDefinition(t *testing.T) {
 		t.Fatalf("decision log %+v, %v", log, err)
 	}
 	// Rolling back restores the approval.
-	set, err := policy.Rollback(r.store, r.active().Version, policy.Actor{Issuer: "local", Subject: "test"}, epoch)
+	set, err := policy.Rollback(r.store, r.active().Version, log[0].Base, policy.Actor{Issuer: "local", Subject: "test"}, epoch)
 	if err != nil || set != log[0].Base {
 		t.Fatalf("rollback to %s: %v", set, err)
 	}
@@ -469,7 +469,12 @@ func TestRevokeWithdrawsTheApprovedDefinition(t *testing.T) {
 	if approved, _, _ := view.Approved("change"); approved != fp {
 		t.Fatal("rolling back did not restore the approval")
 	}
-	if _, err := policy.Rollback(r.store, log[0].Base+"x", policy.Actor{Issuer: "local", Subject: "test"}, epoch); !errors.Is(err, policy.ErrMoved) {
+	if _, err := policy.Rollback(r.store, log[0].Base+"x", log[0].Set, policy.Actor{Issuer: "local", Subject: "test"}, epoch); !errors.Is(err, policy.ErrMoved) {
 		t.Fatalf("a rollback from a set that is not active: %v", err)
+	}
+	// A form naming the right active set but another target is stale too.
+	pointer, _ := policy.ReadPointer(r.store)
+	if _, err := policy.Rollback(r.store, pointer.Set, pointer.Set, policy.Actor{Issuer: "local", Subject: "test"}, epoch); !errors.Is(err, policy.ErrMoved) {
+		t.Fatalf("a rollback to a set the active one did not replace: %v", err)
 	}
 }

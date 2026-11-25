@@ -100,6 +100,7 @@
   {{end}}
   </tbody>
 </table>
+<p>Flags are hints only: a change without flags can still be harmful.</p>
 {{if $.Reviewer}}<p>Selected changes are listed for confirmation before anything is decided.
 <button type="submit" name="action" value="approve">Approve selected…</button>
 <button type="submit" name="action" value="reject" class="secondary">Reject selected…</button></p>
@@ -213,6 +214,7 @@
   </tbody>
 </table>
 {{if .Flagged}}<p class="warning"><label><input type="checkbox" name="include_flagged" value="1"> Also {{.Action}} the {{.Flagged}} flagged change(s). I have read each one.</label> Unless this is ticked, flagged changes stay waiting.</p>{{end}}
+<p>Flags are hints only: a change without flags can still be harmful.</p>
 <p>The decision applies to exactly these fingerprints, against the policy set active when this page loaded. If the set has moved on, nothing changes.</p>
 <button type="submit">{{if eq .Action "approve"}}Approve{{else}}Reject{{end}}</button>
 <a href="{{$.Base}}/queue?proxy={{.Proxy}}">Cancel</a>
@@ -229,6 +231,7 @@
 <form method="post" action="{{$.Base}}/rollback" class="decide">
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
   <input type="hidden" name="base" value="{{.Set}}">
+  <input type="hidden" name="target" value="{{.Previous}}">
   <p>Rolling back makes the set the active one replaced active again, undoing the last change to the store, whoever made it. It applies only if <code>{{short .Set}}</code> is still active.</p>
   <button type="submit" class="secondary">Roll back to <code>{{short .Previous}}</code></button>
 </form>

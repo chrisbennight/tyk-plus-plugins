@@ -60,7 +60,7 @@ func (s *server) history(w http.ResponseWriter, r *http.Request, sess *session) 
 // rollback makes the previous set active again, provided the set the page
 // showed is still the active one.
 func (s *server) rollback(w http.ResponseWriter, r *http.Request, sess *session) {
-	set, err := policy.Rollback(s.cfg.store, r.PostFormValue("base"), sess.actor, s.now)
+	set, err := policy.Rollback(s.cfg.store, r.PostFormValue("base"), r.PostFormValue("target"), sess.actor, s.now)
 	switch {
 	case errors.Is(err, policy.ErrMoved):
 		http.Redirect(w, r, s.auth.link("/history?done=stale"), http.StatusSeeOther)
@@ -140,26 +140,35 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 	approvedText, _ := snapshot.Instructions(proxy)
 	// As on the change page, instructions are approved only while one
 	// changed text is waiting.
+	// When they cannot be counted, none is approved.
 	waitingTexts := 0
 	if approve {
-		texts, _, _ := driftreview.PendingInstructions(review, snapshot, view, proxy)
+		texts, _, err := driftreview.PendingInstructions(review, snapshot, view, proxy)
 		waitingTexts = len(texts)
+		if err != nil {
+			waitingTexts = -1
+		}
 	}
 	var out []candidate
 	skipped := 0
-	seen := map[string]bool{}
+	// A batch decides each tool, and the instructions, at most once.
+	decided := map[string]bool{}
 	for _, value := range values {
 		it, ok := decodeItem(value)
-		if !ok || seen[value] {
+		key := "tool:" + it.Tool
+		if it.Instructions {
+			key = "instructions"
+		}
+		if !ok || decided[key] {
 			skipped++
 			continue
 		}
-		seen[value] = true
+		decided[key] = true
 		c := candidate{item: it, Value: value}
 		d := driftreview.Decision{Proxy: proxy, Tool: it.Tool, Instructions: it.Instructions, Fingerprint: it.Fingerprint, Approve: approve}
 		if it.Instructions {
 			entry, err := review.InstructionsEntry(proxy, it.Fingerprint)
-			if err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint) || (approve && waitingTexts > 1) {
+			if err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint) || (approve && waitingTexts != 1) {
 				skipped++
 				continue
 			}
@@ -184,8 +193,9 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 			c.Shown = driftreview.ShownName(it.Tool)
 			c.Flags = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(view.Tools(), it.Tool))
 		}
-		if approve && max(len(d.Definition), len(d.Text)) > maxShown {
-			// Too large to review here, as on the change page.
+		if approve && max(len(d.Definition), len(d.Text)) > longDefinition {
+			// Long text must be opened in full on its change page before
+			// it is approved, so it is not approved in bulk.
 			skipped++
 			continue
 		}
@@ -206,6 +216,11 @@ func (s *server) bulkReview(w http.ResponseWriter, r *http.Request, sess *sessio
 	action := r.PostFormValue("action")
 	if action != "approve" && action != "reject" {
 		s.fail(w, sess, http.StatusBadRequest, "Unknown decision.")
+		return
+	}
+	if r.PostFormValue("base") != st.set {
+		// The selection was made against a set that is no longer active.
+		http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=stale", http.StatusSeeOther)
 		return
 	}
 	cands, skipped := candidates(st.review, st.snapshot, view, proxy, r.PostForm["item"], action == "approve")
@@ -262,7 +277,8 @@ func (s *server) bulkDecide(w http.ResponseWriter, r *http.Request, sess *sessio
 		slog.Info("Bulk decision made", "action", action, "proxy", proxy, "count", len(decisions), "set", set,
 			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject)
 	}
-	http.Redirect(w, r, fmt.Sprintf("%s&done=bulk-%sd&n=%d&skipped=%d&left=%d", back, action, len(decisions), skipped, left), http.StatusSeeOther)
+	done := map[string]string{"approve": "bulk-approved", "reject": "bulk-rejected"}[action]
+	http.Redirect(w, r, fmt.Sprintf("%s&done=%s&n=%d&skipped=%d&left=%d", back, done, len(decisions), skipped, left), http.StatusSeeOther)
 }
 
 // bulkMessage builds the message after a bulk decision from counts only, so

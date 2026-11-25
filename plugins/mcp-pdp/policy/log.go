@@ -120,14 +120,16 @@ func ReadLog(root string) ([]LogEntry, error) {
 	return entries, errors.Join(problems...)
 }
 
-// ErrMoved reports a change made against a set that is no longer active.
+// ErrMoved reports a change made against a set that is no longer active, or
+// a rollback whose target is no longer the set the active one replaced.
 var ErrMoved = errors.New("the active set has changed")
 
-// Rollback makes the set active before base active again, provided base is
-// still the active set, and records it in the decision log. It is how a
+// Rollback makes target, the set active before base, active again, provided
+// base is still the active set and target still the one it replaced, and
+// records it in the decision log. It is how a
 // reviewer undoes the last change; a rollback is itself undone by rolling
 // back again.
-func Rollback(root, base string, actor Actor, now func() time.Time) (string, error) {
+func Rollback(root, base, target string, actor Actor, now func() time.Time) (string, error) {
 	store, err := openStore(root)
 	if err != nil {
 		return "", err
@@ -137,8 +139,8 @@ func Rollback(root, base string, actor Actor, now func() time.Time) (string, err
 	if err != nil {
 		return "", err
 	}
-	if pointer.Set != base {
-		return "", fmt.Errorf("%w: it is now %s; nothing was changed", ErrMoved, pointer.Set)
+	if pointer.Set != base || pointer.Previous != target {
+		return "", fmt.Errorf("%w: it is now %s, replacing %s; nothing was changed", ErrMoved, pointer.Set, pointer.Previous)
 	}
 	if pointer.Previous == "" {
 		return "", errors.New("the active pointer records no previous set to roll back to")

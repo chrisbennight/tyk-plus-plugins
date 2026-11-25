@@ -22,6 +22,14 @@ services:
       CEDAR_ROLES_CLAIM: ${CEDAR_ROLES_CLAIM-roles}
       CEDAR_GROUPS_CLAIM: ${CEDAR_GROUPS_CLAIM-groups}
       CEDAR_SCOPES_CLAIM: ${CEDAR_SCOPES_CLAIM-scope}
+      # Code Mode stays off unless these are set; see gateway/code-mode.md.
+      CODEMODE_SANDBOX_ADDRESS: ${CODEMODE_SANDBOX_ADDRESS:-}
+      CODEMODE_SANDBOX_SERVER_NAME: ${CODEMODE_SANDBOX_SERVER_NAME:-}
+      CODEMODE_PROXIES: ${CODEMODE_PROXIES:-}
+      CODEMODE_BACKENDS: ${CODEMODE_BACKENDS:-}
+      CODEMODE_TLS_CERT: ${CODEMODE_TLS_CERT:-}
+      CODEMODE_TLS_KEY: ${CODEMODE_TLS_KEY:-}
+      CODEMODE_TLS_CA: ${CODEMODE_TLS_CA:-}
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
       TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
     ports:

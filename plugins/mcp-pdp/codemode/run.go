@@ -43,7 +43,8 @@ type Request struct {
 type CallRecord struct {
 	ID          int64
 	Proxy, Tool string
-	// Outcome is "result", "refused", "failed" or "unknown".
+	// Outcome is "result", "refused", "failed", "unknown", or
+	// "not_started" for a call still waiting its turn when the run ended.
 	Outcome string
 }
 
@@ -231,6 +232,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (out Outcome) {
 				case slots <- struct{}{}:
 					defer func() { <-slots }()
 				case <-callCtx.Done():
+					record(CallRecord{ID: m.ID, Proxy: m.Proxy, Tool: m.Tool, Outcome: "not_started"})
 					return
 				}
 				reply, outcome, f := r.call(callCtx, req.Call, m, limits)

@@ -108,6 +108,11 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			builtIn = true
 			reason, rules = state.DecideBuiltIn(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name)
 		}
+	case isCodeModeTool(name):
+		// The prefix is reserved for the plug-in's own tools, so an upstream
+		// tool with it is never called, and rules naming Code Mode tools can
+		// only ever refer to the plug-in's.
+		reason = "unknown_tool"
 	default:
 		reason = "invalid_call"
 		proxy := oas.GetTykExtension().Info.ID

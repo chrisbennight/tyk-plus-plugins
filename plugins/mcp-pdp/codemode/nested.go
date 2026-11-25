@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,7 +117,7 @@ type Session struct {
 	origin   Origin
 	run      string
 	maxBytes int
-	nextID   int64
+	nextID   int
 	mu       sync.Mutex
 	// sessions holds the session opened on each other proxy, for the older
 	// protocol. A proxy whose upstream keeps no sessions has an empty one.
@@ -137,11 +136,14 @@ func (g *Gateway) Session(origin Origin, run string, valueBytes int) *Session {
 	return &Session{gateway: g, origin: origin, run: run, maxBytes: valueBytes + replyOverhead, sessions: map[string]*proxySession{}}
 }
 
-func (s *Session) id() int64 {
+// id returns a request ID unique to this run. Calls on the run's own proxy
+// share the caller's session, so the IDs include the run ID and are strings,
+// which never collide with the client's own IDs or another run's.
+func (s *Session) id() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++
-	return s.nextID
+	return fmt.Sprintf("codemode-%s-%d", s.run, s.nextID)
 }
 
 // Call implements Call.
@@ -306,7 +308,7 @@ func (s *Session) do(req *http.Request, proxy string) (*http.Response, error) {
 
 // readReply reads the JSON-RPC reply to request id, plain or streamed, from
 // at most limit bytes. A stream is read only up to the event that answers.
-func readReply(res *http.Response, id int64, limit int) (json.RawMessage, *protocol.Error, error) {
+func readReply(res *http.Response, id string, limit int) (json.RawMessage, *protocol.Error, error) {
 	body := io.LimitReader(res.Body, int64(limit)+1)
 	var data []byte
 	var err error
@@ -330,7 +332,7 @@ func readReply(res *http.Response, id int64, limit int) (json.RawMessage, *proto
 		switch {
 		case reply.Error != nil:
 			return nil, &protocol.Error{Code: reply.Error.Code, Message: reply.Error.Message}, nil
-		case reply.Result != nil && string(reply.ID) == strconv.FormatInt(id, 10):
+		case reply.Result != nil && string(reply.ID) == jsonID(id):
 			return reply.Result, nil, nil
 		}
 	}
@@ -352,8 +354,8 @@ func readReply(res *http.Response, id int64, limit int) (json.RawMessage, *proto
 // event that answers request id, or nil if the stream ends without one. An
 // event's data may span several lines, which are joined as the event-stream
 // format requires.
-func streamedReply(r io.Reader, id int64, limit int) ([]byte, error) {
-	want := strconv.FormatInt(id, 10)
+func streamedReply(r io.Reader, id string, limit int) ([]byte, error) {
+	want := jsonID(id)
 	reader := bufio.NewReader(r)
 	var lines []string
 	read := 0
@@ -382,4 +384,10 @@ func streamedReply(r io.Reader, id int64, limit int) ([]byte, error) {
 			return nil, err
 		}
 	}
+}
+
+// jsonID is a request ID as it appears in a JSON-RPC message.
+func jsonID(id string) string {
+	data, _ := json.Marshal(id)
+	return string(data)
 }

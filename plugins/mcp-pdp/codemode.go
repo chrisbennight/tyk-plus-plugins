@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -78,12 +79,12 @@ func Capture(_ http.ResponseWriter, r *http.Request) {
 // nested call it identifies. A header the plug-in did not send identifies
 // nothing.
 func takeNested(r *http.Request) (codemode.Nested, bool) {
-	value := r.Header.Get(codemode.CallHeader)
-	if value == "" {
+	values := r.Header.Values(codemode.CallHeader)
+	r.Header.Del(codemode.CallHeader)
+	if len(values) != 1 {
 		return codemode.Nested{}, false
 	}
-	r.Header.Del(codemode.CallHeader)
-	return nestedCalls.Lookup(value)
+	return nestedCalls.Lookup(values[0])
 }
 
 // codeModeOn reports whether Code Mode answers its tools on a proxy.
@@ -121,7 +122,9 @@ func execute(w http.ResponseWriter, r *http.Request, id json.RawMessage, params 
 	args := call.Arguments
 	requested := args.Limits
 	if args.TimeoutSeconds > 0 {
-		requested.RunMillis = int64(args.TimeoutSeconds * 1000)
+		// A positive timeout is at least a millisecond; zero would mean
+		// the maximum.
+		requested.RunMillis = int64(math.Ceil(args.TimeoutSeconds * 1000))
 	}
 	limits := requested.Within(codeMode.Max)
 	if string(args.Input) == "null" {

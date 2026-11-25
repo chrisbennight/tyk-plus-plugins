@@ -25,7 +25,7 @@ console.log("looked up both");
 return [a.content[0].text, b.content[0].text];
 ```
 
-A call resolves to the tool's result as a direct caller receives it. A refused call rejects with an error carrying the same `code` and `message` a direct caller gets; a tool on a proxy without Code Mode is refused the same way. Programs cannot call Code Mode tools.
+A call resolves to the tool's result as a direct caller receives it. A refused call rejects with an error carrying the same `code` and `message` a direct caller gets; a tool on a proxy without Code Mode is refused the same way. Programs cannot call Code Mode tools. The `codemode.` prefix is reserved: an upstream tool with that name is never called, on any proxy.
 
 The tool result has `structuredContent` of `{"result": ..., "console": [...]}`, with the same JSON in its text. A run that does not finish returns a tool error (`isError`) whose `structuredContent.error` has a `kind` and a `message`:
 
@@ -72,6 +72,18 @@ Code Mode is off unless `CODEMODE_SANDBOX_ADDRESS` or `CODEMODE_PROXIES` is set.
 | `CODEMODE_SANDBOX_SERVER_NAME` | The name on the sandbox host's certificate, when it differs from the host in the address. |
 | `CODEMODE_BACKENDS` | The sandbox backends this gateway accepts, comma separated. The default, `gvisor`, is the only one for production; add `runc` only for development. |
 | `CODEMODE_GATEWAY_URL` | Where nested calls reach this gateway. By default, Tyk's own listen address and port, using `127.0.0.1` when Tyk listens on every address. |
+
+With the reference Compose deployment, set these in the shell or an `.env` file, and mount the certificate files with an override file, since Compose cannot assume they exist:
+
+```yaml
+# compose.override.yaml
+services:
+  gateway:
+    volumes:
+      - ./codemode-tls:/etc/codemode:ro
+```
+
+Then set `CODEMODE_TLS_CERT=/etc/codemode/client.pem`, and the key and authority likewise.
 
 Each Code Mode proxy also needs the `Capture` hook, which runs right after Tyk authenticates a caller. Tyk removes credential headers before the authorization hook runs, so `Capture` keeps a token caller's credential in the request's memory for the length of a run. A key caller's key comes from Tyk's own request context. The shipped [proxy definitions](apps/) include the hook; it does nothing while Code Mode is off.
 

@@ -429,3 +429,15 @@ func TestAnApprovalMustCarryTheContentItsFingerprintNames(t *testing.T) {
 		t.Fatalf("an approval whose content has another fingerprint was applied: %v", err)
 	}
 }
+
+func TestABatchDecidesEachToolOnce(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	base := r.active().Version
+	decisions := []driftreview.Decision{
+		{Proxy: "governed", Tool: "change", Fingerprint: fingerprint(t, changedChange), Definition: []byte(changedChange), Approve: true},
+		{Proxy: "governed", Tool: "change", Fingerprint: fingerprint(t, newerChange), Definition: []byte(newerChange), Approve: true},
+	}
+	if _, err := driftreview.Apply(r.store, base, "twice", policy.Actor{Issuer: "local", Subject: "test"}, epoch, decisions); err == nil || r.active().Version != base {
+		t.Fatalf("a batch deciding one tool twice was applied: %v", err)
+	}
+}

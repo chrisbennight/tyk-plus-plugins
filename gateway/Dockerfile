@@ -21,7 +21,9 @@ COPY --from=compiler /cedar-policy /opt/tyk-gateway/bin/cedar-policy
 COPY tyk.conf /opt/tyk-gateway/tyk.conf
 COPY apps /opt/tyk-gateway/mcp-apps
 COPY policies /opt/tyk-gateway/policies
-COPY --from=compiler /store /opt/tyk-gateway/cedar
+# The gateway reads the store; the review dashboard, running as the same
+# user, writes it when the two share a volume.
+COPY --from=compiler --chown=65532:65532 /store /opt/tyk-gateway/cedar
 # The gateway's user writes its enforcement report here.
 COPY --from=compiler --chown=65532:65532 /status /opt/tyk-gateway/cedar-status
 # Gateways share what upstreams declare, and queue changes for review, here.

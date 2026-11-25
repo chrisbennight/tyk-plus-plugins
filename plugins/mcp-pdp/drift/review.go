@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 	jsonv2 "github.com/go-json-experiment/json"
@@ -168,6 +169,40 @@ func (r *Review) DeclaredTools(proxy string) ([]string, error) {
 		}
 	}
 	return tools, nil
+}
+
+// Gateways returns each gateway that has shared a declaration of any tool,
+// with when it last received one, so a reviewer can tell which gateways are
+// reporting. Files that cannot be read are skipped; the review pages report
+// them where they matter.
+func (r *Review) Gateways() (map[string]time.Time, error) {
+	proxies, err := r.names(".")
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]time.Time{}
+	for _, encoded := range proxies {
+		proxy, ok := decodeName(encoded)
+		if !ok {
+			continue
+		}
+		tools, err := r.DeclaredTools(proxy)
+		if err != nil {
+			continue
+		}
+		for _, tool := range tools {
+			declared, err := r.Declarations(proxy, tool)
+			if err != nil {
+				continue
+			}
+			for _, d := range declared {
+				if d.SeenAt.After(seen[d.Gateway]) {
+					seen[d.Gateway] = d.SeenAt
+				}
+			}
+		}
+	}
+	return seen, nil
 }
 
 // Newest returns the newest declaration of a tool from an upstream across

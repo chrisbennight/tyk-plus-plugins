@@ -21,6 +21,28 @@ func TestNamesStayOnOneLine(t *testing.T) {
 	}
 }
 
+func TestIndentationIsBounded(t *testing.T) {
+	// Each level indents every line below it, so deep nesting would indent
+	// to many times its size.
+	deep := strings.Repeat("[", 5000) + strings.Repeat("]", 5000)
+	if got := Indented(jsontext.Value(deep)); len(got) > 2*len(deep) {
+		t.Fatalf("indented %d bytes into %d", len(deep), len(got))
+	}
+	if got := Indented(jsontext.Value(`{"a":[1]}`)); got != "{\n  \"a\": [\n    1\n  ]\n}\n" {
+		t.Fatalf("Indented = %q", got)
+	}
+}
+
+func TestNamesMarkEveryLookAlikeLetter(t *testing.T) {
+	// Spelled wholly in Cyrillic, the name reads as "change".
+	if got := ShownName("сhаngе"); got != "с⟨U+0441⟩hа⟨U+0430⟩ngе⟨U+0435⟩" {
+		t.Fatalf("ShownName = %q", got)
+	}
+	if got := ShownName("lookup_v2"); got != "lookup_v2" {
+		t.Fatalf("ShownName = %q", got)
+	}
+}
+
 func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
 	for text, want := range map[string]string{
 		"привет мир":  "привет мир",

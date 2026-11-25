@@ -259,6 +259,11 @@ type sharedSnapshot struct {
 // Current reports whether the shared declarations were read for the policy
 // set with this version, so they cover every tool it reviews. Without a
 // shared directory there is nothing to read, and they always are.
+// Shareable reports whether declarations of a tool from an upstream can be
+// shared. While declarations are shared, gateways refuse calls to a tool
+// whose declarations cannot be.
+func Shareable(tool, upstream string) bool { return shareable(tool, upstream) }
+
 func (p *Pending) Current(version string) bool {
 	return p.dir == "" || p.latest.Load().version == version
 }

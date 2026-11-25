@@ -35,7 +35,10 @@ services:
     extends:
       file: compose.yaml
       service: gateway
-    environment: *test-gateway-environment
+    environment:
+      <<: *test-gateway-environment
+      # Its own name for the declarations it shares.
+      CEDAR_GATEWAY_ID: gateway-peer
     ports: !reset []
     volumes: !override
       - policy:/opt/tyk-gateway/cedar:ro
@@ -51,6 +54,32 @@ services:
       UPSTREAM_SESSIONS: ${UPSTREAM_SESSIONS:-}
   issuer:
     build: ./examples/issuer
+    # The deck signs operators in to the review dashboard.
+    environment:
+      ISSUER_DECK: /deck.json
+      ISSUER_PUBLIC_URL: http://issuer:8000
+    volumes:
+      - ./tests/issuer-deck.json:/deck.json:ro
+  # The review dashboard, signing operators in through the test issuer and
+  # reached through the gateway at /extensions/admin, as operators reach it.
+  admin:
+    profiles: !reset []
+    # The probe writes the store as root in this stack.
+    user: "0:0"
+    environment:
+      ADMIN_PUBLIC_URL: http://gateway:8080/extensions/admin
+      ADMIN_OIDC_ISSUER: https://issuer.test
+      ADMIN_OIDC_DISCOVERY_URL: http://issuer:8000
+      # The test issuer has no TLS; this network is the test's own.
+      ADMIN_OIDC_ALLOW_INSECURE_HTTP: "true"
+      ADMIN_OIDC_CLIENT_ID: drift-review
+      ADMIN_OIDC_CLIENT_SECRET: test-only-dashboard-secret
+      ADMIN_OIDC_CLIENT_SECRET_FILE: ""
+      ADMIN_REVIEWER_GROUP: drift-reviewers
+      ADMIN_VIEWER_GROUP: drift-viewers
+    volumes: !override
+      - policy:/opt/tyk-gateway/cedar
+      - pending:/opt/tyk-gateway/cedar-pending
   # The Code Mode sandbox host, as deployed, with test certificates.
   sandbox-launcher:
     extends:
@@ -95,6 +124,7 @@ services:
       - peer-status:/peer-status:ro
     depends_on:
       - gateway-peer
+      - admin
 volumes:
   sandbox-socket:
   sandbox-tls:

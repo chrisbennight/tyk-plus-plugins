@@ -1,0 +1,16 @@
+{
+  "issuer": "https://issuer.test",
+  "audience": "governed-mcp",
+  "lifetimeSeconds": 600,
+  "people": {
+    "reviewer": {"name": "Rita Reviewer", "groups": ["drift-reviewers"]},
+    "viewer": {"groups": ["drift-viewers"]},
+    "outsider": {"groups": ["other"]}
+  },
+  "clients": {
+    "drift-review": {
+      "secret": "test-only-dashboard-secret",
+      "redirectURIs": ["http://gateway:8080/extensions/admin/callback"]
+    }
+  }
+}

@@ -195,6 +195,9 @@ func Describe(d Decision) string {
 	return ShownName(d.Proxy) + "/" + ShownName(d.Tool)
 }
 
+// ErrStale reports a decision made against a set that is no longer active.
+var ErrStale = errors.New("stale decision")
+
 // holds reports whether a decision's content has its fingerprint.
 func holds(d Decision) bool {
 	if d.Instructions {
@@ -204,6 +207,35 @@ func holds(d Decision) bool {
 	return err == nil && fp == d.Fingerprint
 }
 
+// ErrNotDeclared reports a tool definition to approve that no gateway has
+// seen the active set's upstream declare. Review entries do not record the
+// upstream that declared them, so one queued before the upstream changed
+// could otherwise be approved for an upstream that never declared it.
+var ErrNotDeclared = errors.New("no gateway has seen the upstream declare this tool, so this definition cannot be approved yet")
+
+// ErrSuperseded reports a tool definition to approve that the upstream has
+// since replaced. Gateways compare the approved definition with what the
+// upstream declares now, so approving it could only refuse calls, even ones
+// that work today.
+var ErrSuperseded = errors.New("the upstream now declares a different definition of this tool, so approving this one could only refuse calls; review what it declares now")
+
+// Current checks that a tool definition is the one gateways last saw the
+// upstream declare. It returns ErrNotDeclared when none has been seen, and
+// ErrSuperseded when another has.
+func Current(review *drift.Review, view policy.DriftView, proxy, tool, fingerprint string) error {
+	newest, found, err := review.Newest(proxy, tool, view.Upstream())
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotDeclared
+	}
+	if newest.Fingerprint != fingerprint {
+		return ErrSuperseded
+	}
+	return nil
+}
+
 // Apply writes decisions into a new set made from the active one,
 // under the store's lock, and makes it active. The decisions were made
 // against the set named base; if another set became active since, nothing is
@@ -211,7 +243,7 @@ func holds(d Decision) bool {
 func Apply(store, base, label string, actor policy.Actor, now func() time.Time, decisions []Decision) (string, error) {
 	return policy.Revise(store, label, actor, now, func(set string, active *policy.Snapshot, files map[string][]byte) ([]policy.LogEntry, error) {
 		if set != base {
-			return nil, fmt.Errorf("the active set changed to %s while you reviewed; nothing was changed, so review again", set)
+			return nil, fmt.Errorf("%w: the active set changed to %s while you reviewed; nothing was changed, so review again", ErrStale, set)
 		}
 		var inventory map[string]map[string]jsontext.Value
 		if err := jsonv2.Unmarshal(files["approved_tools.json"], &inventory); err != nil {
@@ -225,7 +257,15 @@ func Apply(store, base, label string, actor policy.Actor, now func() time.Time, 
 			instructions = map[string]string{}
 		}
 		entries := make([]policy.LogEntry, 0, len(decisions))
+		decided := map[string]bool{}
 		for _, d := range decisions {
+			// One batch decides each tool, or each proxy's instructions, at
+			// most once, so its result does not depend on the order given.
+			key := fmt.Sprintf("%s\x00%t\x00%s", d.Proxy, d.Instructions, d.Tool)
+			if decided[key] {
+				return nil, fmt.Errorf("%s is decided more than once", Describe(d))
+			}
+			decided[key] = true
 			// An approval must carry exactly the content its fingerprint
 			// names, so the log never records one fingerprint for another.
 			if d.Approve && !holds(d) {

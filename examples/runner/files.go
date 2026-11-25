@@ -19,7 +19,11 @@ type expectations struct {
 	// client asks for.
 	OlderProtocolOnly []string `json:"olderProtocolOnly"`
 	Calls             []call   `json:"calls"`
-	RefusedCallers    []string `json:"refusedCallers"`
+	// Listed gives, for each caller and server, the tools the caller's
+	// tools/list shows: every approved tool it could call with some
+	// arguments, and no other.
+	Listed         map[string]map[string][]string `json:"listed"`
+	RefusedCallers []string                       `json:"refusedCallers"`
 	// KeyAndToken lists requests carrying both a key and a token. The key
 	// identifies the caller, so each expectation follows the key's access.
 	KeyAndToken []struct {
@@ -129,7 +133,33 @@ func load(dir string) (*examples, error) {
 			return nil, fmt.Errorf("expected.json call %d: %w", i, err)
 		}
 	}
+	if err := e.checkListed(); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// checkListed reports an error when expected.json's listed tools name an
+// unknown caller or proxy, or a tool that is not approved: an unapproved tool
+// is never listed, so such a row contradicts the approved tools.
+func (e *examples) checkListed() error {
+	for caller, servers := range e.expected.Listed {
+		if _, err := e.identity(caller); err != nil {
+			return fmt.Errorf("expected.json listed: %w", err)
+		}
+		for server, tools := range servers {
+			inv, ok := e.tools[server]
+			if !ok {
+				return fmt.Errorf("expected.json listed: there is no proxy named %q", server)
+			}
+			for _, tool := range tools {
+				if _, approved := inv.Tools[tool]; !approved {
+					return fmt.Errorf("expected.json listed: %s should see %s.%s, but that tool is not approved", caller, server, tool)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // callerName is the issuer's rule for a person's name, applied to every caller.

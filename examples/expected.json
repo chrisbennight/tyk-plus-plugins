@@ -32,6 +32,14 @@
     {"caller": "analyst", "server": "older", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused", "why": "writes; analysts only read"},
     {"caller": "admin", "server": "older", "tool": "delete_person", "arguments": {"id": "7"}, "expect": "refused", "why": "never approved on this proxy"}
   ],
+  "listed": {
+    "analyst": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": [], "older": ["get_person", "search"]},
+    "admin": {"directory": ["export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"]},
+    "finance": {"directory": [], "payments": ["get_balance", "refund", "transfer"], "notes": [], "older": []},
+    "scoped": {"directory": [], "payments": [], "notes": ["search"], "older": []},
+    "indexer": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": ["export"], "older": ["get_person", "search"]},
+    "deployer": {"directory": ["delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"]}
+  },
   "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata"],
   "keyAndToken": [
     {"key": "deployer", "token": "finance", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "permitted", "why": "a request carrying both is identified by its key: the deployer key may change records, the finance token may not"},

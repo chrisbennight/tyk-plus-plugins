@@ -37,6 +37,18 @@
         "name": "Authorize",
         "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
       }
+    ],
+    "post_key_auth": [
+      {
+        "name": "Capture",
+        "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+      }
+    ],
+    "response": [
+      {
+        "name": "CheckResponse",
+        "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+      }
     ]
   },
   "enable_jwt": true,

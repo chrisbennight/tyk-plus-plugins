@@ -93,6 +93,20 @@
             "functionName": "Authorize",
             "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
           }
+        ],
+        "postAuthenticationPlugins": [
+          {
+            "enabled": true,
+            "functionName": "Capture",
+            "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+          }
+        ],
+        "responsePlugins": [
+          {
+            "enabled": true,
+            "functionName": "CheckResponse",
+            "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+          }
         ]
       }
     }

@@ -353,6 +353,43 @@ func apply(proxy map[string]jsontext.Value, instructions map[string]string, acti
 	return setDrift(proxy, settings, "rejectedTools", rejected)
 }
 
+// Revoke withdraws a tool's approved definition, the one with this
+// fingerprint, in a new set made from base, so gateways hide the tool and
+// refuse calls to it until a definition is approved again. Its facts, tags
+// and arguments stay, ready for the next approval.
+func Revoke(store, base, label string, actor policy.Actor, now func() time.Time, proxy, tool, fingerprint string) (string, error) {
+	return policy.Revise(store, label, actor, now, func(set string, active *policy.Snapshot, files map[string][]byte) ([]policy.LogEntry, error) {
+		if set != base {
+			return nil, fmt.Errorf("%w: the active set changed to %s while you reviewed; nothing was changed, so review again", ErrStale, set)
+		}
+		view, ok := active.Drift(proxy)
+		if !ok {
+			return nil, fmt.Errorf("proxy %q is not under drift review in the active set", proxy)
+		}
+		if approved, _, _ := view.Approved(tool); approved != fingerprint {
+			return nil, fmt.Errorf("%w: %s/%s does not have the approved definition %s", ErrStale, ShownName(proxy), ShownName(tool), fingerprint)
+		}
+		var inventory map[string]map[string]jsontext.Value
+		if err := jsonv2.Unmarshal(files["approved_tools.json"], &inventory); err != nil {
+			return nil, fmt.Errorf("approved_tools.json: %w", err)
+		}
+		var tools map[string]map[string]jsontext.Value
+		if err := jsonv2.Unmarshal(inventory[proxy]["tools"], &tools); err != nil {
+			return nil, err
+		}
+		delete(tools[tool], "definition")
+		encoded, err := jsonv2.Marshal(tools, jsonv2.Deterministic(true))
+		if err != nil {
+			return nil, err
+		}
+		inventory[proxy]["tools"] = encoded
+		if files["approved_tools.json"], err = marshalIndented(inventory); err != nil {
+			return nil, err
+		}
+		return []policy.LogEntry{{Action: "revoke", Proxy: proxy, Tool: tool, Fingerprint: fingerprint}}, nil
+	})
+}
+
 // withoutMeta returns a definition without its top-level _meta member.
 func withoutMeta(definition jsontext.Value) (jsontext.Value, error) {
 	var members map[string]jsontext.Value

@@ -30,6 +30,10 @@ const driftUsage = `Usage:
       in a new set made from the active one and made active.
   cedar-policy drift reject -store DIR -pending DIR -proxy NAME (-tool NAME | -instructions) [-label TEXT] FINGERPRINT
       Record a rejection in a new active set, so gateways no longer queue it.
+  cedar-policy drift revoke -store DIR -pending DIR -proxy NAME -tool NAME [-label TEXT] FINGERPRINT
+      Withdraw a tool's approved definition, the one with this fingerprint,
+      in a new active set, so gateways hide the tool and refuse calls to it
+      until a definition is approved again.
   cedar-policy drift approve-all -store DIR -pending DIR -proxy NAME [-confirm CODE] [-label TEXT]
       Adopt what a proxy's upstream now declares: approve, for each tool, the
       definition gateways saw last, and the waiting instructions when there
@@ -92,6 +96,25 @@ func runDrift(args []string, out io.Writer, now func() time.Time) error {
 			return err
 		}
 		return driftDecide(out, review, f, fingerprint, command == "approve", now)
+	case "revoke":
+		fingerprint, err := subject(flags, f)
+		if err != nil || f.instructions {
+			return errors.New("revoke expects -proxy, -tool and the approved definition's fingerprint")
+		}
+		pointer, err := policy.ReadPointer(f.store)
+		if err != nil {
+			return err
+		}
+		label := f.label
+		if label == "" {
+			label = fmt.Sprintf("drift revoke %s %s", driftreview.Describe(driftreview.Decision{Proxy: f.proxy, Tool: f.tool}), fingerprint[:min(12, len(fingerprint))])
+		}
+		set, err := driftreview.Revoke(f.store, pointer.Set, label, localActor(), now, f.proxy, f.tool, fingerprint)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, set)
+		return nil
 	case "approve-all":
 		if f.proxy == "" || flags.NArg() != 0 {
 			return errors.New("approve-all expects -proxy and no arguments")

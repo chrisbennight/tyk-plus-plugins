@@ -182,6 +182,19 @@ func reviewDrift(c *conn, cred credential, version, fingerprint string) {
 	check(!strings.Contains(listed, fingerprint), "%s: an approved change was listed:\n%s", version, listed)
 	call(c, cred, "change", args("count", 2), "updated")
 	call(connectAt(peerGateway, cred, version), cred, "change", args("count", 2), "updated")
+
+	if version == newerProtocol {
+		// Revoking the approval in the dashboard refuses calls again, and
+		// rolling back restores it.
+		revoked := revokeInDashboard(version, approved)
+		awaitReport(revoked, "activated")
+		awaitPeerSet(revoked)
+		call(c, cred, "change", args("count", 2))
+		rollBackInDashboard(version, revoked, approved)
+		awaitReport(approved, "activated")
+		awaitPeerSet(approved)
+		call(c, cred, "change", args("count", 2), "updated")
+	}
 }
 
 // reviewCommand runs a cedar-policy drift command against the shared store and

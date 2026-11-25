@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -439,5 +440,36 @@ func TestABatchDecidesEachToolOnce(t *testing.T) {
 	}
 	if _, err := driftreview.Apply(r.store, base, "twice", policy.Actor{Issuer: "local", Subject: "test"}, epoch, decisions); err == nil || r.active().Version != base {
 		t.Fatalf("a batch deciding one tool twice was applied: %v", err)
+	}
+}
+
+func TestRevokeWithdrawsTheApprovedDefinition(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	fp := fingerprint(t, approvedChange)
+	if _, err := r.run("revoke", "-proxy", "governed", "-tool", "change", fingerprint(t, changedChange)); err == nil {
+		t.Fatal("revoked a definition that is not the approved one")
+	}
+	if _, err := r.run("revoke", "-proxy", "governed", "-tool", "change", fp); err != nil {
+		t.Fatal(err)
+	}
+	view, _ := r.active().Drift("governed")
+	if _, _, ok := view.Approved("change"); ok || !view.Has("change") {
+		t.Fatal("the definition was not withdrawn, or the tool was dropped")
+	}
+	log, err := policy.ReadLog(r.store)
+	if err != nil || len(log) != 1 || log[0].Action != "revoke" || log[0].Fingerprint != fp {
+		t.Fatalf("decision log %+v, %v", log, err)
+	}
+	// Rolling back restores the approval.
+	set, err := policy.Rollback(r.store, r.active().Version, policy.Actor{Issuer: "local", Subject: "test"}, epoch)
+	if err != nil || set != log[0].Base {
+		t.Fatalf("rollback to %s: %v", set, err)
+	}
+	view, _ = r.active().Drift("governed")
+	if approved, _, _ := view.Approved("change"); approved != fp {
+		t.Fatal("rolling back did not restore the approval")
+	}
+	if _, err := policy.Rollback(r.store, log[0].Base+"x", policy.Actor{Issuer: "local", Subject: "test"}, epoch); !errors.Is(err, policy.ErrMoved) {
+		t.Fatalf("a rollback from a set that is not active: %v", err)
 	}
 }

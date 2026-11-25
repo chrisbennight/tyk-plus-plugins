@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // logFile is the store's decision log: one JSON object per line, appended
@@ -117,4 +118,41 @@ func ReadLog(root string) ([]LogEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, errors.Join(problems...)
+}
+
+// ErrMoved reports a change made against a set that is no longer active.
+var ErrMoved = errors.New("the active set has changed")
+
+// Rollback makes the set active before base active again, provided base is
+// still the active set, and records it in the decision log. It is how a
+// reviewer undoes the last change; a rollback is itself undone by rolling
+// back again.
+func Rollback(root, base string, actor Actor, now func() time.Time) (string, error) {
+	store, err := openStore(root)
+	if err != nil {
+		return "", err
+	}
+	defer store.unlock()
+	pointer, err := ReadPointer(root)
+	if err != nil {
+		return "", err
+	}
+	if pointer.Set != base {
+		return "", fmt.Errorf("%w: it is now %s; nothing was changed", ErrMoved, pointer.Set)
+	}
+	if pointer.Previous == "" {
+		return "", errors.New("the active pointer records no previous set to roll back to")
+	}
+	if err := store.activate(pointer.Previous, now); err != nil {
+		return "", err
+	}
+	entry := LogEntry{Time: now().UTC().Format(time.RFC3339Nano), Actor: actor, Action: "rollback", Base: base, Set: pointer.Previous}
+	if err := store.appendLog([]LogEntry{entry}); err != nil {
+		// As in Revise: in force and logged, or neither.
+		if restoreErr := store.writePointer(pointer); restoreErr != nil {
+			return pointer.Previous, fmt.Errorf("set %s is active, but the decision log could not be written (%w), and the previous pointer could not be restored: %w", pointer.Previous, err, restoreErr)
+		}
+		return "", fmt.Errorf("the decision log could not be written, so nothing was rolled back: %w", err)
+	}
+	return pointer.Previous, nil
 }

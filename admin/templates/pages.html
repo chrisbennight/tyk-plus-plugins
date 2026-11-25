@@ -9,6 +9,7 @@
 <body>
 <header>
   <a class="brand" href="{{.Base}}/">Drift review</a>
+  {{if .User}}<nav aria-label="Pages"><a href="{{.Base}}/">Overview</a> <a href="{{.Base}}/history">History</a> <a href="{{.Base}}/maintenance">Maintenance</a></nav>{{end}}
   {{if .User}}<span class="who">{{.User}} · {{.Role}}</span>
   <form method="post" action="{{.Base}}/logout" class="inline">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
@@ -79,20 +80,30 @@
 <h1>Waiting for review on {{.ProxyShown}}</h1>
 {{if .Done}}<p class="notice" role="status">{{.Done}}</p>{{end}}
 {{if .Items}}
+{{if $.Reviewer}}<form method="post" action="{{$.Base}}/bulk">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="proxy" value="{{.Proxy}}">
+<input type="hidden" name="base" value="{{.Base}}">{{end}}
 <table>
-  <thead><tr><th scope="col">Change</th><th scope="col">Kind</th><th scope="col">Upstream</th><th scope="col">First seen</th><th scope="col">Fingerprint</th></tr></thead>
+  <thead><tr>{{if $.Reviewer}}<th scope="col"><span class="sr">Select</span></th>{{end}}<th scope="col">Change</th><th scope="col">Kind</th><th scope="col">Upstream</th><th scope="col">Flags</th><th scope="col">First seen</th><th scope="col">Fingerprint</th></tr></thead>
   <tbody>
   {{range .Items}}
     <tr>
+      {{if $.Reviewer}}<td><input type="checkbox" name="item" value="{{.Value}}" aria-label="Select {{.Shown}} {{short .Fingerprint}}"></td>{{end}}
       <td>{{if .Instructions}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&instructions=1&fp={{.Fingerprint}}">Instructions</a>{{else}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&tool={{.Tool}}&fp={{.Fingerprint}}">{{.Shown}}</a>{{end}}</td>
       <td>{{.Kind}}</td>
       <td>{{.State}}</td>
+      <td>{{range .Flags}}<span class="flag" title="{{.Detail}}">{{.Name}}</span> {{else}}none{{end}}</td>
       <td>{{when .FirstSeen}} on {{.Gateway}}</td>
       <td><code>{{short .Fingerprint}}</code></td>
     </tr>
   {{end}}
   </tbody>
 </table>
+{{if $.Reviewer}}<p>Selected changes are listed for confirmation before anything is decided.
+<button type="submit" name="action" value="approve">Approve selected…</button>
+<button type="submit" name="action" value="reject" class="secondary">Reject selected…</button></p>
+</form>{{end}}
 {{else}}<p>Nothing is waiting for review.</p>{{end}}
 {{if .Problems}}
 <h2>Entries that cannot be read</h2>
@@ -114,6 +125,7 @@
 {{if .Superseded}}<p class="warning">Gateways have since seen the upstream declare a different definition, so this one cannot be approved: it would not release calls, and could refuse calls that work now. It can still be rejected.</p>{{end}}
 {{if .Invisible}}<p class="warning">Contains {{.Invisible}} invisible character(s), written as ⟨U+XXXX⟩.</p>{{end}}
 {{if .LookAlike}}<p class="warning">Contains {{.LookAlike}} look-alike character(s), each followed by ⟨U+XXXX⟩.</p>{{end}}
+{{if .Flags}}<div class="warning"><p>Worth a closer look. These flags are hints only: text without them can still be harmful.</p><ul>{{range .Flags}}<li><strong>{{.Name}}</strong>: {{.Detail}}</li>{{end}}</ul></div>{{end}}
 {{range .Hints}}<p class="notice">This may be a rename of {{.}}, which is approved but no longer declared.</p>{{end}}
 {{if .Diff}}
 <h2>What changed</h2>
@@ -150,9 +162,10 @@
 <p class="crumbs"><a href="{{$.Base}}/">Overview</a> › <a href="{{$.Base}}/queue?proxy={{.Proxy}}">{{.ProxyShown}}</a></p>
 <h1>Tools on {{.ProxyShown}}</h1>
 <p>As gateways see them at their last refresh of the shared declarations.</p>
+{{if .Done}}<p class="notice" role="status">{{.Done}}</p>{{end}}
 {{if .Rows}}
 <table>
-  <thead><tr><th scope="col">Tool</th><th scope="col">Calls</th><th scope="col">Why</th><th scope="col">Last declared</th></tr></thead>
+  <thead><tr><th scope="col">Tool</th><th scope="col">Calls</th><th scope="col">Why</th><th scope="col">Last declared</th>{{if $.Reviewer}}<th scope="col">Approval</th>{{end}}</tr></thead>
   <tbody>
   {{range .Rows}}
     <tr>
@@ -160,10 +173,113 @@
       <td>{{if .Callable}}<span class="ok">Allowed by drift review</span>{{else}}<span class="refused">Refused</span>{{end}}</td>
       <td>{{.Reason}}{{if .Waiting}} <a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&tool={{.Tool}}&fp={{.Waiting}}">Review it</a>{{end}}</td>
       <td>{{if .Found}}{{when .Seen}}{{else}}never{{end}}</td>
+      {{if $.Reviewer}}<td>{{if .Approved}}<form method="post" action="{{$.Base}}/revoke" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="proxy" value="{{$.Content.Proxy}}">
+        <input type="hidden" name="tool" value="{{.Tool}}">
+        <input type="hidden" name="fingerprint" value="{{.Approved}}">
+        <input type="hidden" name="base" value="{{$.Content.Base}}">
+        <button type="submit" class="secondary" aria-label="Revoke the approval of {{.Name}}">Revoke</button>
+      </form>{{end}}</td>{{end}}
     </tr>
   {{end}}
   </tbody>
 </table>
 {{else}}<p>The active set reviews no tools for this proxy.</p>{{end}}
 <p>A tool allowed here still needs Cedar's rules to permit each call.</p>
+{{if $.Reviewer}}<p>Revoke withdraws a tool's approved definition, so gateways refuse its calls until a definition is approved again. It applies to the approval shown, against the set active when this page loaded.</p>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "bulk"}}{{template "head" .}}{{with .Content}}
+<p class="crumbs"><a href="{{$.Base}}/">Overview</a> › <a href="{{$.Base}}/queue?proxy={{.Proxy}}">{{.ProxyShown}}</a></p>
+<h1>Confirm: {{if eq .Action "approve"}}approve{{else}}reject{{end}} {{.Count}} change(s) on {{.ProxyShown}}</h1>
+{{if .Skipped}}<p class="notice">{{.Skipped}} selected change(s) are no longer waiting, or are definitions the upstream has since replaced, and are left out.</p>{{end}}
+{{if .Items}}
+<form method="post" action="{{$.Base}}/bulk/decide">
+<input type="hidden" name="csrf" value="{{$.CSRF}}">
+<input type="hidden" name="proxy" value="{{.Proxy}}">
+<input type="hidden" name="base" value="{{.Base}}">
+<input type="hidden" name="action" value="{{.Action}}">
+<table>
+  <thead><tr><th scope="col">Change</th><th scope="col">Fingerprint</th><th scope="col">Flags</th></tr></thead>
+  <tbody>
+  {{range .Items}}
+    <tr>
+      <td><input type="hidden" name="item" value="{{.Value}}">{{if .Instructions}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&instructions=1&fp={{.Fingerprint}}">Instructions</a>{{else}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&tool={{.Tool}}&fp={{.Fingerprint}}">{{.Shown}}</a>{{end}}</td>
+      <td><code>{{short .Fingerprint}}</code></td>
+      <td>{{if .Flags}}<ul>{{range .Flags}}<li><strong>{{.Name}}</strong>: {{.Detail}}</li>{{end}}</ul>{{else}}none{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{if .Flagged}}<p class="warning"><label><input type="checkbox" name="include_flagged" value="1"> Also {{.Action}} the {{.Flagged}} flagged change(s). I have read each one.</label> Unless this is ticked, flagged changes stay waiting.</p>{{end}}
+<p>The decision applies to exactly these fingerprints, against the policy set active when this page loaded. If the set has moved on, nothing changes.</p>
+<button type="submit">{{if eq .Action "approve"}}Approve{{else}}Reject{{end}}</button>
+<a href="{{$.Base}}/queue?proxy={{.Proxy}}">Cancel</a>
+</form>
+{{else}}<p>Nothing selected is still waiting. <a href="{{$.Base}}/queue?proxy={{.Proxy}}">Back to the queue</a></p>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "history"}}{{template "head" .}}{{with .Content}}
+<h1>Decision history</h1>
+{{if .Done}}<p class="notice" role="status">{{.Done}}</p>{{end}}
+{{if .Problem}}<p class="warning">Some lines of the decision log cannot be read: {{.Problem}}</p>{{end}}
+<p>The active set is <code>{{short .Set}}</code>.{{if .Previous}} The set it replaced is <code>{{short .Previous}}</code>{{if .PreviousLabel}} ({{.PreviousLabel}}){{end}}.{{end}}</p>
+{{if and $.Reviewer .Previous}}
+<form method="post" action="{{$.Base}}/rollback" class="decide">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="base" value="{{.Set}}">
+  <p>Rolling back makes the set the active one replaced active again, undoing the last change to the store, whoever made it. It applies only if <code>{{short .Set}}</code> is still active.</p>
+  <button type="submit" class="secondary">Roll back to <code>{{short .Previous}}</code></button>
+</form>
+{{end}}
+{{if .Rows}}
+<table>
+  <thead><tr><th scope="col">When</th><th scope="col">Who</th><th scope="col">Action</th><th scope="col">On</th><th scope="col">Fingerprint</th><th scope="col">Set</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td>{{.Time}}</td>
+      <td title="{{.Issuer}}">{{.Who}}</td>
+      <td>{{.Action}}</td>
+      <td>{{.Subject}}</td>
+      <td>{{if .Fingerprint}}<code>{{short .Fingerprint}}</code>{{end}}</td>
+      <td><code>{{short .Set}}</code></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p>No decisions are recorded yet.</p>{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "maintenance"}}{{template "head" .}}{{with .Content}}
+<h1>Maintenance</h1>
+{{if .Done}}<p class="notice" role="status">{{.Done}}</p>{{end}}
+<h2>Settled review entries</h2>
+<p>Entries the active set already approves or rejects stay in the shared drift directory until removed. Removing them changes no decision.</p>
+{{if $.Reviewer}}<form method="post" action="{{$.Base}}/prune" class="inline">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <button type="submit" class="secondary">Remove settled entries</button>
+</form>{{end}}
+<h2>Gateways</h2>
+<p>Gateways sharing declarations, oldest first. Retire a gateway that will not run again so its old declarations stop counting as what the upstream declares. A running gateway's declarations would be lost until it next lists tools.</p>
+{{if .Gateways}}
+<table>
+  <thead><tr><th scope="col">Gateway</th><th scope="col">Last heard from</th>{{if $.Reviewer}}<th scope="col">Retire</th>{{end}}</tr></thead>
+  <tbody>
+  {{range .Gateways}}
+    <tr>
+      <td>{{.Shown}}</td>
+      <td>{{when .Seen}}</td>
+      {{if $.Reviewer}}<td><form method="post" action="{{$.Base}}/retire" class="inline">
+        <input type="hidden" name="csrf" value="{{$.CSRF}}">
+        <input type="hidden" name="gateway" value="{{.Name}}">
+        <label><input type="checkbox" name="confirm" value="1"> It will not run again</label>
+        <button type="submit" class="secondary">Retire</button>
+      </form></td>{{end}}
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p>No gateway has shared declarations.</p>{{end}}
 {{end}}{{template "foot" .}}{{end}}

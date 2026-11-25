@@ -7,13 +7,26 @@ Operators reach it through the gateway at `/extensions/admin/`.
 ## Pages
 
 - **Overview.** For each proxy under drift review: changes waiting, tools refused, the active policy set, and each gateway sharing declarations with when it was last heard from.
-- **Review queue.** Every waiting change, whether it is what the upstream declares now or has been superseded, and when and where it was first seen.
-- **Change.** A labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved. Text larger than 1 MiB, well above the gateway's default limit, is not formatted here: review it with `cedar-policy drift show`, and approve it there. It can still be rejected here.
-- **Tools.** Every tool the set reviews, and every new one waiting, with whether drift review lets calls through and why, linking to the change that resolves it.
+- **Review queue.** Every waiting change, whether it is what the upstream declares now or has been superseded, its flags, and when and where it was first seen.
+- **Change.** The change's flags, a labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved. Text larger than 1 MiB, well above the gateway's default limit, is not formatted here: review it with `cedar-policy drift show`, and approve it there. It can still be rejected here.
+- **Tools.** Every tool the set reviews, and every new one waiting, with whether drift review lets calls through and why, linking to the change that resolves it. Reviewers can revoke an approval here.
+- **History.** Every decision in the store's decision log, newest first: when, who, what, and the set it made active. Reviewers can roll back here.
+- **Maintenance.** Remove review entries the active set already settles, and retire gateways that will not run again.
+
+## Flags
+
+Flags point a reviewer at text worth a closer look: instruction-like phrases, invisible or look-alike characters, references to files, web addresses or the proxy's other tools, and very long text. They are hints only. They never approve or reject anything, and text without flags can still be harmful.
 
 ## Decisions
 
-Approve and Reject apply to exactly the fingerprint the page showed. A tool definition can be approved only when it is what gateways last saw the upstream declare: approving one the upstream has replaced could only refuse calls, and one no gateway has seen it declare may have been queued before the upstream changed. Either can still be rejected. Every decision applies against the policy set active when the page loaded; if another set has become active since, nothing changes and the queue says so. A decision makes a new set active, so `cedar-policy activate` with the previous set rolls it back.
+Every decision applies to exactly what the page showed, against the policy set active when the page loaded. If the set has moved on, nothing changes and the page says so. Each decision makes a new set active and is recorded in the decision log with the reviewer's verified identity.
+
+- **Approve and Reject** decide one change, by fingerprint. A tool definition can be approved only when it is what gateways last saw the upstream declare: approving one the upstream has replaced could only refuse calls, and one no gateway has seen it declare may have been queued before the upstream changed. Either can still be rejected. Instructions are approved only while one changed text is waiting, as gateways do not record which text an upstream sends now.
+- **Bulk review.** Select changes in the queue, then choose Approve or Reject. Nothing is selected for you. A confirmation page lists exactly the selected changes with their flags. Flagged changes are included only if you also tick that you have read each one; otherwise they stay waiting. Selected changes that are no longer waiting, and approvals the rules above refuse, are skipped, and the result says how many.
+- **Revoke** withdraws a tool's approved definition. Gateways then refuse the tool's calls until a definition is approved again. Its entry in the set stays, so the tool remains under review.
+- **Roll back** makes the set the active one replaced active again. It undoes the last change to the store, whoever made it, and applies only if the set the page showed is still active. `cedar-policy activate` with an older set goes further back.
+- **Remove settled entries** deletes review entries the active set already approves or rejects. It changes no decision.
+- **Retire a gateway** deletes the declarations it shared, so they stop counting as what the upstream declares. Only retire a gateway that will not run again: a running gateway's declarations would be lost until it next lists tools.
 
 ## Sign-in and roles
 
@@ -22,7 +35,7 @@ The dashboard signs operators in itself with OpenID Connect: the authorization c
 The groups claim of the ID token grants one of two roles:
 
 - **reviewer**, for members of `ADMIN_REVIEWER_GROUP`: everything, including decisions;
-- **viewer**, for members of `ADMIN_VIEWER_GROUP`: every page, but no decisions.
+- **viewer**, for members of `ADMIN_VIEWER_GROUP`: every page, but no decisions or maintenance.
 
 An account in neither group is refused. A sign-in in progress is kept only in the browser's short-lived login cookie, so unfinished sign-ins use no memory in the dashboard. Sessions are held in memory for at most eight hours, or until the ID token expires if sooner; restarting the dashboard signs everyone out. Decisions are form posts checked against the session's CSRF token and the browser's origin.
 

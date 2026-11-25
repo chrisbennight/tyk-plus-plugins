@@ -84,8 +84,23 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			// Under drift enforcement a tool must be approved, and the
 			// definition its upstream last declared must be the approved one.
 			if view, enforcing := state.Drift(proxy); enforcing {
-				latest, seen := observed.Latest(proxy, name)
-				reason = drift.CallReason(view, name, latest, seen, observed.Complete(proxy))
+				// What this gateway saw, and what any gateway shared, from the
+				// reviewed upstream; declarations from another upstream say
+				// nothing about its tools.
+				observedProxy := drift.ObservedProxy(proxy, view.Upstream())
+				latest, at, seen := observed.LatestAt(observedProxy, name)
+				current, d, ok := shared.Lookup(state.Version, proxy, name, view.Upstream(), seen)
+				if ok && (!seen || d.SeenAt.After(at)) {
+					latest, seen = d.Fingerprint, true
+				}
+				if !current {
+					// The shared declarations were not read for this set,
+					// after a set change or a failed read; calls wait for a
+					// read that succeeds.
+					reason = drift.UnapprovedDefinition
+				} else {
+					reason = drift.CallReason(view, name, latest, seen, observed.Complete(observedProxy))
+				}
 			} else {
 				reason = ""
 			}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
@@ -20,6 +21,11 @@ import (
 // observed holds the definition each upstream last declared for each tool,
 // as seen by this gateway.
 var observed drift.Observations
+
+// shared exchanges declarations with other gateways and queues changes for
+// review, through CEDAR_PENDING_DIR. Without it, each gateway decides calls
+// on what it has seen itself.
+var shared *drift.Pending
 
 // maxReply bounds a plain reply, or one streamed event, that the
 // gateway reads to check it.
@@ -72,9 +78,11 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 	upstream := ctx.GetOASDefinition(req).GetTykExtension().Upstream.URL
 	// Each message is checked against the set active when it arrives, so a
 	// long stream follows set changes.
-	// A message is numbered as it is received: a plain reply when its
-	// headers arrive, a streamed event when it is complete.
-	check := func(received uint64, message []byte) []byte {
+	// A message is numbered, and its time taken, as it is received: a plain
+	// reply when its headers arrive, a streamed event when it is complete.
+	// Sightings are shared with that time, so a reply checked late cannot
+	// pass for a newer one.
+	check := func(received uint64, receivedAt time.Time, message []byte) []byte {
 		state := current()
 		// Without approvals to compare with, a list is withheld and
 		// instructions are removed, so the session can still start.
@@ -82,7 +90,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			if method == "tools/list" {
 				return drift.Failed(requestID(req))
 			}
-			return drift.FilterInstructions(message, "", true, method == "server/discover", requestID(req))
+			return drift.FilterInstructions(message, "", true, method == "server/discover", requestID(req), nil)
 		}
 		if state == nil {
 			return unchecked()
@@ -101,7 +109,11 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		if method != "tools/list" {
 			approved, _ := state.Instructions(proxy)
-			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req))
+			return drift.FilterInstructions(message, approved, view.StripInstructions(), method == "server/discover", requestID(req), func(declared string) {
+				if fingerprint := policy.InstructionsFingerprint(declared); !view.RejectedInstructions(fingerprint) {
+					shared.ChangedInstructions(proxy, fingerprint, declared)
+				}
+			})
 		}
 		var declared []drift.Observation
 		// Visibility is decided only when a list needs it, so errors and
@@ -113,13 +125,18 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 			}
 			return visible[tool]
 		}
-		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool) {
+		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool, definition jsontext.Value) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+			approvedFingerprint, _, _ := view.Approved(tool)
+			shared.Saw(proxy, upstream, tool, fingerprint, approved, receivedAt)
+			if fingerprint != approvedFingerprint && !view.Rejected(tool, fingerprint) {
+				shared.Changed(proxy, tool, fingerprint, definition)
+			}
 		})
-		observed.Record(proxy, received, declared, limits.MaxUnapprovedPerProxy)
+		observed.RecordAt(drift.ObservedProxy(proxy, upstream), received, receivedAt, declared, limits.MaxUnapprovedPerProxy)
 		return out
 	}
-	plainReceived := observed.Received()
+	plainReceived, plainReceivedAt := observed.ReceivedAt()
 	// The reply now depends on the gateway's approvals as well as the
 	// upstream, so upstream validators and freshness do not describe it.
 	res.Header.Del("ETag")
@@ -141,7 +158,8 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		// rebuilt message is either a request or notification, or a reply.
 		var stream *drift.EventRewriter
 		stream = drift.NewEventRewriter(res.Body, maxReply, drift.Failed(requestID(req)), func(message []byte) []byte {
-			out := check(observed.Received(), message)
+			received, receivedAt := observed.ReceivedAt()
+			out := check(received, receivedAt, message)
 			if !drift.CarriesMethod(out) {
 				stream.End()
 			}
@@ -160,7 +178,7 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		replaceBody(res, drift.Failed(requestID(req)))
 		return
 	}
-	replaceBody(res, check(plainReceived, body))
+	replaceBody(res, check(plainReceived, plainReceivedAt, body))
 }
 
 func replaceBody(res *http.Response, body []byte) {

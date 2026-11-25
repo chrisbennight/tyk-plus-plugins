@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"time"
 )
 
 // driftSuite checks drift enforcement for one client version: only tools
@@ -38,8 +43,23 @@ func driftSuite(k keys, version string) {
 		"change": map[string]any{"definition": approvedChange, "arguments": args("count", "long")},
 	}
 	inventory(map[string]any{}, tools)
+	listedAt := time.Now()
 	listed := catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"lookup"}), "%s: hide listed %v", version, slices.Collect(maps.Keys(listed)))
+	// The gateway shares what it saw: a gateway that never listed the tool,
+	// enforcing the same set, refuses calls to it within its refresh
+	// interval, and the change waits for review.
+	awaitPeerSet(readReport()["active"])
+	// Each list is shared again with its own time, so each client version
+	// must produce a declaration of its own.
+	awaitSharedDeclaration("governed", "change", listedAt)
+	time.Sleep(time.Second)
+	call(connectAt(peerGateway, k.operator, version), k.operator, "change", args("count", 2))
+	// The peer never listed either tool, so it allows lookup only on the
+	// approved declaration it read from the shared directory.
+	awaitSharedDeclaration("governed", "lookup", listedAt)
+	call(connectAt(peerGateway, k.support, version), k.support, "lookup", args("count", 1), "found")
+	checkPendingChange("governed", "change", catalog["change"])
 	check(sameJSON(listed["lookup"], catalog["lookup"]), "%s: lookup listed as %v", version, listed["lookup"])
 	call(c, k.support, "lookup", args("count", 1), "found")
 	changed := call(c, k.operator, "change", args("count", 2))
@@ -90,4 +110,55 @@ func driftSuite(k keys, version string) {
 	handshake = connect(k.operator, version)
 	check(handshake.hasInstructions && handshake.instructions == upstreamInstructions, "%s: approved instructions %q", version, handshake.instructions)
 	fmt.Printf("Verified drift enforcement for a %s client.\n", version)
+}
+
+// checkPendingChange checks that the drift review directory holds an entry
+// for a changed tool, holding exactly the definition the upstream declared,
+// filed under its fingerprint.
+func checkPendingChange(proxy, tool string, declared map[string]any) {
+	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "tools", encode(tool), "*.json"))
+	check(len(files) > 0, "no review entry for %s on %s", tool, proxy)
+	for _, file := range files {
+		data, err := os.ReadFile(file)
+		var entry struct {
+			Proxy, Tool, Fingerprint string
+			Definition               map[string]any
+		}
+		check(err == nil && json.Unmarshal(data, &entry) == nil, "review entry %s: %v", file, err)
+		check(entry.Proxy == proxy && entry.Tool == tool && sameJSON(entry.Definition, declared) &&
+			regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(entry.Fingerprint) &&
+			filepath.Base(file) == entry.Fingerprint+".json", "review entry %s: %s", file, data)
+	}
+}
+
+// awaitPeerSet waits until the peer gateway enforces a set.
+func awaitPeerSet(set any) {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var report map[string]any
+		if data, err := os.ReadFile("/peer-status/status.json"); err == nil && json.Unmarshal(data, &report) == nil && report["enforcing"] == set {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	panic(fmt.Sprintf("peer gateway did not enforce set %v", set))
+}
+
+// awaitSharedDeclaration waits until a gateway shares a declaration of a
+// tool seen after a time.
+func awaitSharedDeclaration(proxy, tool string, after time.Time) {
+	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "latest", encode(tool), "*.json"))
+		for _, file := range files {
+			var declared struct{ SeenAt time.Time }
+			if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &declared) == nil && !declared.SeenAt.Before(after) {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	panic(fmt.Sprintf("no declaration of %s on %s was shared after %v", tool, proxy, after))
 }

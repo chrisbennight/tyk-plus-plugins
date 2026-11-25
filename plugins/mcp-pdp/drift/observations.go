@@ -3,6 +3,7 @@ package drift
 import (
 	"maps"
 	"sync/atomic"
+	"time"
 )
 
 // Observations records, for each proxy and tool, the fingerprint of the
@@ -15,6 +16,13 @@ import (
 type Observations struct {
 	current  atomic.Pointer[observed]
 	sequence atomic.Uint64
+	// receipt is the last reply ReceivedAt numbered and timed.
+	receipt atomic.Pointer[receipt]
+}
+
+type receipt struct {
+	sequence uint64
+	at       time.Time
 }
 
 type observed struct {
@@ -31,6 +39,8 @@ type entry struct {
 	sequence uint64
 	// charged is set while the tool counts against the proxy's limit.
 	charged bool
+	// seenAt is when the declaration was recorded.
+	seenAt time.Time
 }
 
 // maxToolName is the longest tool name the MCP specification recommends. A
@@ -48,9 +58,32 @@ type Observation struct {
 
 func observationKey(proxy, tool string) string { return proxy + "\x00" + tool }
 
+// ObservedProxy names a proxy and the upstream it targets, so what one
+// upstream declared is never taken for another's after a proxy is retargeted.
+func ObservedProxy(proxy, upstream string) string { return proxy + "\x00" + upstream }
+
 // Received numbers a reply as the gateway receives it, before checking it,
 // so a reply checked later cannot overwrite what a newer reply declared.
 func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
+
+// ReceivedAt numbers a reply as Received does and takes its time with it, so
+// replies numbered in one order are timed in the same order, and what this
+// gateway shares orders them as it does.
+// It takes no lock: a number is taken after reading the last receipt, and
+// kept only if no other reply was received meanwhile, so each receipt has a
+// higher number than the last, and a time no earlier.
+func (o *Observations) ReceivedAt() (uint64, time.Time) {
+	for {
+		last := o.receipt.Load()
+		next := &receipt{sequence: o.sequence.Add(1), at: time.Now()}
+		if last != nil && next.at.Before(last.at) {
+			next.at = last.at
+		}
+		if o.receipt.CompareAndSwap(last, next) {
+			return next.sequence, next.at
+		}
+	}
+}
 
 // Record stores what one reply, numbered by Received, declared. A newer
 // declaration always updates a tool. An older one that disagrees with the
@@ -61,6 +94,13 @@ func (o *Observations) Received() uint64 { return o.sequence.Add(1) }
 // maxUnapproved such tools and its name is not unusually long; otherwise the
 // proxy is marked incomplete. A tool stops counting once it is approved.
 func (o *Observations) Record(proxy string, received uint64, declared []Observation, maxUnapproved int) {
+	o.RecordAt(proxy, received, time.Now(), declared, maxUnapproved)
+}
+
+// RecordAt is Record for a reply received at a known time, which the record
+// keeps as when the declarations were seen, so it orders them as the
+// gateways' shared declarations do.
+func (o *Observations) RecordAt(proxy string, received uint64, now time.Time, declared []Observation, maxUnapproved int) {
 	if len(declared) == 0 {
 		return
 	}
@@ -105,7 +145,11 @@ func (o *Observations) Record(proxy string, received uint64, declared []Observat
 				next.unapproved[proxy]++
 				charged = true
 			}
-			next.latest[key] = entry{fingerprint: fingerprint, sequence: sequence, charged: charged}
+			seenAt := now
+			if known && old.sequence > received {
+				seenAt = old.seenAt
+			}
+			next.latest[key] = entry{fingerprint: fingerprint, sequence: sequence, charged: charged, seenAt: seenAt}
 		}
 		if o.current.CompareAndSwap(previous, next) {
 			return
@@ -121,6 +165,17 @@ func (o *Observations) Latest(proxy, tool string) (string, bool) {
 	}
 	seen, ok := current.latest[observationKey(proxy, tool)]
 	return seen.fingerprint, ok
+}
+
+// LatestAt returns the fingerprint the upstream last declared for a tool and
+// when this gateway recorded it.
+func (o *Observations) LatestAt(proxy, tool string) (string, time.Time, bool) {
+	current := o.current.Load()
+	if current == nil {
+		return "", time.Time{}, false
+	}
+	seen, ok := current.latest[observationKey(proxy, tool)]
+	return seen.fingerprint, seen.seenAt, ok
 }
 
 // Complete reports whether every tool the proxy's upstream declared to this

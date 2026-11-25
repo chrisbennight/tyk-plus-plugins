@@ -27,6 +27,9 @@ type Reloader struct {
 	Root       string
 	StatusFile string
 	Active     *atomic.Pointer[Snapshot]
+	// BeforeActivate, when set, runs with a valid set before it becomes
+	// active, so state that depends on the set is ready when calls use it.
+	BeforeActivate func(*Snapshot)
 
 	evaluated string
 	report    Status
@@ -77,6 +80,9 @@ func (r *Reloader) Load() {
 		r.record(Status{Active: pointer.Set, Outcome: "rejected", Error: err.Error()})
 	default:
 		r.evaluated = pointer.Set
+		if r.BeforeActivate != nil {
+			r.BeforeActivate(next)
+		}
 		r.Active.Store(next)
 		r.record(Status{Active: pointer.Set, Outcome: "activated"})
 	}

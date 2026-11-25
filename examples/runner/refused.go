@@ -37,7 +37,7 @@ func (r *runner) refusedOn(name string, cred credential, server string) {
 	}
 	for _, version := range versions {
 		what := fmt.Sprintf("%s is refused when connecting to %s with a %s client", name, server, version)
-		if s, err := connect(cred, version, server); err == nil {
+		if s, err := connect(cred, version, server, nil); err == nil {
 			s.Close()
 			r.fail(what, "connected")
 		} else {

@@ -1,4 +1,4 @@
-# The examples: the gateway with the example policy, four mock MCP servers, a
+# The examples: the gateway with the example policy, five mock MCP servers, a
 # token issuer and a runner. Every service starts on its own; services find
 # each other only through the URLs configured here. See README.md.
 name: tyk-plus-examples
@@ -17,6 +17,8 @@ services:
     environment:
       CEDAR_REFRESH_INTERVAL: 2s
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
+      # Changes the gateway sees an upstream make wait here for review.
+      CEDAR_PENDING_DIR: /opt/tyk-gateway/cedar-pending
       # Plain HTTP is acceptable only because the issuer is on this local network.
       MCP_TOKEN_JWKS_URL: http://issuer:8000/jwks
       MCP_TOKEN_ISSUER: https://issuer.example
@@ -29,6 +31,7 @@ services:
       - ./gateway/apps:/opt/tyk-gateway/mcp-apps:ro
       - ./gateway/policies:/opt/tyk-gateway/policies:ro
       - policy-store:/opt/tyk-gateway/cedar:ro
+      - pending:/opt/tyk-gateway/cedar-pending
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     networks: [default, gateway-store]
@@ -47,6 +50,19 @@ services:
     volumes:
       - ./policy:/policy:ro
       - policy-store:/store
+
+  # Reviews the changes the gateway queued with cedar-policy drift, for
+  # example: docker compose run --rm review list -store /store -pending /pending
+  # It starts only when asked. Decisions are recorded as the container's user.
+  review:
+    <<: *gateway-image
+    profiles: [review]
+    user: "0"
+    entrypoint: ["/opt/tyk-gateway/bin/cedar-policy", "drift"]
+    command: ["list", "-store", "/store", "-pending", "/pending"]
+    volumes:
+      - policy-store:/store
+      - pending:/pending
 
   # Redis holds Tyk's keys, so only the gateway can reach it.
   redis:
@@ -84,6 +100,15 @@ services:
     environment:
       SERVER: notes
       UPSTREAM_STREAM: "1"
+
+  # Changes its tools or instructions on request, to show drift review. Its
+  # sessions carry tool-list-changed notifications to older-protocol clients.
+  changing:
+    build: ./servers
+    environment:
+      SERVER: changing
+      UPSTREAM_SESSIONS: "1"
+      CHANGING_VERSION: ${CHANGING_VERSION:-0}
 
   # The directory tools on a FastMCP release that speaks only the older
   # protocol, with sessions and streamed replies.
@@ -123,4 +148,5 @@ networks:
 
 volumes:
   policy-store:
+  pending:
   issuer-key:

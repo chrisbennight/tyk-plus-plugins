@@ -4,7 +4,7 @@ A complete local deployment for trying the gateway's authorization and for check
 
 - the gateway, with one proxy per mock server;
 - an example policy;
-- four mock MCP servers written with FastMCP;
+- five mock MCP servers written with FastMCP;
 - a token issuer and a deck of example people;
 - a runner that checks every expected outcome;
 - configurations for Claude Code and Codex.
@@ -26,10 +26,10 @@ docker compose run --build --rm runner
 `up` starts these services:
 
 - `gateway`, Redis and the token `issuer`;
-- the mock servers `directory`, `payments`, `notes` and `older`;
+- the mock servers `directory`, `payments`, `notes`, `older` and `changing`;
 - `policy`, which publishes the example policy set into the gateway's store and exits.
 
-The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
+The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It sets `changing` to version 0 first, and at the end walks it through each of its versions, as [Drift](#drift) describes, leaving it at version 0 again. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
 
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
@@ -45,8 +45,55 @@ Each server is behind its own proxy at `http://127.0.0.1:8080/<server>/`. The `w
 | `payments` | `get_balance`, `refund(amount, environment)`, `transfer(amount, environment)` | Rules on arguments. Analysts may refund only in `test`; nobody, administrators included, moves money in `production`. The same caller is permitted one tool and refused another. An argument of the wrong type is refused. |
 | `notes` | `search` (no annotations); `purge` (claims read-only but deletes); `export` (described only by `_meta`); `archive` (never approved) | Missing or false declarations. No annotation gives no read-only access, and a false claim grants nothing. `_meta` counts only once an operator records it as facts. A tool that was never approved is refused like one that does not exist. A scope grants `search`. |
 | `older` | The `directory` tools on FastMCP 2, which speaks only protocol `2025-11-25`, with sessions and streamed replies | A newer client falls back to the older protocol. |
+| `changing` | `lookup` (read-only), `update` (writes) and `report` (read-only), and server instructions, at version 0 | Drift. The server can switch to versions that change what it declares; see [Drift](#drift). |
 
 Every server reports, outside MCP at `GET /requests`, how many MCP requests it received and the last call's arguments. It also refuses any request that still carries a caller's credential.
+
+## Drift
+
+Every proxy is under drift review, and `changing` exists to show it. The example policy approves what `changing` declares at version 0. Each other version changes one thing:
+
+| Version | What changes | What a client sees |
+| --- | --- | --- |
+| 1 | `lookup`'s description gains text addressed to the model | `lookup` is hidden and refused until the change is approved |
+| 2 | `lookup`'s description gains an invisible character and a look-alike letter | The same; the review writes both out |
+| 3 | `lookup` gains a parameter | The same |
+| 4 | `update` now claims to be read-only | `update` is hidden and refused; the review shows the annotation change |
+| 5 | A new tool, `delete`, appears | `delete` is hidden and refused as new |
+| 6 | `report` is no longer listed | `report` is missing; the other tools are unaffected |
+| 7 | `report` is renamed `summary` | `summary` is hidden and refused as new |
+| 8 | Only the server instructions change | The approved instructions are still given |
+| 9 | Only `lookup`'s `_meta` changes | Nothing; `_meta` is not part of a definition |
+| 10 | `lookup`'s description gains different text | Held separately from version 1's change |
+| 0 | Back to the approved version | Every tool works again |
+
+Each switch tells connected clients that the tool list changed, in both protocol versions: on `subscriptions/listen` streams for `2026-07-28` clients, and on the session stream for `2025-11-25` clients. Clients that connect later see the change at once. Set `CHANGING_VERSION` before `docker compose up` to start the server at a later version, so drift is visible on first connect.
+
+The `drift` section of `expected.json` states what the `deployer` caller sees at each version, and the runner checks it.
+
+### Walk through a review
+
+Connect a client to `changing` as described in [Connect Claude Code or Codex](#connect-claude-code-or-codex), then:
+
+```sh
+docker compose run --rm runner version 1   # lookup changes
+```
+
+The client is told the tool list changed. Ask it to list the tools on `changing` again: `lookup` is gone, and the gateway, having seen the change, queues it for review. A change waits for review only once the gateway has seen it in a tool list.
+
+```sh
+docker compose run --rm review             # list what waits for review
+```
+
+`review` runs `cedar-policy drift` against the gateway's store and its queue of changes; with no arguments it lists the queue. Show one change with its labelled diff, then approve or reject it by the fingerprint the list printed:
+
+```sh
+docker compose run --rm review show -store /store -pending /pending -proxy changing -tool lookup FINGERPRINT
+docker compose run --rm review reject -store /store -pending /pending -proxy changing -tool lookup FINGERPRINT
+docker compose run --rm runner version 0   # back to the approved tools
+```
+
+Approving a change makes a new policy set active, so the runner's expectations no longer hold until you publish the example policy again with `docker compose up -d --force-recreate policy gateway`. The [policy guide](../gateway/policy/README.md#reviewing-changes) describes every review command. The runner's own walk leaves its changes in the queue, waiting for review; `docker compose down -v` starts afresh.
 
 ## Callers
 
@@ -105,6 +152,7 @@ Check in each client:
 2. A permitted call works. For example, `indexer` searches the directory.
 3. A refused call is reported. Both clients show a refusal as an error from the server, not as a failed tool result: Claude Code shows the server's reply, containing `-32002` and `Tool call denied`, and Codex shows `Mcp error: -32002: Tool call denied`.
 4. The two callers differ. For example, `deployer` may delete a person and `indexer` may not.
+5. A held tool disappears. Run `docker compose run --rm runner version 1`: the client is told the tool list changed, and `lookup` is no longer listed on `changing`. `docker compose run --rm runner version 0` brings it back.
 
 ## Swap a part
 

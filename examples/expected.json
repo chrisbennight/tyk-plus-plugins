@@ -30,17 +30,38 @@
     {"caller": "admin", "server": "notes", "tool": "no_such_tool", "arguments": {}, "expect": "refused", "why": "a tool that does not exist"},
     {"caller": "analyst", "server": "older", "tool": "search", "arguments": {"query": "ada"}, "expect": "permitted", "why": "read-only by operator fact"},
     {"caller": "analyst", "server": "older", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused", "why": "writes; analysts only read"},
-    {"caller": "admin", "server": "older", "tool": "delete_person", "arguments": {"id": "7"}, "expect": "refused", "why": "never approved on this proxy"}
+    {"caller": "admin", "server": "older", "tool": "delete_person", "arguments": {"id": "7"}, "expect": "refused", "why": "never approved on this proxy"},
+    {"caller": "analyst", "server": "changing", "tool": "lookup", "arguments": {"id": "7"}, "expect": "permitted", "why": "read-only by operator fact"},
+    {"caller": "analyst", "server": "changing", "tool": "update", "arguments": {"id": "7", "value": "new"}, "expect": "refused", "why": "writes; analysts only read"}
   ],
   "listed": {
-    "analyst": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": [], "older": ["get_person", "search"]},
-    "admin": {"directory": ["export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"]},
-    "finance": {"directory": [], "payments": ["get_balance", "refund", "transfer"], "notes": [], "older": []},
-    "scoped": {"directory": [], "payments": [], "notes": ["search"], "older": []},
-    "indexer": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": ["export"], "older": ["get_person", "search"]},
-    "deployer": {"directory": ["delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"]}
+    "analyst": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": [], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
+    "admin": {"directory": ["export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]},
+    "finance": {"directory": [], "payments": ["get_balance", "refund", "transfer"], "notes": [], "older": [], "changing": []},
+    "scoped": {"directory": [], "payments": [], "notes": ["search"], "older": [], "changing": []},
+    "indexer": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": ["export"], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
+    "deployer": {"directory": ["delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]}
   },
   "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata"],
+  "drift": {
+    "server": "changing",
+    "caller": "deployer",
+    "instructions": "Look up a record with lookup, change it with update, and summarize a period with report.",
+    "arguments": {"lookup": {"id": "7"}, "update": {"id": "7", "value": "new"}, "report": {"period": "week"}, "delete": {"id": "7"}, "summary": {"period": "week"}},
+    "steps": [
+      {"version": 1, "why": "lookup's description gains text addressed to the model", "listed": ["report", "update"], "permitted": ["report", "update"], "refused": ["lookup"]},
+      {"version": 2, "why": "lookup's description gains hidden and look-alike characters", "listed": ["report", "update"], "permitted": ["report", "update"], "refused": ["lookup"]},
+      {"version": 3, "why": "lookup gains a parameter", "listed": ["report", "update"], "permitted": ["report", "update"], "refused": ["lookup"]},
+      {"version": 4, "why": "update now claims to be read-only", "listed": ["lookup", "report"], "permitted": ["lookup", "report"], "refused": ["update"]},
+      {"version": 5, "why": "a new tool appears and is held until approved", "listed": ["lookup", "report", "update"], "permitted": ["lookup", "report", "update"], "refused": ["delete"]},
+      {"version": 6, "why": "report is no longer listed; the other tools are unaffected", "listed": ["lookup", "update"], "permitted": ["lookup", "update"], "refused": []},
+      {"version": 7, "why": "report is renamed: the new name is a new tool", "listed": ["lookup", "update"], "permitted": ["lookup", "update"], "refused": ["summary"]},
+      {"version": 8, "why": "only the instructions change: the approved ones are still given", "listed": ["lookup", "report", "update"], "permitted": ["lookup", "report", "update"], "refused": []},
+      {"version": 9, "why": "only _meta changes, which is not a change", "listed": ["lookup", "report", "update"], "permitted": ["lookup", "report", "update"], "refused": []},
+      {"version": 10, "why": "a second change to lookup while the first waits for review", "listed": ["report", "update"], "permitted": ["report", "update"], "refused": ["lookup"]},
+      {"version": 0, "why": "back to the approved tools: lookup works again", "listed": ["lookup", "report", "update"], "permitted": ["lookup", "report", "update"], "refused": []}
+    ]
+  },
   "keyAndToken": [
     {"key": "deployer", "token": "finance", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "permitted", "why": "a request carrying both is identified by its key: the deployer key may change records, the finance token may not"},
     {"key": "indexer", "token": "admin", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused", "why": "the reverse: the indexer key may not change records while the admin token could, so the key decides"}

@@ -442,7 +442,9 @@ func highlight(lines []driftreview.DiffLine) []diffRow {
 				before, after := lines[removed+k].Text, lines[added+k].Text
 				// Comparing words costs their product; past the page's
 				// budget, lines are shown whole rather than compared.
-				cost := len(strings.Fields(before)) * len(strings.Fields(after))
+				// The cost counts the tokens wordDiff compares, so runs of
+				// spaces count as it splits them.
+				cost := len(strings.SplitAfter(before, " ")) * len(strings.SplitAfter(after, " "))
 				o, n := []diffPart{{Text: before, Changed: true}}, []diffPart{{Text: after, Changed: true}}
 				if cost <= budget {
 					budget -= cost

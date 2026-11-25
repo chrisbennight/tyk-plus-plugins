@@ -137,6 +137,9 @@ type pendingTool struct {
 	// latest is whether gateways saw the upstream declare this definition
 	// last.
 	latest bool
+	// declared is whether any gateway has shared a declaration of the tool
+	// from the reviewed upstream.
+	declared bool
 }
 
 // pendingTools returns a proxy's tool entries the active set neither
@@ -170,7 +173,9 @@ func pendingTools(review *drift.Review, view policy.DriftView, proxy string) ([]
 			}
 			latest[entry.Tool] = fingerprint
 		}
-		waiting = append(waiting, pendingTool{entry: entry, kind: kind, latest: fingerprint != "" && fingerprint == entry.Fingerprint})
+		_, declared := latest[entry.Tool]
+		declared = declared && fingerprint != ""
+		waiting = append(waiting, pendingTool{entry: entry, kind: kind, declared: declared, latest: declared && fingerprint == entry.Fingerprint})
 	}
 	return waiting, problems, nil
 }
@@ -236,8 +241,13 @@ func driftList(out io.Writer, review *drift.Review, f driftFlags) error {
 		}
 		for _, t := range tools {
 			state := "superseded"
-			if t.latest {
+			switch {
+			case t.latest:
 				state = "latest"
+			case !t.declared:
+				// Entries and declarations are written separately, so an
+				// entry can be read before its declaration.
+				state = "no declaration yet"
 			}
 			fmt.Fprintf(out, "%s\t%s\ttool %s\t%s\t%s, first seen %s on %s\n", shownName(proxy), t.kind, shownName(t.entry.Tool),
 				t.entry.Fingerprint, state, t.entry.FirstSeen.Format(time.RFC3339), shownName(t.entry.Gateway))

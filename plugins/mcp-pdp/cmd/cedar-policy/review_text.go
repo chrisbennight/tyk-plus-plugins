@@ -97,11 +97,13 @@ func scriptOf(r rune) string {
 // isInvisible reports whether a character draws nothing a reviewer would
 // see, or changes how nearby text is drawn: controls, format characters such
 // as zero-width spaces and direction overrides, spaces other than the ASCII
-// space, variation selectors, blank fillers, and unassigned code points.
+// space, variation selectors, other default-ignorable characters such as the
+// combining grapheme joiner, blank fillers, and unassigned code points.
 func isInvisible(r rune) bool {
 	switch {
 	case r == utf8.RuneError,
-		unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs, unicode.Zl, unicode.Zp, unicode.Zs, unicode.Variation_Selector),
+		unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs, unicode.Zl, unicode.Zp, unicode.Zs, unicode.Variation_Selector,
+			unicode.Other_Default_Ignorable_Code_Point),
 		r == 0x115F, r == 0x1160, r == 0x2800, r == 0x3164, r == 0xFFA0:
 		return true
 	}

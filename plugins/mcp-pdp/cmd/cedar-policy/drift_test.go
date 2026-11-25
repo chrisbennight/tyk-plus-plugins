@@ -420,6 +420,7 @@ func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
 		"⟨U+0041⟩":    "⟨U+27E8⟩U+0041⟨U+27E9⟩",
 		"line\nline":  "line\nline",
 		"x\u00a0y":    "x⟨U+00A0⟩y",
+		"a\u034fb":    "a⟨U+034F⟩b",
 		"e\u0301cole": "e\u0301cole",
 		"café":        "café",
 		"αбв":         "α⟨U+03B1⟩б⟨U+0431⟩в⟨U+0432⟩",

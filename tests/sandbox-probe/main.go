@@ -1,6 +1,7 @@
 // Command sandbox-probe tests a running sandbox host from outside, as a
 // gateway would: over mutual TLS, one connection per run. "certs DIR" writes a
-// throwaway certificate authority and certificates for the test stack.
+// throwaway certificate authority and certificates for the test stack;
+// "ensure-certs DIR" writes them only when those in DIR expire within an hour.
 package main
 
 import (
@@ -39,7 +40,37 @@ func main() {
 		certs(os.Args[2])
 		return
 	}
+	if len(os.Args) == 3 && os.Args[1] == "ensure-certs" {
+		if certsLast(os.Args[2], time.Hour) {
+			fmt.Println("Kept the certificates in", os.Args[2])
+			return
+		}
+		certs(os.Args[2])
+		return
+	}
 	probe()
+}
+
+// certsLast reports whether every certificate certs writes in dir is present
+// and stays valid for at least d. Peers that load them once as they start
+// keep matching only while the files do not change, so a long-running
+// deployment remakes them only when they are about to expire.
+func certsLast(dir string, d time.Duration) bool {
+	for _, name := range []string{"client-ca", "server", "client"} {
+		data, err := os.ReadFile(filepath.Join(dir, name+".pem"))
+		if err != nil {
+			return false
+		}
+		block, _ := pem.Decode(data)
+		if block == nil {
+			return false
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || time.Until(cert.NotAfter) < d {
+			return false
+		}
+	}
+	return true
 }
 
 // certs writes a server certificate, a client authority, a client certificate

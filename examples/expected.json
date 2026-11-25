@@ -35,14 +35,31 @@
     {"caller": "analyst", "server": "changing", "tool": "update", "arguments": {"id": "7", "value": "new"}, "expect": "refused", "why": "writes; analysts only read"}
   ],
   "listed": {
-    "analyst": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": [], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
-    "admin": {"directory": ["export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]},
+    "analyst": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_person", "search"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search"], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
+    "admin": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export_directory", "get_person", "search", "update_person"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund", "transfer"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]},
     "finance": {"directory": [], "payments": ["get_balance", "refund", "transfer"], "notes": [], "older": [], "changing": []},
     "scoped": {"directory": [], "payments": [], "notes": ["search"], "older": [], "changing": []},
-    "indexer": {"directory": ["get_person", "search"], "payments": ["get_balance", "refund"], "notes": ["export"], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
-    "deployer": {"directory": ["delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["get_balance", "refund", "transfer"], "notes": ["export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]}
+    "indexer": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_person", "search"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export"], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
+    "deployer": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund", "transfer"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]}
   },
   "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata"],
+  "codeMode": {
+    "proxies": ["directory", "payments", "notes"],
+    "programs": [
+      {"caller": "analyst", "server": "directory", "why": "a program across two servers gets the analyst's own outcomes", "expect": "permitted", "calls": [
+        {"server": "directory", "tool": "search", "arguments": {"query": "ada"}, "expect": "permitted"},
+        {"server": "payments", "tool": "get_balance", "arguments": {"account": "ops"}, "expect": "permitted"},
+        {"server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused"},
+        {"server": "payments", "tool": "refund", "arguments": {"amount": 5, "environment": "staging"}, "expect": "refused"}
+      ]},
+      {"caller": "indexer", "server": "notes", "why": "a key caller's program gets the key's outcomes", "expect": "permitted", "calls": [
+        {"server": "notes", "tool": "export", "arguments": {"format": "csv"}, "expect": "permitted"},
+        {"server": "directory", "tool": "search", "arguments": {"query": "ada"}, "expect": "permitted"},
+        {"server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused"}
+      ]},
+      {"caller": "finance", "server": "payments", "why": "no rule lets the finance group run programs", "expect": "refused", "calls": []}
+    ]
+  },
   "drift": {
     "server": "changing",
     "caller": "deployer",

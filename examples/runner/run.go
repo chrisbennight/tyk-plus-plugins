@@ -94,6 +94,7 @@ func run(e *examples) bool {
 	}
 	r.listedTools()
 	r.refusedCallers()
+	r.codeMode()
 	r.drift()
 
 	fmt.Printf("\n%d checks passed, %d failed.\n", r.passed, len(r.failed))
@@ -342,7 +343,10 @@ func (h withHeaders) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // observed is what a mock server reports outside MCP.
 type observed struct {
-	Requests        int            `json:"requests"`
+	Requests int `json:"requests"`
+	// Calls counts the tool calls the server ran, leaving out the requests
+	// that open and close sessions.
+	Calls           int            `json:"calls"`
 	Tool            *string        `json:"tool"`
 	Arguments       map[string]any `json:"arguments"`
 	ProtocolVersion string         `json:"protocolVersion"`

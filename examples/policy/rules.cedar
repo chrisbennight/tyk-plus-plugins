@@ -11,6 +11,12 @@ when { principal.roles.contains("analyst") && resource.reviewed.flags.contains({
 permit (principal, action == Action::"tools/call", resource)
 when { principal.roles.contains("admin") };
 
+// Analysts may run Code Mode programs. Each call a program makes is still
+// decided by the analyst's own rules, so a program grants nothing more.
+@id("analyst-code-mode")
+permit (principal, action == Action::"tools/call", resource)
+when { principal.roles.contains("analyst") && resource.name like "codemode.*" };
+
 // Members of the finance group may call payment tools.
 @id("finance-payments")
 permit (principal, action == Action::"tools/call", resource)

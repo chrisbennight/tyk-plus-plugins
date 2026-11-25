@@ -1,5 +1,5 @@
 # The examples: the gateway with the example policy, five mock MCP servers, a
-# token issuer and a runner. Every service starts on its own; services find
+# token issuer, a Code Mode sandbox host and a runner. Every service starts on its own; services find
 # each other only through the URLs configured here. See README.md.
 name: tyk-plus-examples
 
@@ -22,6 +22,14 @@ services:
       # recreated.
       CEDAR_PENDING_DIR: /opt/tyk-gateway/cedar-pending
       CEDAR_GATEWAY_ID: examples-gateway
+      # Code Mode on three proxies, with runs on the sandbox host below.
+      CODEMODE_SANDBOX_ADDRESS: sandbox:8443
+      CODEMODE_SANDBOX_SERVER_NAME: sandbox
+      CODEMODE_PROXIES: directory=/directory/,payments=/payments/,notes=/notes/
+      CODEMODE_BACKENDS: ${SANDBOX_BACKEND:-gvisor}
+      CODEMODE_TLS_CERT: /etc/codemode/client.pem
+      CODEMODE_TLS_KEY: /etc/codemode/client-key.pem
+      CODEMODE_TLS_CA: /etc/codemode/client-ca.pem
       # Plain HTTP is acceptable only because the issuer is on this local network.
       MCP_TOKEN_JWKS_URL: http://issuer:8000/jwks
       MCP_TOKEN_ISSUER: https://issuer.example
@@ -35,10 +43,15 @@ services:
       - ./gateway/policies:/opt/tyk-gateway/policies:ro
       - policy-store:/opt/tyk-gateway/cedar:ro
       - pending:/opt/tyk-gateway/cedar-pending
+      - sandbox-tls:/etc/codemode:ro
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     networks: [default, gateway-store]
     depends_on:
+      # Runs report unavailable until the sandbox host is up, so starting the
+      # gateway alone needs only the certificates.
+      sandbox-certs:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       policy:
@@ -66,6 +79,39 @@ services:
     volumes:
       - policy-store:/store
       - pending:/pending
+
+  # The Code Mode sandbox host, as the sandbox directory deploys it, with
+  # certificates made for this deployment. On a machine without gVisor, add
+  # ../sandbox/compose.runc.yaml and set SANDBOX_BACKEND=runc; see README.md.
+  sandbox-launcher:
+    extends:
+      file: ../sandbox/compose.yaml
+      service: sandbox-launcher
+
+  sandbox:
+    extends:
+      file: ../sandbox/compose.yaml
+      service: sandbox
+    volumes: !override
+      - sandbox-socket:/run/sandbox-launcher
+      - sandbox-tls:/etc/sandbox/tls:ro
+    depends_on:
+      sandbox-launcher:
+        condition: service_started
+      sandbox-certs:
+        condition: service_completed_successfully
+
+  # Makes a sandbox certificate authority and certificates, valid for a day,
+  # unless those already made are valid for another hour. The gateway and the
+  # sandbox read them once as they start, so they are not replaced while both
+  # use them; see README.md to renew them.
+  sandbox-certs:
+    build:
+      context: ../tests
+      target: sandbox-probe
+    command: ["ensure-certs", "/certs"]
+    volumes:
+      - sandbox-tls:/certs
 
   # Redis holds Tyk's keys, so only the gateway can reach it.
   redis:
@@ -153,3 +199,5 @@ volumes:
   policy-store:
   pending:
   issuer-key:
+  sandbox-socket:
+  sandbox-tls:

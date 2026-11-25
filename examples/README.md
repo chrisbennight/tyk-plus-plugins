@@ -6,6 +6,7 @@ A complete local deployment for trying the gateway's authorization and for check
 - an example policy;
 - five mock MCP servers written with FastMCP;
 - a token issuer and a deck of example people;
+- a Code Mode sandbox host;
 - a runner that checks every expected outcome;
 - configurations for Claude Code and Codex.
 
@@ -26,10 +27,19 @@ docker compose run --build --rm runner
 `up` starts these services:
 
 - `gateway`, Redis and the token `issuer`;
+- the Code Mode sandbox host, `sandbox` and `sandbox-launcher`, with certificates `sandbox-certs` makes for it;
 - the mock servers `directory`, `payments`, `notes`, `older` and `changing`;
 - `policy`, which publishes the example policy set into the gateway's store and exits.
 
-The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It sets `changing` to version 0 first, and at the end walks it through each of its versions, as [Drift](#drift) describes, leaving it at version 0 again. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
+The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It runs the Code Mode programs in [Code Mode](#code-mode). It sets `changing` to version 0 first, and at the end walks it through each of its versions, as [Drift](#drift) describes, leaving it at version 0 again. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
+
+Code Mode programs run on a sandbox host that uses gVisor. On a machine without gVisor, such as Docker Desktop on macOS, use the development backend instead; it runs the launcher privileged, so use it only on your own machine:
+
+```sh
+export SANDBOX_BACKEND=runc COMPOSE_FILE=compose.yaml:../sandbox/compose.runc.yaml
+```
+
+The gateway and the sandbox host trust each other through certificates `sandbox-certs` makes, which last a day and are kept until then. Once they have expired, make new ones and restart both with them: `docker compose up -d --force-recreate sandbox-certs gateway sandbox`.
 
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
@@ -47,7 +57,23 @@ Each server is behind its own proxy at `http://127.0.0.1:8080/<server>/`. The `w
 | `older` | The `directory` tools on FastMCP 2, which speaks only protocol `2025-11-25`, with sessions and streamed replies | A newer client falls back to the older protocol. |
 | `changing` | `lookup` (read-only), `update` (writes) and `report` (read-only), and server instructions, at version 0 | Drift. The server can switch to versions that change what it declares; see [Drift](#drift). |
 
-Every server reports, outside MCP at `GET /requests`, how many MCP requests it received and the last call's arguments. It also refuses any request that still carries a caller's credential.
+Every server reports, outside MCP at `GET /requests`, how many MCP POST requests it received (the streams clients open for notifications are not counted), how many tool calls it ran, and the last call's arguments. It also refuses any request that still carries a caller's credential.
+
+## Code Mode
+
+Code Mode is on for `directory`, `payments` and `notes`. A caller may run programs when a rule grants it the Code Mode tools: here administrators, through their grant of every tool, and analysts, through `analyst-code-mode`. Those callers see the four Code Mode tools in their tool lists on those proxies.
+
+A program's tool calls go back through the gateway as the caller who ran it, so each call gets exactly the outcome the caller's direct call gets. The `codeMode` section of `expected.json` lists programs whose calls span two servers. Each call repeats a row of `calls` for the same caller, and the runner checks that permitted calls run on their server and refused ones are refused exactly as direct calls are, without reaching it. A caller no rule grants Code Mode is refused `codemode.execute` itself.
+
+For example, an analyst's program:
+
+```js
+const balance = await connectors.payments.get_balance({ account: "ops" });
+const people = await connectors.directory.search({ query: "ada" });
+return [balance.content[0].text, people.content[0].text];
+```
+
+See the [Code Mode guide](../gateway/code-mode.md) for writing programs and the limits.
 
 ## Drift
 

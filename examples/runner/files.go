@@ -27,6 +27,8 @@ type expectations struct {
 	RefusedCallers []string                       `json:"refusedCallers"`
 	// Drift walks a server through changes to what it declares.
 	Drift *driftWalk `json:"drift"`
+	// CodeMode states what callers' Code Mode programs get.
+	CodeMode *codeMode `json:"codeMode"`
 	// KeyAndToken lists requests carrying both a key and a token. The key
 	// identifies the caller, so each expectation follows the key's access.
 	KeyAndToken []struct {
@@ -62,6 +64,26 @@ type driftStep struct {
 	Listed    []string `json:"listed"`
 	Permitted []string `json:"permitted"`
 	Refused   []string `json:"refused"`
+}
+
+// codeMode is what Code Mode programs get. A program's tool calls must get
+// exactly the outcomes the same caller's direct calls get, so every call in a
+// program repeats a row of calls.
+type codeMode struct {
+	// Proxies are those where Code Mode is on. Their tool lists include the
+	// Code Mode tools a caller may call, which no upstream declares.
+	Proxies  []string      `json:"proxies"`
+	Programs []codeProgram `json:"programs"`
+}
+
+type codeProgram struct {
+	Caller string `json:"caller"`
+	// Server is the proxy the program is run on.
+	Server string `json:"server"`
+	Why    string `json:"why"`
+	// Expect is whether the caller may run programs at all.
+	Expect string `json:"expect"`
+	Calls  []call `json:"calls"`
 }
 
 type call struct {
@@ -169,7 +191,46 @@ func load(dir string) (*examples, error) {
 	if err := e.checkDrift(); err != nil {
 		return nil, err
 	}
+	if err := e.checkCodeMode(); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// checkCodeMode reports an error when a program names an unknown caller or a
+// proxy without Code Mode, or makes a call that does not repeat a row of calls
+// for the same caller with the same expected outcome.
+func (e *examples) checkCodeMode() error {
+	cm := e.expected.CodeMode
+	if cm == nil {
+		return nil
+	}
+	for i, p := range cm.Programs {
+		if _, err := e.identity(p.Caller); err != nil {
+			return fmt.Errorf("expected.json codeMode program %d: %w", i, err)
+		}
+		if !slices.Contains(cm.Proxies, p.Server) {
+			return fmt.Errorf("expected.json codeMode program %d runs on %s, where Code Mode is not on", i, p.Server)
+		}
+		if p.Expect != "permitted" && p.Expect != "refused" {
+			return fmt.Errorf("expected.json codeMode program %d: expect must be permitted or refused", i)
+		}
+		for j, c := range p.Calls {
+			if !slices.ContainsFunc(e.expected.Calls, func(direct call) bool {
+				return direct.Caller == p.Caller && direct.Server == c.Server && direct.Tool == c.Tool &&
+					direct.Expect == c.Expect && sameJSON(direct.Arguments, c.Arguments)
+			}) {
+				return fmt.Errorf("expected.json codeMode program %d call %d: no row of calls has %s calling %s.%s with these arguments and expecting %s", i, j, p.Caller, c.Server, c.Tool, c.Expect)
+			}
+		}
+	}
+	return nil
+}
+
+// isCodeModeTool reports whether a tool is one the gateway answers itself on
+// a proxy where Code Mode is on.
+func (e *examples) isCodeModeTool(server, tool string) bool {
+	return e.expected.CodeMode != nil && slices.Contains(e.expected.CodeMode.Proxies, server) && strings.HasPrefix(tool, "codemode.")
 }
 
 // checkDrift reports an error when the drift walk names an unknown caller or
@@ -227,6 +288,9 @@ func (e *examples) checkListed() error {
 				return fmt.Errorf("expected.json listed: there is no proxy named %q", server)
 			}
 			for _, tool := range tools {
+				if e.isCodeModeTool(server, tool) {
+					continue
+				}
 				if t, approved := inv.Tools[tool]; !approved || len(t.Definition) == 0 {
 					return fmt.Errorf("expected.json listed: %s should see %s.%s, but that tool has no approved definition", caller, server, tool)
 				}

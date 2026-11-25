@@ -5,9 +5,9 @@ exists to show one idea; see examples/README.md. The same program runs on
 FastMCP 4, which serves both supported protocol versions, and on FastMCP 2,
 which serves only the older one.
 
-Outside MCP, GET /requests reports how many MCP requests arrived, the last tool
-call's arguments and the protocol version used, so a check can prove that a
-refused call never reached the server.
+Outside MCP, GET /requests reports how many MCP requests arrived, how many tool
+calls ran, the last tool call's arguments and the protocol version used, so a
+check can prove that a refused call never reached the server.
 
 UPSTREAM_STREAM set to any value selects streamed replies; UPSTREAM_SESSIONS
 selects the older protocol's sessions.
@@ -29,11 +29,12 @@ SERVER = os.environ["SERVER"]
 READ_ONLY = {"readOnlyHint": True}
 WRITES = {"readOnlyHint": False}
 
-observed = {"requests": 0, "protocolVersion": "", "tool": None, "arguments": None}
+observed = {"requests": 0, "calls": 0, "protocolVersion": "", "tool": None, "arguments": None}
 mcp = FastMCP(SERVER)
 
 
 def record(tool, **arguments):
+    observed["calls"] += 1
     observed["tool"] = tool
     observed["arguments"] = arguments
 

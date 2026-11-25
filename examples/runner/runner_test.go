@@ -158,6 +158,28 @@ func TestListedMustCoverEveryCallerAndProxy(t *testing.T) {
 	}
 }
 
+// A program's call must repeat a direct call for the same caller with the
+// same expected outcome, so programs never claim more than direct calls get.
+func TestProgramCallsMustMatchDirectCalls(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.expected.CodeMode == nil || len(e.expected.CodeMode.Programs) == 0 {
+		t.Fatal("expected.json has no Code Mode programs")
+	}
+	p := &e.expected.CodeMode.Programs[0]
+	p.Calls = append(p.Calls, call{Server: "directory", Tool: "update_person", Arguments: map[string]any{"id": "7", "name": "Ada"}, Expect: "permitted"})
+	if err := e.checkCodeMode(); err == nil {
+		t.Fatal("a program call expecting more than the direct call was accepted")
+	}
+	e, _ = load("..")
+	e.expected.CodeMode.Programs[0].Server = "older"
+	if err := e.checkCodeMode(); err == nil {
+		t.Fatal("a program on a proxy without Code Mode was accepted")
+	}
+}
+
 func TestRefusalOfReadsBothErrorShapes(t *testing.T) {
 	transport := errors.New(`Error POSTing to endpoint: {"error":{"code":-32002,"message":"Tool call denied"},"id":4,"jsonrpc":"2.0"}`)
 	if r, ok := refusalOf(transport); !ok || *r != (rpcError{-32002, "Tool call denied", ""}) {

@@ -117,6 +117,11 @@ func (d *dashboard) get(path string, cookie *http.Cookie) *http.Response {
 }
 
 func (d *dashboard) post(path string, cookie *http.Cookie, form url.Values) *http.Response {
+	// A form from a page names the activation it was made against; tests
+	// that leave it out mean the one in force now.
+	if form.Has("base") && !form.Has("promoted") {
+		form.Set("promoted", promotedAt(d.t, d.cfg.store))
+	}
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if cookie != nil {

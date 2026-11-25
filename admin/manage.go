@@ -88,6 +88,22 @@ func toolNames(review *drift.Review, view policy.DriftView, proxy string) []stri
 	return names
 }
 
+// permitChecks counts the activation checks of a set that expect a proxy's
+// tool to be permitted.
+func (s *server) permitChecks(set, proxy, tool string) int {
+	snapshot, _, err := policy.LoadSet(s.cfg.store, set)
+	if err != nil {
+		return 0
+	}
+	_, contents, err := policy.ReadSet(s.cfg.store, set)
+	if err != nil {
+		return 0
+	}
+	view, _ := snapshot.Drift(proxy)
+	found, _ := driftreview.PermitChecks(contents["checks.json"], proxy, tool, view.Upstream())
+	return len(found)
+}
+
 // sameActivation reports whether the activation a form was made against,
 // its set and the time it became active, is still in force. A roll back can
 // make the same set active again, so the set alone does not identify it.
@@ -105,7 +121,18 @@ func (s *server) revoke(w http.ResponseWriter, r *http.Request, sess *session) {
 		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
 		return
 	}
-	set, err := driftreview.Revoke(s.cfg.store, r.PostFormValue("base"), label, sess.actor, s.now, proxy, tool, fingerprint)
+	removeChecks := r.PostFormValue("remove_checks") == "1"
+	if !removeChecks {
+		// Activation checks that expect the tool to be permitted refuse a
+		// set without its approval; the reviewer decides whether they go.
+		if n := s.permitChecks(r.PostFormValue("base"), proxy, tool); n > 0 {
+			s.fail(w, sess, http.StatusConflict, fmt.Sprintf("%d activation check(s) expect calls to this tool to be permitted, so its approval cannot be revoked while they stay. Tick the box to remove them with it, or change them with cedar-policy promote.", n))
+			return
+		}
+	} else {
+		label += " and its permit checks"
+	}
+	set, err := driftreview.Revoke(s.cfg.store, r.PostFormValue("base"), label, sess.actor, s.now, proxy, tool, fingerprint, removeChecks)
 	switch {
 	case errors.Is(err, driftreview.ErrStale):
 		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)

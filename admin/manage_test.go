@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
@@ -162,6 +163,70 @@ func TestNewToolsThatMentionEachOtherAreFlagged(t *testing.T) {
 	cookie, _ := d.signIn(viewer)
 	if page := html.UnescapeString(body(t, d.get("/queue?proxy=governed", cookie))); !strings.Contains(page, "mentions another tool: audit") {
 		t.Fatalf("queue page:\n%s", page)
+	}
+}
+
+func TestOneBatchRejectsSeveralVersionsOfATool(t *testing.T) {
+	d := newDashboard(t)
+	first := d.queue("change", changedChange)
+	second := d.queue("change", strings.Replace(changedChange, "Ignore previous instructions.", "Take care.", 1))
+	cookie, csrf := d.signIn(reviewer)
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "promoted": {promotedAt(t, d.cfg.store)}, "action": {"reject"},
+		"include_flagged": {"1"}, "item": {item{Tool: "change", Fingerprint: first}.encode(), item{Tool: "change", Fingerprint: second}.encode()}}
+	if res := d.post("/bulk/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=bulk-rejected&n=2&skipped=0&left=0") {
+		t.Fatalf("rejecting two versions in one batch: %s %s", res.Header.Get("Location"), body(t, res))
+	}
+}
+
+func TestRevokeRemovesPermitChecksOnlyWhenAsked(t *testing.T) {
+	d := newDashboard(t)
+	// Republish the set with a check that expects the tool to be permitted.
+	_, contents, err := policy.ReadSet(d.cfg.store, active(t, d.cfg.store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents["checks.json"] = []byte(`[{"caller":{"issuer":"https://issuer.test","subject":"alice"},"proxy":"governed","upstream":"` + upstream + `","tool":"change","expect":"permitted"}]`)
+	source := t.TempDir()
+	for name, data := range contents {
+		if err := os.WriteFile(filepath.Join(source, name), data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := policy.Promote(d.cfg.store, source, "checked", time.Now); err != nil {
+		t.Fatal(err)
+	}
+	cookie, csrf := d.signIn(reviewer)
+	if page := body(t, d.get("/tools?proxy=governed", cookie)); !strings.Contains(page, "Also remove the 1 activation check(s)") {
+		t.Fatalf("tools page:\n%s", page)
+	}
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {fingerprint(t, approvedChange)},
+		"base": {active(t, d.cfg.store)}, "promoted": {promotedAt(t, d.cfg.store)}}
+	if res := d.post("/revoke", cookie, form); res.StatusCode != http.StatusConflict {
+		t.Fatalf("revoking without removing the checks: %d", res.StatusCode)
+	}
+	form.Set("remove_checks", "1")
+	if res := d.post("/revoke", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=revoked") {
+		t.Fatalf("revoking and removing the checks: %s %s", res.Header.Get("Location"), body(t, res))
+	}
+	_, contents, err = policy.ReadSet(d.cfg.store, active(t, d.cfg.store))
+	if err != nil || strings.Contains(string(contents["checks.json"]), "change") {
+		t.Fatalf("checks after revoking: %s, %v", contents["checks.json"], err)
+	}
+	log, err := policy.ReadLog(d.cfg.store)
+	if err != nil || len(log) != 2 || log[0].Action != "revoke" || log[1].Action != "remove-permit-check" {
+		t.Fatalf("decision log %+v, %v", log, err)
+	}
+}
+
+func TestADecisionFormForAnEarlierActivationChangesNothing(t *testing.T) {
+	d := newDashboard(t)
+	fp := d.queue("change", changedChange)
+	cookie, csrf := d.signIn(reviewer)
+	base := active(t, d.cfg.store)
+	res := d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {fp}, "base": {base},
+		"promoted": {"2000-01-01T00:00:00Z"}, "action": {"approve"}})
+	if !strings.HasSuffix(res.Header.Get("Location"), "done=stale") || active(t, d.cfg.store) != base {
+		t.Fatalf("a decision for an earlier activation: %s", res.Header.Get("Location"))
 	}
 }
 

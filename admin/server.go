@@ -348,7 +348,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 	names := toolNames(st.review, view, proxy)
 	q := r.URL.Query()
 	fingerprint, tool, instructions := q.Get("fp"), q.Get("tool"), q.Get("instructions") == "1"
-	data := map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Tool": tool, "Instructions": instructions, "Fingerprint": fingerprint, "Base": st.set, "Full": q.Get("full") == "1"}
+	data := map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Tool": tool, "Instructions": instructions, "Fingerprint": fingerprint, "Base": st.set, "Promoted": st.promoted, "Full": q.Get("full") == "1"}
 	var diff string
 	var length int
 	if instructions {
@@ -517,17 +517,25 @@ func wordDiff(before, after string) ([]diffPart, []diffPart) {
 // toolRow is one tool on the Tools page.
 type toolRow struct {
 	Tool, Name, Reason, Waiting, Approved string
-	Callable                              bool
-	Seen                                  time.Time
-	Found                                 bool
+	// PermitChecks counts the activation checks that expect the tool to be
+	// permitted, which revoking its approval would remove.
+	PermitChecks int
+	Callable     bool
+	Seen         time.Time
+	Found        bool
 }
 
 func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
-	st, _, proxy, ok := s.proxy(w, r, sess)
+	st, view, proxy, ok := s.proxy(w, r, sess)
 	if !ok {
 		return
 	}
 	defer st.review.Close()
+	_, contents, err := policy.ReadSet(s.cfg.store, st.set)
+	if err != nil {
+		s.fail(w, sess, http.StatusServiceUnavailable, "The active policy set cannot be read.")
+		return
+	}
 	states, err := driftreview.ToolStates(st.review, st.snapshot, proxy)
 	if err != nil {
 		s.fail(w, sess, http.StatusServiceUnavailable, err.Error())
@@ -535,8 +543,13 @@ func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
 	}
 	rows := make([]toolRow, 0, len(states))
 	for _, t := range states {
-		rows = append(rows, toolRow{Tool: t.Tool, Name: driftreview.ShownName(t.Tool), Reason: t.Reason, Waiting: t.Waiting,
-			Callable: t.Callable, Seen: t.Seen, Found: t.Found, Approved: t.Approved})
+		row := toolRow{Tool: t.Tool, Name: driftreview.ShownName(t.Tool), Reason: t.Reason, Waiting: t.Waiting,
+			Callable: t.Callable, Seen: t.Seen, Found: t.Found, Approved: t.Approved}
+		if t.Approved != "" {
+			found, _ := driftreview.PermitChecks(contents["checks.json"], proxy, t.Tool, view.Upstream())
+			row.PermitChecks = len(found)
+		}
+		rows = append(rows, row)
 	}
 	s.render(w, "tools", s.page(sess, "Tools", map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Rows": rows,
 		"Base": st.set, "Promoted": st.promoted, "Done": doneMessage(r.URL.Query().Get("done"))}))
@@ -633,6 +646,12 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 	// The label travels into gateways' status and logs, so it names the
 	// decision, not the reviewer; the decision log records who made it.
 	label := fmt.Sprintf("dashboard %s %s %s", action, driftreview.Describe(d), short(fingerprint))
+	if !s.sameActivation(r) {
+		// A roll back can make the page's set active again later; the form
+		// names the activation it was made against.
+		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
+		return
+	}
 	set, err := driftreview.Apply(s.cfg.store, base, label, sess.actor, s.now, []driftreview.Decision{d})
 	switch {
 	case errors.Is(err, driftreview.ErrStale):

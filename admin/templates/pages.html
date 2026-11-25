@@ -153,6 +153,7 @@
   {{if .Instructions}}<input type="hidden" name="instructions" value="1">{{else}}<input type="hidden" name="tool" value="{{.Tool}}">{{end}}
   <input type="hidden" name="fingerprint" value="{{.Fingerprint}}">
   <input type="hidden" name="base" value="{{.Base}}">
+  <input type="hidden" name="promoted" value="{{.Promoted}}">
   {{if .Full}}<input type="hidden" name="full" value="1">{{end}}
   {{if .TooLarge}}<button type="submit" name="action" value="approve" disabled>Approve (too large to review here)</button>{{else if .Superseded}}<button type="submit" name="action" value="approve" disabled>Approve (superseded)</button>{{else if .NotDeclared}}<button type="submit" name="action" value="approve" disabled>Approve (not declared yet)</button>{{else if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
   <button type="submit" name="action" value="reject" class="secondary">Reject</button>
@@ -182,6 +183,7 @@
         <input type="hidden" name="fingerprint" value="{{.Approved}}">
         <input type="hidden" name="base" value="{{$.Content.Base}}">
         <input type="hidden" name="promoted" value="{{$.Content.Promoted}}">
+        {{if .PermitChecks}}<label><input type="checkbox" name="remove_checks" value="1"> Also remove the {{.PermitChecks}} activation check(s) that expect calls to it to be permitted</label>{{end}}
         <button type="submit" class="secondary" aria-label="Revoke the approval of {{.Name}}">Revoke</button>
       </form>{{end}}</td>{{end}}
     </tr>

@@ -149,7 +149,7 @@ func reviewDrift(c *conn, cred credential, version, fingerprint string) {
 	check(strings.Contains(listed, "governed\tchanged\ttool change\t"+fingerprint+"\tlatest"), "%s: drift list:\n%s", version, listed)
 	shown := reviewCommand("show", "-proxy", "governed", "-tool", "change", fingerprint)
 	check(strings.Contains(shown, "Changed tool change on governed") && strings.Contains(shown, "Fingerprint: "+fingerprint) &&
-		strings.Contains(shown, "Description changed:"), "%s: drift show:\n%s", version, shown)
+		strings.Contains(shown, "Description changed:\n- An approved description the upstream no longer declares\n+ "), "%s: drift show:\n%s", version, shown)
 
 	rejected := activeAfter(reviewCommand("reject", "-proxy", "governed", "-tool", "change", "-label", "probe reject", fingerprint))
 	listed = reviewCommand("list")
@@ -159,6 +159,10 @@ func reviewDrift(c *conn, cred credential, version, fingerprint string) {
 
 	approved := activeAfter(reviewCommand("approve", "-proxy", "governed", "-tool", "change", "-label", "probe approve", fingerprint))
 	check(approved != rejected, "%s: approval did not publish a new set", version)
+	// Approving lifts the rejection, so the definition is reviewed again if
+	// the upstream returns to it after another is approved.
+	inventory, err := os.ReadFile(filepath.Join(policyDir, "sets", approved, "approved_tools.json"))
+	check(err == nil && !strings.Contains(string(inventory), fingerprint), "%s: the approved set still rejects %s: %v\n%s", version, fingerprint, err, inventory)
 	listed = reviewCommand("list")
 	check(!strings.Contains(listed, fingerprint), "%s: an approved change was listed:\n%s", version, listed)
 	call(c, cred, "change", args("count", 2), "updated")

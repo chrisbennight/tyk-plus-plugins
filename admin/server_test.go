@@ -342,6 +342,20 @@ func TestBrowsersSendTheOriginWithForms(t *testing.T) {
 	}
 }
 
+func TestProviderRequestsRefuseRedirectsToPlainHTTP(t *testing.T) {
+	plain, _ := http.NewRequest(http.MethodPost, "http://id.example/token", nil)
+	secure, _ := http.NewRequest(http.MethodPost, "https://id.example/token", nil)
+	if err := providerClient(config{}).CheckRedirect(plain, nil); err == nil {
+		t.Fatal("a redirect to plain http was followed")
+	}
+	if err := providerClient(config{}).CheckRedirect(secure, nil); err != nil {
+		t.Fatalf("a redirect to https was refused: %v", err)
+	}
+	if err := providerClient(config{insecureProvider: true}).CheckRedirect(plain, nil); err != nil {
+		t.Fatalf("a redirect to plain http was refused where allowed: %v", err)
+	}
+}
+
 func TestTheOriginMatchesAsBrowsersSendIt(t *testing.T) {
 	for public, want := range map[string]string{
 		"https://Gateway.Example:443/extensions/admin": "https://gateway.example",

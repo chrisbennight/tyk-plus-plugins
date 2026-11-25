@@ -216,6 +216,11 @@ func Canonical(value jsontext.Value) string {
 // Indented returns a value as indented JSON, made visible. Strings are
 // written out decoded, so a character the upstream escaped is marked like one
 // it did not.
+// maxIndented bounds indented output. Indentation grows with nesting depth,
+// so deeply nested JSON can indent to many times its size; past the bound
+// the value is shown as it came.
+const maxIndented = 2 << 20
+
 func Indented(value jsontext.Value) string {
 	var out bytes.Buffer
 	dec := jsontext.NewDecoder(bytes.NewReader(value))
@@ -225,7 +230,7 @@ func Indented(value jsontext.Value) string {
 		if err == io.EOF {
 			break
 		}
-		if err != nil || enc.WriteToken(token) != nil {
+		if err != nil || enc.WriteToken(token) != nil || out.Len() > maxIndented {
 			out.Reset()
 			out.Write(value)
 			break

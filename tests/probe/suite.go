@@ -38,7 +38,8 @@ const exampleChecks = `[
 
 type keys struct{ support, operator, guest credential }
 
-// catalogOf lists the upstream's tools through the gateway, keyed by name.
+// catalogOf lists the upstream's tools through the gateway, keyed by name,
+// leaving out the Code Mode tools the gateway adds on Code Mode proxies.
 func catalogOf(c *conn, cred credential) map[string]map[string]any {
 	r := c.rpc(cred, "tools/list", map[string]any{})
 	var listing struct {
@@ -47,7 +48,9 @@ func catalogOf(c *conn, cred credential) map[string]map[string]any {
 	check(r.Status == http.StatusOK && json.Unmarshal(r.Result, &listing) == nil, "tools/list: %v", r)
 	catalog := map[string]map[string]any{}
 	for _, tool := range listing.Tools {
-		catalog[tool["name"].(string)] = tool
+		if name := tool["name"].(string); !codeModeTools[name] {
+			catalog[name] = tool
+		}
 	}
 	return catalog
 }

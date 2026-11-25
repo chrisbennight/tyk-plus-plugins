@@ -1,6 +1,9 @@
 package policy
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDecideBuiltIn(t *testing.T) {
 	rules := `
@@ -33,5 +36,23 @@ func TestDecideBuiltIn(t *testing.T) {
 	// which has no reviewed facts.
 	if got, _ := s.DecideBuiltIn(Caller{Issuer: "i", Subject: "s"}, "p", "https://u.example/mcp", "codemode.execute"); got != "policy_denied" {
 		t.Errorf("a reviewed-fact permit granted a built-in tool: %s", got)
+	}
+}
+
+func TestApprovedTools(t *testing.T) {
+	tools := `{"p": {"upstream": "https://u.example/mcp", "tools": {
+  "zeta": {"facts": {"readOnly": true}},
+  "alpha": {"definition": {"name": "alpha", "description": "A"}}}}}`
+	s, err := Compile(Inputs{Rules: []byte(""), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream, list := s.ApprovedTools("p")
+	if upstream != "https://u.example/mcp" || len(list) != 2 || list[0].Name != "alpha" || list[1].Name != "zeta" ||
+		!strings.Contains(string(list[0].Definition), `"description"`) || list[1].Definition != nil {
+		t.Fatalf("approved tools %q %+v", upstream, list)
+	}
+	if _, none := s.ApprovedTools("other"); none != nil {
+		t.Fatalf("an unknown proxy has tools: %+v", none)
 	}
 }

@@ -21,7 +21,9 @@ func main() {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test-upstream", Version: "1"},
 		&mcp.ServerOptions{Instructions: "Use lookup for records."})
 	var lastArgs atomic.Pointer[arguments]
-	for name, reply := range map[string]string{"lookup": "found", "change": "updated"} {
+	// codemode.spoof uses the prefix the gateway reserves for Code Mode, so the
+	// gateway must hide it and refuse calls to it.
+	for name, reply := range map[string]string{"lookup": "found", "change": "updated", "codemode.spoof": "spoofed"} {
 		tool := &mcp.Tool{Name: name, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}}
 		mcp.AddTool(server, tool, func(_ context.Context, _ *mcp.CallToolRequest, args arguments) (*mcp.CallToolResult, any, error) {
 			lastArgs.Store(&args)

@@ -1,6 +1,16 @@
 # Code Mode
 
-Code Mode lets an MCP client run a short JavaScript program that calls several tools and returns one result, so intermediate results never enter the model's context. The gateway plug-in answers the `codemode.execute` tool itself. The program runs on a separate [sandbox host](../sandbox/README.md), and every tool call it makes comes back through the gateway as the caller who started the run, so it gets exactly the decision a direct call would get.
+Code Mode lets an MCP client run a short JavaScript program that calls several tools and returns one result, so intermediate results never enter the model's context. The gateway plug-in answers four tools itself on each proxy where Code Mode is on: `codemode.search`, `codemode.describe` and `codemode.limits` to find tools and learn the limits, and `codemode.execute` to run a program. The program runs on a separate [sandbox host](../sandbox/README.md), and every tool call it makes comes back through the gateway as the caller who started the run, so it gets exactly the decision a direct call would get.
+
+## Finding tools
+
+On a proxy where Code Mode is on, `tools/list` includes each Code Mode tool the caller's rules permit, once, on the first page of the list. An upstream tool whose name starts with `codemode.` is hidden from lists on every proxy, and the gateway logs a warning naming it. To do this, the gateway reads every `tools/list` reply, plain or streamed, and asks upstreams for uncompressed replies; such a reply depends on the caller, so it is marked `Cache-Control: private, no-cache`. A reply compressed anyway passes as the upstream sent it.
+
+- **`codemode.search`** takes an optional `query`, `detail`, `limit` and `cursor`. It returns the tools the caller could call from a program, on every proxy where Code Mode is on that the caller's Tyk session may use: approved, passing the drift check that refuses calls, and visible under the caller's rules. Every word of the query must appear in a tool's name or description. `detail` is `summary` (the default: name, call form and first line of the description) or `full` (adds the approved input schema). Results come a page at a time, with a `nextCursor` for the next page of the same search.
+- **`codemode.describe`** takes a `proxy` and a `name`, and returns the tool's approved description and input schema and its call form, such as `connectors["governed"]["lookup"]`. A tool approved without its upstream definition is described without a schema. A tool the caller could not call is described exactly as one that does not exist.
+- **`codemode.limits`** returns the limits below.
+
+Search and describe answer from the active policy set and the gateway's own records, and never contact an upstream.
 
 ## How a run works
 
@@ -27,7 +37,7 @@ console.log("looked up both");
 return [a.content[0].text, b.content[0].text];
 ```
 
-A call resolves to the tool's result as a direct caller receives it. A refused call rejects with an error carrying the same `code` and `message` a direct caller gets; a tool on a proxy without Code Mode is refused the same way. Programs cannot call Code Mode tools. The `codemode.` prefix is reserved: an upstream tool with that name is never called, on any proxy.
+A call resolves to the tool's result as a direct caller receives it. A refused call rejects with an error carrying the same `code` and `message` a direct caller gets; a tool on a proxy without Code Mode is refused the same way. Programs cannot call Code Mode tools. The `codemode.` prefix is reserved: an upstream tool with that name is never listed or called, on any proxy.
 
 The tool result has `structuredContent` of `{"result": ..., "console": [...]}`, with the same JSON in its text. A run that does not finish returns a tool error (`isError`) whose `structuredContent.error` has a `kind` and a `message`:
 

@@ -46,6 +46,10 @@ func driftSuite(k keys, version string) {
 	listedAt := time.Now()
 	listed := catalogOf(c, k.operator)
 	check(slices.Equal(slices.Sorted(maps.Keys(listed)), []string{"lookup"}), "%s: hide listed %v", version, slices.Collect(maps.Keys(listed)))
+	// Code Mode's search applies the same check: a tool waiting for review
+	// is not offered to programs.
+	found := searchNames(c, k.operator, "")
+	check(slices.Equal(found, []string{"governed/lookup"}), "%s: search offered %v while change waits for review", version, found)
 	// The gateway shares what it saw: a gateway that never listed the tool,
 	// enforcing the same set, refuses calls to it within its refresh
 	// interval, and the change waits for review.

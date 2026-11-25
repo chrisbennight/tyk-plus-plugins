@@ -237,14 +237,23 @@ func TestDeeplyNestedDefinitionsFingerprintQuickly(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("a %d-level definition took %s", depth, elapsed)
 	}
-	// A large value deep inside is written once, not once per enclosing level.
-	large := strings.Repeat(`{"items":`, depth) + `{"description":"` + strings.Repeat("x", 4<<20) + `"}` + strings.Repeat("}", depth)
-	start = time.Now()
-	if _, err := DefinitionFingerprint([]byte(`{"name":"lookup","inputSchema":` + large + `}`)); err != nil {
-		t.Fatal(err)
+	// A large value deep inside is written once, not once per enclosing
+	// level. Its time is compared with the same value at the top level, so
+	// the test measures the cost of depth, not the speed of a busy machine:
+	// writing it once per level would take thousands of times longer.
+	value := `{"description":"` + strings.Repeat("x", 4<<20) + `"}`
+	fingerprint := func(schema string) time.Duration {
+		t.Helper()
+		start := time.Now()
+		if _, err := DefinitionFingerprint([]byte(`{"name":"lookup","inputSchema":` + schema + `}`)); err != nil {
+			t.Fatal(err)
+		}
+		return time.Since(start)
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
-		t.Fatalf("a %d-level definition with a large value took %s", depth, elapsed)
+	flat := fingerprint(value)
+	deep := fingerprint(strings.Repeat(`{"items":`, depth) + value + strings.Repeat("}", depth))
+	if deep > 20*flat+time.Second {
+		t.Fatalf("a %d-level definition with a large value took %s, against %s at the top level", depth, deep, flat)
 	}
 }
 

@@ -382,6 +382,11 @@ func TestSeveralWaitingInstructionsAreNotApprovedHere(t *testing.T) {
 	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=rejected") {
 		t.Fatalf("rejecting instructions: %s", res.Header.Get("Location"))
 	}
+	// The rejected text's page, reopened, cannot approve it while another
+	// text is the one waiting.
+	if res := d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {first}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
+		t.Fatalf("approving a rejected text: %s", res.Header.Get("Location"))
+	}
 	form = url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {second}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
 	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=approved") {
 		t.Fatalf("approving the one left: %s", res.Header.Get("Location"))

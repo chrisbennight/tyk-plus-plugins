@@ -112,9 +112,26 @@ func TestListedUnapprovedToolIsAnError(t *testing.T) {
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unapproved tool was accepted")
 	}
-	e.expected.Listed["admin"] = map[string][]string{"nowhere": {}}
+	e.expected.Listed["admin"]["nowhere"] = nil
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unknown proxy was accepted")
+	}
+}
+
+// Deleting a row of listed must not silently drop its checks.
+func TestListedMustCoverEveryCallerAndProxy(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(e.expected.Listed["analyst"], "notes")
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a caller missing a proxy was accepted")
+	}
+	e, _ = load("..")
+	delete(e.expected.Listed, "analyst")
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a caller that makes calls but has no tool list was accepted")
 	}
 }
 

@@ -69,7 +69,7 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 [`policy/`](policy) is the example policy set: [rules](policy/rules.cedar), [approved tools](policy/approved_tools.json), approved instructions and activation checks. The [policy guide](../gateway/policy/README.md) explains the format.
 
-Every proxy is under drift review, so clients see only the approved tool definitions, and each caller sees only the tools it could call. A tool that was never approved, such as `notes.archive`, is neither listed nor callable. The approved tool definitions are copied exactly from each server's `tools/list`; a definition that differs from what the server declares is hidden and refused until it is approved again.
+Every proxy is under drift review, so clients see only the approved tool definitions, and each caller sees only the tools it could call. A tool that was never approved, such as `notes.archive`, is neither listed nor callable. The approved tool definitions are copied exactly from each server's `tools/list`; a tool whose definition differs from what the server declares is hidden, and its calls are refused once the gateway has seen the difference in a tool list, until the new definition is approved.
 
 The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`. Regenerate the checks whenever you change `expected.json` or the approved tools, so the published policy is checked against the current expectations. After changing `expected.json`, regenerate the checks and publish again:
 

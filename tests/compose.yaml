@@ -79,6 +79,9 @@ services:
     build:
       context: ./tests
       target: probe
+      # The probe runs the real cedar-policy, built from the plug-in source.
+      additional_contexts:
+        mcp-pdp: ./plugins/mcp-pdp
     environment:
       TYK_GW_SECRET: ${TYK_GW_SECRET:?}
       # The probe checks that the upstream behaves as this job declares.

@@ -15,6 +15,10 @@ FROM golang:1.26.10-bookworm AS probe-build
 WORKDIR /src
 COPY probe/ .
 RUN CGO_ENABLED=0 go build -mod=readonly -o /probe .
+COPY --from=mcp-pdp . /mcp-pdp
+# The plug-in's go.sum lists only what the gateway build adds to Tyk's
+# modules, so the command resolves its own, as the shared-store job does.
+RUN cd /mcp-pdp && CGO_ENABLED=0 go build -mod=mod -o /cedar-policy ./cmd/cedar-policy
 
 FROM scratch AS upstream
 COPY --from=build /upstream /upstream
@@ -26,6 +30,7 @@ ENTRYPOINT ["/upstream"]
 
 FROM scratch AS probe
 COPY --from=probe-build /probe /probe
+COPY --from=probe-build /cedar-policy /cedar-policy
 ENTRYPOINT ["/probe"]
 
 FROM golang:1.26.10-bookworm AS sandbox-probe-build

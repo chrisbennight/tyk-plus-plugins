@@ -111,9 +111,11 @@ func runDrift(args []string, out io.Writer, now func() time.Time) error {
 
 // localActor is the local user, who the decision log records for decisions
 // made with the command line.
+// The account comes from the system, not from the environment, which the
+// caller controls; an account the system cannot name is recorded by number.
 func localActor() policy.Actor {
-	name := os.Getenv("USER")
-	if u, err := user.Current(); err == nil {
+	name := fmt.Sprintf("uid:%d", os.Getuid())
+	if u, err := user.Current(); err == nil && u.Username != "" {
 		name = u.Username
 	}
 	return policy.Actor{Issuer: "local", Subject: name, Name: name}

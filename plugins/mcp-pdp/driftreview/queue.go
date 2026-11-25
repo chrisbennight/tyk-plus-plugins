@@ -195,6 +195,15 @@ func Describe(d Decision) string {
 	return ShownName(d.Proxy) + "/" + ShownName(d.Tool)
 }
 
+// holds reports whether a decision's content has its fingerprint.
+func holds(d Decision) bool {
+	if d.Instructions {
+		return policy.InstructionsFingerprint(d.Text) == d.Fingerprint
+	}
+	fp, err := policy.DefinitionFingerprint(d.Definition)
+	return err == nil && fp == d.Fingerprint
+}
+
 // Apply writes decisions into a new set made from the active one,
 // under the store's lock, and makes it active. The decisions were made
 // against the set named base; if another set became active since, nothing is
@@ -217,6 +226,11 @@ func Apply(store, base, label string, actor policy.Actor, now func() time.Time, 
 		}
 		entries := make([]policy.LogEntry, 0, len(decisions))
 		for _, d := range decisions {
+			// An approval must carry exactly the content its fingerprint
+			// names, so the log never records one fingerprint for another.
+			if d.Approve && !holds(d) {
+				return nil, fmt.Errorf("%s: the content does not have the fingerprint %s", Describe(d), d.Fingerprint)
+			}
 			view, ok := active.Drift(d.Proxy)
 			if !ok {
 				return nil, fmt.Errorf("proxy %q is not under drift review in the active set", d.Proxy)
@@ -356,7 +370,7 @@ func marshalIndented(v any) ([]byte, error) {
 func Confirmation(set string, decisions []Decision) string {
 	lines := make([]string, len(decisions))
 	for i, d := range decisions {
-		lines[i] = fmt.Sprintf("%s\x00%s\x00%t\x00%s", d.Proxy, d.Tool, d.Instructions, d.Fingerprint)
+		lines[i] = fmt.Sprintf("%s\x00%s\x00%t\x00%s\x00%t", d.Proxy, d.Tool, d.Instructions, d.Fingerprint, d.Approve)
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(set + "\n" + strings.Join(lines, "\n")))

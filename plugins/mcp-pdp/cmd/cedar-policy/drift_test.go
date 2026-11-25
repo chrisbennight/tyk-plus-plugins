@@ -419,3 +419,13 @@ func TestADecisionIsRefusedWhenTheActiveSetChangedMeanwhile(t *testing.T) {
 		t.Fatalf("a decision made against an older set was applied: %v", err)
 	}
 }
+
+func TestAnApprovalMustCarryTheContentItsFingerprintNames(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	base := r.active().Version
+	_, err := driftreview.Apply(r.store, base, "mismatch", policy.Actor{Issuer: "local", Subject: "test"}, epoch,
+		[]driftreview.Decision{{Proxy: "governed", Tool: "change", Fingerprint: fingerprint(t, changedChange), Definition: []byte(newerChange), Approve: true}})
+	if err == nil || r.active().Version != base {
+		t.Fatalf("an approval whose content has another fingerprint was applied: %v", err)
+	}
+}

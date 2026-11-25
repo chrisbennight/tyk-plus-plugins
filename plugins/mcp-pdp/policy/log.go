@@ -50,9 +50,32 @@ func (s *store) appendLog(entries []LogEntry) error {
 		}
 		buf.Write(append(line, '\n'))
 	}
-	f, err := s.dir.OpenFile(logFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, s.fileMode)
+	// The log is created with the store's file mode whatever the umask, as
+	// every file in the store is, so each member of a shared store can append.
+	if _, err := s.dir.Lstat(logFile); errors.Is(err, fs.ErrNotExist) {
+		prepared := tempName("." + logFile + "-")
+		if err := s.writeFile(prepared, nil, s.fileMode); err != nil {
+			return err
+		}
+		err := s.dir.Link(prepared, logFile)
+		s.dir.Remove(prepared)
+		if err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	f, err := s.dir.OpenFile(logFile, os.O_RDWR|os.O_APPEND, 0)
 	if err != nil {
 		return err
+	}
+	// A line an earlier failed write cut short is ended first, so these
+	// entries start on lines of their own.
+	if info, statErr := f.Stat(); statErr == nil && info.Size() > 0 {
+		last := make([]byte, 1)
+		if _, readErr := f.ReadAt(last, info.Size()-1); readErr == nil && last[0] != '\n' {
+			buf = *bytes.NewBuffer(append([]byte{'\n'}, buf.Bytes()...))
+		}
 	}
 	_, err = f.Write(buf.Bytes())
 	if syncErr := f.Sync(); err == nil {
@@ -68,7 +91,9 @@ func (s *store) appendLog(entries []LogEntry) error {
 }
 
 // ReadLog returns the store's decision log, oldest first. A store without
-// decisions has an empty log.
+// decisions has an empty log. A line that is not a valid entry, such as one
+// a failed write cut short, is skipped and reported in the error, while the
+// entries around it are still returned.
 func ReadLog(root string) ([]LogEntry, error) {
 	data, err := os.ReadFile(filepath.Join(root, logFile))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -78,14 +103,16 @@ func ReadLog(root string) ([]LogEntry, error) {
 		return nil, err
 	}
 	var entries []LogEntry
+	var problems []error
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(nil, 1<<20)
 	for line := 1; scanner.Scan(); line++ {
 		var e LogEntry
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			return entries, fmt.Errorf("decision log line %d: %w", line, err)
+			problems = append(problems, fmt.Errorf("decision log line %d is not a valid entry", line))
+			continue
 		}
 		entries = append(entries, e)
 	}
-	return entries, scanner.Err()
+	return entries, errors.Join(append(problems, scanner.Err())...)
 }

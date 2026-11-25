@@ -238,7 +238,9 @@ func (r *Review) Retire(gateway string) (int, error) {
 // names lists a directory without temporary files. A missing directory has
 // no names.
 func (r *Review) names(dir string) ([]string, error) {
-	f, err := r.root.Open(dir)
+	// Opened without waiting and only as a directory, so a named pipe in
+	// its place cannot stall the reviewer.
+	f, err := r.root.OpenFile(dir, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_DIRECTORY, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

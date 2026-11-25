@@ -18,19 +18,29 @@ import (
 // out by code point: invisible characters replace themselves, and
 // look-alike characters keep their glyph followed by their code point. It
 // also counts both, so a summary can say what was found. Line breaks are
-// kept so text stays readable.
+// kept so text stays readable; visibleLine writes them out too.
 //
-// A look-alike is a non-ASCII letter, digit or mark in a word that also has
-// ASCII letters, as in a name spelled with one Cyrillic letter. Words written
-// entirely in another script are left alone.
+// A look-alike is a non-ASCII letter, digit or mark in a word whose letters
+// come from more than one script, as in a name spelled with one Cyrillic
+// letter. Words written in a single script, such as café or привет, are
+// left alone.
 func visible(text string) (out string, invisible, lookAlike int) {
+	return written(text, true)
+}
+
+// visibleLine is visible for text shown on one line, such as a name.
+func visibleLine(text string) string {
+	out, _, _ := written(text, false)
+	return out
+}
+
+func written(text string, keepLines bool) (out string, invisible, lookAlike int) {
 	var b strings.Builder
-	words := splitWords(text)
-	for _, word := range words {
-		mixed := hasASCIILetter(word)
+	for _, word := range splitWords(text) {
+		mixed := mixesScripts(word)
 		for _, r := range word {
 			switch {
-			case r == '\n' || r == ' ':
+			case r == ' ' || (r == '\n' && keepLines):
 				b.WriteRune(r)
 			case isInvisible(r):
 				invisible++
@@ -49,6 +59,39 @@ func visible(text string) (out string, invisible, lookAlike int) {
 		}
 	}
 	return b.String(), invisible, lookAlike
+}
+
+// mixesScripts reports whether a word's letters come from more than one
+// script. Characters shared by scripts, such as digits and combining marks,
+// belong to none.
+func mixesScripts(word string) bool {
+	first := ""
+	for _, r := range word {
+		if !unicode.IsLetter(r) {
+			continue
+		}
+		script := scriptOf(r)
+		switch {
+		case script == "":
+		case first == "":
+			first = script
+		case script != first:
+			return true
+		}
+	}
+	return false
+}
+
+func scriptOf(r rune) string {
+	if r <= unicode.MaxASCII {
+		return "Latin"
+	}
+	for name, table := range unicode.Scripts {
+		if name != "Common" && name != "Inherited" && unicode.Is(table, r) {
+			return name
+		}
+	}
+	return ""
 }
 
 // isInvisible reports whether a character draws nothing a reviewer would
@@ -314,15 +357,11 @@ func unionKeys(a, b map[string]jsontext.Value) []string {
 	return keys
 }
 
-func shownName(name string) string {
-	shown, _, _ := visible(name)
-	return shown
-}
+func shownName(name string) string { return visibleLine(name) }
 
 func shownValue(value jsontext.Value) string {
 	if len(value) == 0 {
 		return "(none)"
 	}
-	shown, _, _ := visible(canonical(value))
-	return shown
+	return visibleLine(canonical(value))
 }

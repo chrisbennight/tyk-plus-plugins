@@ -241,7 +241,7 @@ func TestARejectionSticksUntilTheUpstreamChangesAgain(t *testing.T) {
 	}
 }
 
-func TestApproveAllAdoptsTheLatestListAfterItIsConfirmed(t *testing.T) {
+func TestApproveAllAdoptsTheLatestDefinitionsAfterTheListIsConfirmed(t *testing.T) {
 	// Adopting an upstream: drift review starts with nothing approved.
 	r := newReviewWith(t, map[string]string{}, "")
 	start := time.Now()
@@ -257,8 +257,8 @@ func TestApproveAllAdoptsTheLatestListAfterItIsConfirmed(t *testing.T) {
 		"proxy": "governed", "fingerprint": policy.InstructionsFingerprint("Be brief."), "instructions": "Be brief.", "firstSeen": start, "gateway": "one"})
 	before := r.active().Version
 	out, err := r.run("approve-all", "-proxy", "governed")
-	if err == nil || !strings.Contains(err.Error(), "-confirm 3-") || !strings.Contains(out, latest) || strings.Contains(out, older) ||
-		!strings.Contains(out, "governed/gone is not in the upstream's latest list") {
+	if err == nil || !strings.Contains(err.Error(), "-confirm 4-") || !strings.Contains(out, latest) || strings.Contains(out, older) ||
+		!strings.Contains(out, "Be brief.") {
 		t.Fatalf("approve-all without confirmation: %q, %v", out, err)
 	}
 	code := strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
@@ -406,6 +406,12 @@ func TestRetireRemovesOnlyThatGatewaysDeclarations(t *testing.T) {
 	}
 }
 
+func TestNamesStayOnOneLine(t *testing.T) {
+	if got := shownName("tool\nfake row"); got != "tool⟨U+000A⟩fake row" {
+		t.Fatalf("shownName = %q", got)
+	}
+}
+
 func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
 	for text, want := range map[string]string{
 		"привет мир":  "привет мир",
@@ -414,7 +420,9 @@ func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
 		"⟨U+0041⟩":    "⟨U+27E8⟩U+0041⟨U+27E9⟩",
 		"line\nline":  "line\nline",
 		"x\u00a0y":    "x⟨U+00A0⟩y",
-		"e\u0301cole": "e\u0301⟨U+0301⟩cole",
+		"e\u0301cole": "e\u0301cole",
+		"café":        "café",
+		"αбв":         "α⟨U+03B1⟩б⟨U+0431⟩в⟨U+0432⟩",
 	} {
 		if got, _, _ := visible(text); got != want {
 			t.Errorf("visible(%q) = %q, want %q", text, got, want)

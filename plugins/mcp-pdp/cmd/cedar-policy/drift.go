@@ -629,20 +629,14 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 	for _, problem := range append(problems, instructionProblems...) {
 		fmt.Fprintf(out, "Skipped: %s\n", shownName(problem.Error()))
 	}
-	listed, err := latestList(review, view, f.proxy)
-	if err != nil {
-		return err
-	}
 	var decisions []decision
 	for _, t := range tools {
-		// Only what gateways saw the upstream declare last is adopted, and
-		// only for tools its latest list still declares; an older definition
-		// would be refused at once anyway.
-		switch {
-		case !t.latest:
-		case !listed.has(t.entry.Tool):
-			fmt.Fprintf(out, "Skipped: %s is not in the upstream's latest list.\n", describe(decision{proxy: f.proxy, tool: t.entry.Tool}))
-		default:
+		// Only what gateways saw the upstream declare last is adopted; an
+		// older definition would be refused at once anyway. A tool the
+		// upstream has since withdrawn may be adopted too, but gateways list
+		// only tools the upstream declares, so its definition reaches clients
+		// only if the upstream declares exactly that definition again.
+		if t.latest {
 			decisions = append(decisions, decision{proxy: f.proxy, tool: t.entry.Tool, fingerprint: t.entry.Fingerprint, definition: t.entry.Definition, approve: true})
 		}
 	}
@@ -661,6 +655,12 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 	}
 	for _, d := range decisions {
 		fmt.Fprintf(out, "%s\t%s\n", describe(d), d.fingerprint)
+		if d.instructions {
+			// Instructions reach clients as approved text, so the text
+			// itself is shown, not just its fingerprint.
+			shown, _, _ := visible(d.text)
+			fmt.Fprintf(out, "%s\n", shown)
+		}
 	}
 	code := confirmation(snapshot.Version, decisions)
 	if f.confirm == "" {
@@ -696,7 +696,7 @@ func confirmation(set string, decisions []decision) string {
 	}
 	slices.Sort(lines)
 	sum := sha256.Sum256([]byte(set + "\n" + strings.Join(lines, "\n")))
-	return fmt.Sprintf("%d-%s", len(decisions), hex.EncodeToString(sum[:6]))
+	return fmt.Sprintf("%d-%s", len(decisions), hex.EncodeToString(sum[:]))
 }
 
 // driftPrune removes settled entries while holding the store's lock, so a

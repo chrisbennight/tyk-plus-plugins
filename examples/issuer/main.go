@@ -10,6 +10,8 @@
 //	ISSUER_DECK      a JSON deck of example people; enables GET /token/{name}
 //	ISSUER_KEY_FILE  a PKCS #8 PEM signing key, created if missing, so restarts keep the key
 //	ISSUER_LISTEN    the listening address; defaults to 127.0.0.1:8000
+//	ISSUER_PUBLIC_URL the base URL browsers use to reach the issuer; enables
+//	                 the OpenID Connect sign-in endpoints for the deck's clients
 package main
 
 import (
@@ -30,9 +32,12 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"sync"
 	"time"
 
 	jsonv2 "github.com/go-json-experiment/json"
@@ -55,6 +60,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	s.publicURL = strings.TrimSuffix(os.Getenv("ISSUER_PUBLIC_URL"), "/")
 	addr := os.Getenv("ISSUER_LISTEN")
 	if addr == "" {
 		addr = "127.0.0.1:8000"
@@ -148,6 +154,16 @@ type deck struct {
 	// People keeps each claim as written, so a token carries exactly the value
 	// the deck sets, numbers included.
 	People map[string]map[string]jsontext.Value `json:"people"`
+	// Clients are the applications that may sign people in through the
+	// OpenID Connect endpoints, by client ID.
+	Clients map[string]client `json:"clients"`
+}
+
+// client is an application that signs people in. A sign-in returns only to
+// one of its redirect URIs, compared exactly.
+type client struct {
+	Secret       string   `json:"secret"`
+	RedirectURIs []string `json:"redirectURIs"`
 }
 
 var personName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -199,6 +215,20 @@ func loadDeck(path string) (*deck, error) {
 			}
 		}
 	}
+	for id, c := range d.Clients {
+		if !personName.MatchString(id) {
+			return nil, fmt.Errorf("client %q: names use lowercase letters, digits and hyphens", id)
+		}
+		if c.Secret == "" || len(c.RedirectURIs) == 0 {
+			return nil, fmt.Errorf("client %q: a secret and at least one redirect URI are required", id)
+		}
+		for _, uri := range c.RedirectURIs {
+			u, err := url.Parse(uri)
+			if err != nil || !u.IsAbs() || u.Fragment != "" || u.Query().Has("code") || u.Query().Has("state") {
+				return nil, fmt.Errorf("client %q: redirect URI %q must be an absolute URL without a fragment or its own code or state", id, uri)
+			}
+		}
+	}
 	return &d, nil
 }
 
@@ -210,6 +240,12 @@ type server struct {
 	published, unpublished *rsa.PrivateKey
 	keyID                  string
 	mux                    *http.ServeMux
+	// publicURL is where browsers reach the issuer. Without it the OpenID
+	// Connect endpoints are not served.
+	publicURL string
+	// codes holds the sign-in codes issued and not yet exchanged.
+	codesMu sync.Mutex
+	codes   map[string]signIn
 }
 
 func newServer(d *deck, published *rsa.PrivateKey, now func() time.Time) (*server, error) {
@@ -217,11 +253,15 @@ func newServer(d *deck, published *rsa.PrivateKey, now func() time.Time) (*serve
 	if err != nil {
 		return nil, err
 	}
-	s := &server{deck: d, now: now, published: published, unpublished: unpublished, keyID: thumbprint(&published.PublicKey), mux: http.NewServeMux()}
+	s := &server{deck: d, now: now, published: published, unpublished: unpublished, keyID: thumbprint(&published.PublicKey), mux: http.NewServeMux(),
+		codes: map[string]signIn{}}
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok\n") })
 	s.mux.HandleFunc("GET /jwks", s.jwks)
 	s.mux.HandleFunc("POST /token", s.signBody)
 	s.mux.HandleFunc("GET /token/{name}", s.signPerson)
+	s.mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
+	s.mux.HandleFunc("GET /oauth/authorize", s.authorize)
+	s.mux.HandleFunc("POST /oauth/token", s.exchange)
 	return s, nil
 }
 
@@ -257,26 +297,39 @@ func (s *server) signPerson(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
-	person, ok := s.deck.People[name]
-	if !ok {
+	if _, ok := s.deck.People[name]; !ok {
 		http.Error(w, "no person named "+name+" in the deck", http.StatusNotFound)
 		return
 	}
-	now := s.now()
-	claims := map[string]any{"sub": name}
-	for k, v := range person {
-		claims[k] = v
-	}
-	claims["iss"] = s.deck.Issuer
-	claims["aud"] = s.deck.Audience
-	claims["iat"] = now.Unix()
-	claims["exp"] = now.Unix() + s.deck.LifetimeSeconds
-	body, err := jsonv2.Marshal(claims)
+	body, err := s.personClaims(name, s.deck.Audience, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.write(w, r, body)
+}
+
+// personClaims are the claims of a token for a person in the deck, for an
+// audience, with any extra claims such as a sign-in's nonce. An extra claim
+// set to nil removes that claim.
+func (s *server) personClaims(name, audience string, extra map[string]any) ([]byte, error) {
+	now := s.now()
+	claims := map[string]any{"sub": name}
+	for k, v := range s.deck.People[name] {
+		claims[k] = v
+	}
+	for k, v := range extra {
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
+	}
+	claims["iss"] = s.deck.Issuer
+	claims["aud"] = audience
+	claims["iat"] = now.Unix()
+	claims["exp"] = now.Unix() + s.deck.LifetimeSeconds
+	return jsonv2.Marshal(claims)
 }
 
 func (s *server) write(w http.ResponseWriter, r *http.Request, claims []byte) {

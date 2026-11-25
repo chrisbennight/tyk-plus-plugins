@@ -54,6 +54,10 @@ func (r *runner) drift() {
 			return
 		}
 		defer s.Close()
+		if got, want := s.InitializeResult().ProtocolVersion, r.wantVersion(d.Server, version); got != want {
+			r.fail(fmt.Sprintf("connect a %s client to listen to %s", version, d.Server), fmt.Sprintf("negotiated protocol %q, want %q", got, want))
+			return
+		}
 		// The older protocol's session is known to the server once it has
 		// been used.
 		if _, err := toolNames(s); err != nil {

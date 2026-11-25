@@ -39,6 +39,8 @@ Code Mode programs run on a sandbox host that uses gVisor. On a machine without 
 export SANDBOX_BACKEND=runc COMPOSE_FILE=compose.yaml:../sandbox/compose.runc.yaml
 ```
 
+The gateway and the sandbox host trust each other through certificates `sandbox-certs` makes, which last a day and are kept until then. Once they have expired, make new ones and restart both with them: `docker compose up -d --force-recreate sandbox-certs gateway sandbox`.
+
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
 To start only some parts, name them, for example `docker compose up -d notes` or `docker compose up -d gateway directory`. Compose reads every service's settings even when starting one, so set the two secrets first; any values do when the gateway is not among the parts.
@@ -89,7 +91,7 @@ Every proxy is under drift review, and `changing` exists to show it. The example
 | 8 | Only the server instructions change | The approved instructions are still given |
 | 9 | Only `lookup`'s `_meta` changes | Nothing; `_meta` is not part of a definition |
 | 10 | `lookup`'s description gains different text | Held separately from version 1's change |
-| 0 | Back to the approved version | Every tool works again. The earlier changes stay in the review queue, marked superseded, until a reviewer rejects them |
+| 0 | Back to the approved version | Every tool works again. The earlier changes stay in the review queue until a reviewer rejects them |
 
 Each switch tells connected clients that the tool list changed, in both protocol versions: on `subscriptions/listen` streams for `2026-07-28` clients, and on the session stream for `2025-11-25` clients. Clients that connect later see the change at once. Set `CHANGING_VERSION` before `docker compose up` to start the server at a later version, so drift is visible on first connect.
 

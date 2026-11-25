@@ -227,10 +227,13 @@ func (e *examples) checkCodeMode() error {
 	return nil
 }
 
+// codeModeTools are the tools the gateway answers itself where Code Mode is on.
+var codeModeTools = []string{"codemode.describe", "codemode.execute", "codemode.limits", "codemode.search"}
+
 // isCodeModeTool reports whether a tool is one the gateway answers itself on
 // a proxy where Code Mode is on.
 func (e *examples) isCodeModeTool(server, tool string) bool {
-	return e.expected.CodeMode != nil && slices.Contains(e.expected.CodeMode.Proxies, server) && strings.HasPrefix(tool, "codemode.")
+	return e.expected.CodeMode != nil && slices.Contains(e.expected.CodeMode.Proxies, server) && slices.Contains(codeModeTools, tool)
 }
 
 // checkDrift reports an error when the drift walk names an unknown caller or

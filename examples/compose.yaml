@@ -17,8 +17,11 @@ services:
     environment:
       CEDAR_REFRESH_INTERVAL: 2s
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
-      # Changes the gateway sees an upstream make wait here for review.
+      # Changes the gateway sees an upstream make wait here for review. A fixed
+      # name keeps one file per tool there however often the gateway is
+      # recreated.
       CEDAR_PENDING_DIR: /opt/tyk-gateway/cedar-pending
+      CEDAR_GATEWAY_ID: examples-gateway
       # Code Mode on three proxies, with runs on the sandbox host below.
       CODEMODE_SANDBOX_ADDRESS: sandbox:8443
       CODEMODE_SANDBOX_SERVER_NAME: sandbox
@@ -45,8 +48,10 @@ services:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
     networks: [default, gateway-store]
     depends_on:
-      sandbox:
-        condition: service_started
+      # Runs report unavailable until the sandbox host is up, so starting the
+      # gateway alone needs only the certificates.
+      sandbox-certs:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       policy:
@@ -96,13 +101,15 @@ services:
       sandbox-certs:
         condition: service_completed_successfully
 
-  # Makes a fresh sandbox certificate authority and certificates, valid for a
-  # day, each time the examples start.
+  # Makes a sandbox certificate authority and certificates, valid for a day,
+  # unless those already made are valid for another hour. The gateway and the
+  # sandbox read them once as they start, so they are not replaced while both
+  # use them; see README.md to renew them.
   sandbox-certs:
     build:
       context: ../tests
       target: sandbox-probe
-    command: ["certs", "/certs"]
+    command: ["ensure-certs", "/certs"]
     volumes:
       - sandbox-tls:/certs
 

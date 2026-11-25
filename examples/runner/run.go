@@ -48,10 +48,24 @@ func run(e *examples) bool {
 		fail(err)
 	}
 	// The expectations describe the changing server at version 0, where a
-	// review walk-through may have left it elsewhere.
+	// review walk-through may have left it elsewhere. The gateway decides
+	// calls on the definitions it last saw listed, so the tools are listed
+	// once before any call.
 	if d := e.expected.Drift; d != nil {
 		if err := setVersion(d.Server, 0); err != nil {
 			fail(fmt.Errorf("setting %s to version 0: %w", d.Server, err))
+		}
+		cred, err := creds.of(d.Caller)
+		if err != nil {
+			fail(err)
+		}
+		s, err := connect(cred, versions[0], d.Server, nil)
+		if err == nil {
+			_, err = toolNames(s)
+			s.Close()
+		}
+		if err != nil {
+			fail(fmt.Errorf("listing %s's tools at version 0: %w", d.Server, err))
 		}
 	}
 	for _, c := range e.expected.Calls {

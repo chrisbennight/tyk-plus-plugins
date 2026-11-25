@@ -122,14 +122,25 @@ func (r *runner) runProgram(what string, session *mcp.ClientSession, p codeProgr
 			r.pass(callWhat)
 		}
 	}
+	// The last permitted call to each server is the one it records, so its
+	// tool and arguments show the program's calls arrived as written.
+	last := map[string]call{}
+	for _, c := range p.Calls {
+		if c.Expect == "permitted" {
+			last[c.Server] = c
+		}
+	}
 	for _, server := range slices.Sorted(maps.Keys(want)) {
 		o, err := observe(server)
 		reachWhat := fmt.Sprintf("%s: %s ran %d tool calls", what, server, want[server])
+		c, called := last[server]
 		switch {
 		case err != nil:
 			r.fail(reachWhat, err.Error())
 		case o.Calls-before[server] != want[server]:
 			r.fail(reachWhat, fmt.Sprintf("it ran %d", o.Calls-before[server]))
+		case called && (o.Tool == nil || *o.Tool != c.Tool || !sameJSON(o.Arguments, c.Arguments)):
+			r.fail(reachWhat, fmt.Sprintf("its last call was not %s %s", c.Tool, arguments(c.Arguments)))
 		default:
 			r.pass(reachWhat)
 		}

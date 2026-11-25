@@ -13,7 +13,7 @@ Operators reach it through the gateway at `/extensions/admin/`.
 
 ## Decisions
 
-Approve and Reject apply to exactly the fingerprint the page showed, against the policy set active when the page loaded. If either has moved on, nothing changes and the queue says so. A decision makes a new set active, so `cedar-policy activate` with the previous set rolls it back.
+Approve and Reject apply to exactly the fingerprint the page showed. A tool definition can be approved only when it is what gateways last saw the upstream declare: approving one the upstream has replaced could only refuse calls, and one no gateway has seen it declare may have been queued before the upstream changed. Either can still be rejected. Every decision applies against the policy set active when the page loaded; if another set has become active since, nothing changes and the queue says so. A decision makes a new set active, so `cedar-policy activate` with the previous set rolls it back.
 
 ## Sign-in and roles
 
@@ -32,7 +32,8 @@ An account in neither group is refused. A sign-in in progress is kept only in th
 | --- | --- |
 | `ADMIN_PUBLIC_URL` | The dashboard's address as browsers reach it, for example `https://gateway.example.com/extensions/admin`. Required. Use `https` outside a local or test network, so session cookies are only sent securely. |
 | `ADMIN_OIDC_ISSUER` | The identity provider's issuer, as its tokens name it. Required. |
-| `ADMIN_OIDC_DISCOVERY_URL` | Where to fetch the provider's configuration when it is reached at another address than its issuer, as on a private network. Optional. The configuration names the keys that verify ID tokens and where the client secret is sent, so use `https`, or a network no one else can alter; the dashboard warns at start when either address is not `https`. |
+| `ADMIN_OIDC_DISCOVERY_URL` | Where to fetch the provider's configuration when it is reached at another address than its issuer, as on a private network. Optional. The configuration names the keys that verify ID tokens and where the client secret is sent, so it must be `https` unless `ADMIN_OIDC_ALLOW_INSECURE_HTTP` allows otherwise. |
+| `ADMIN_OIDC_ALLOW_INSECURE_HTTP` | Set to `true` to allow reaching the identity provider without `https`, on a local or test network only. Otherwise the dashboard refuses to start when the issuer or discovery URL is not `https`, and refuses sign-in when the provider's token endpoint is not. |
 | `ADMIN_OIDC_CLIENT_ID` | The dashboard's client ID at the provider. Required. |
 | `ADMIN_OIDC_CLIENT_SECRET_FILE` | A file holding the client secret. `ADMIN_OIDC_CLIENT_SECRET` is read when no file is set. One is required. |
 | `ADMIN_GROUPS_CLAIM` | The ID token claim listing the operator's groups. Defaults to `groups`. |

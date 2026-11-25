@@ -207,6 +207,12 @@ func holds(d Decision) bool {
 	return err == nil && fp == d.Fingerprint
 }
 
+// ErrNotDeclared reports a tool definition to approve that no gateway has
+// seen the active set's upstream declare. Review entries do not record the
+// upstream that declared them, so one queued before the upstream changed
+// could otherwise be approved for an upstream that never declared it.
+var ErrNotDeclared = errors.New("no gateway has seen the upstream declare this tool, so this definition cannot be approved yet")
+
 // ErrSuperseded reports a tool definition to approve that the upstream has
 // since replaced. Gateways compare the approved definition with what the
 // upstream declares now, so approving it could only refuse calls, even ones
@@ -214,14 +220,17 @@ func holds(d Decision) bool {
 var ErrSuperseded = errors.New("the upstream now declares a different definition of this tool, so approving this one could only refuse calls; review what it declares now")
 
 // Current checks that a tool definition is the one gateways last saw the
-// upstream declare, or that none has been seen; otherwise it returns
-// ErrSuperseded.
+// upstream declare. It returns ErrNotDeclared when none has been seen, and
+// ErrSuperseded when another has.
 func Current(review *drift.Review, view policy.DriftView, proxy, tool, fingerprint string) error {
 	newest, found, err := review.Newest(proxy, tool, view.Upstream())
 	if err != nil {
 		return err
 	}
-	if found && newest.Fingerprint != fingerprint {
+	if !found {
+		return ErrNotDeclared
+	}
+	if newest.Fingerprint != fingerprint {
 		return ErrSuperseded
 	}
 	return nil

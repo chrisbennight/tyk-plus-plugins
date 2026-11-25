@@ -22,21 +22,25 @@ type config struct {
 	clientID, clientSecret     string
 	groupsClaim                string
 	reviewerGroup, viewerGroup string
+	// insecureProvider allows reaching the identity provider without
+	// https, for local and test networks only.
+	insecureProvider bool
 }
 
 func readConfig() (config, error) {
 	c := config{
-		listen:        envOr("ADMIN_LISTEN", ":8000"),
-		publicURL:     os.Getenv("ADMIN_PUBLIC_URL"),
-		store:         envOr("ADMIN_STORE", "/opt/tyk-gateway/cedar"),
-		pending:       envOr("ADMIN_PENDING_DIR", "/opt/tyk-gateway/cedar-pending"),
-		issuer:        os.Getenv("ADMIN_OIDC_ISSUER"),
-		discoveryURL:  os.Getenv("ADMIN_OIDC_DISCOVERY_URL"),
-		clientID:      os.Getenv("ADMIN_OIDC_CLIENT_ID"),
-		clientSecret:  os.Getenv("ADMIN_OIDC_CLIENT_SECRET"),
-		groupsClaim:   envOr("ADMIN_GROUPS_CLAIM", "groups"),
-		reviewerGroup: os.Getenv("ADMIN_REVIEWER_GROUP"),
-		viewerGroup:   os.Getenv("ADMIN_VIEWER_GROUP"),
+		listen:           envOr("ADMIN_LISTEN", ":8000"),
+		publicURL:        os.Getenv("ADMIN_PUBLIC_URL"),
+		store:            envOr("ADMIN_STORE", "/opt/tyk-gateway/cedar"),
+		pending:          envOr("ADMIN_PENDING_DIR", "/opt/tyk-gateway/cedar-pending"),
+		issuer:           os.Getenv("ADMIN_OIDC_ISSUER"),
+		discoveryURL:     os.Getenv("ADMIN_OIDC_DISCOVERY_URL"),
+		insecureProvider: os.Getenv("ADMIN_OIDC_ALLOW_INSECURE_HTTP") == "true",
+		clientID:         os.Getenv("ADMIN_OIDC_CLIENT_ID"),
+		clientSecret:     os.Getenv("ADMIN_OIDC_CLIENT_SECRET"),
+		groupsClaim:      envOr("ADMIN_GROUPS_CLAIM", "groups"),
+		reviewerGroup:    os.Getenv("ADMIN_REVIEWER_GROUP"),
+		viewerGroup:      os.Getenv("ADMIN_VIEWER_GROUP"),
 	}
 	// A secret in a file keeps it out of the process environment.
 	if file := os.Getenv("ADMIN_OIDC_CLIENT_SECRET_FILE"); file != "" {
@@ -84,11 +88,17 @@ func main() {
 		slog.Warn("ADMIN_PUBLIC_URL is not https: session cookies are sent without the Secure flag. Use this only on a local or test network.")
 	}
 	for _, provider := range []string{cfg.issuer, cfg.discoveryURL} {
-		if provider != "" && !strings.HasPrefix(provider, "https://") {
-			// The provider's configuration names the keys that verify ID
-			// tokens and the endpoint that receives the client secret.
-			slog.Warn("The identity provider is reached without https: whoever can alter that traffic can sign in as anyone. Use this only on a local or test network.", "url", provider)
+		if provider == "" || strings.HasPrefix(provider, "https://") {
+			continue
 		}
+		// The provider's configuration names the keys that verify ID tokens
+		// and the endpoint that receives the client secret, so whoever can
+		// alter it could sign in as anyone.
+		if !cfg.insecureProvider {
+			fmt.Fprintf(os.Stderr, "cedar-admin: the identity provider must be reached with https (%s); set ADMIN_OIDC_ALLOW_INSECURE_HTTP=true only on a local or test network\n", provider)
+			os.Exit(1)
+		}
+		slog.Warn("The identity provider is reached without https, as ADMIN_OIDC_ALLOW_INSECURE_HTTP allows. Use this only on a local or test network.", "url", provider)
 	}
 	srv := &http.Server{
 		Addr:              cfg.listen,

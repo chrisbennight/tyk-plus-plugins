@@ -135,7 +135,11 @@ func (a *auth) connect(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifi
 	a.provider = provider
 	if token := provider.Endpoint().TokenURL; !strings.HasPrefix(token, "https://") {
 		// The client secret is sent to the token endpoint.
-		slog.Warn("The identity provider's token endpoint is not https: the client secret is sent in the clear. Use this only on a local or test network.", "url", token)
+		if !a.cfg.insecureProvider {
+			a.provider = nil
+			return nil, nil, fmt.Errorf("identity provider: the token endpoint %s is not https; set ADMIN_OIDC_ALLOW_INSECURE_HTTP=true only on a local or test network", token)
+		}
+		slog.Warn("The identity provider's token endpoint is not https, as ADMIN_OIDC_ALLOW_INSECURE_HTTP allows.", "url", token)
 	}
 	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.cfg.clientID})
 	a.oauth = &oauth2.Config{
@@ -210,10 +214,27 @@ func (a *auth) expire() {
 
 // localPath keeps a return path only when it stays within the dashboard.
 func localPath(next string) string {
-	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") {
+	if !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\\\r\n") || hasDotSegment(next) {
 		return "/"
 	}
 	return next
+}
+
+// hasDotSegment reports whether a path has a "." or ".." segment, written
+// plainly or percent-encoded, which a browser would resolve, possibly to
+// somewhere outside the dashboard.
+func hasDotSegment(next string) bool {
+	p, _, _ := strings.Cut(next, "?")
+	p, err := url.PathUnescape(p)
+	if err != nil {
+		return true
+	}
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "." || segment == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // claims are the ID token's claims the dashboard reads; the groups claim is

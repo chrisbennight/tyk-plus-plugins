@@ -67,6 +67,8 @@ services:
       ADMIN_PUBLIC_URL: http://gateway:8080/extensions/admin
       ADMIN_OIDC_ISSUER: https://issuer.test
       ADMIN_OIDC_DISCOVERY_URL: http://issuer:8000
+      # The test issuer has no TLS; this network is the test's own.
+      ADMIN_OIDC_ALLOW_INSECURE_HTTP: "true"
       ADMIN_OIDC_CLIENT_ID: drift-review
       ADMIN_OIDC_CLIENT_SECRET: test-only-dashboard-secret
       ADMIN_OIDC_CLIENT_SECRET_FILE: ""

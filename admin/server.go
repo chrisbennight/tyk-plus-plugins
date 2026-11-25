@@ -285,6 +285,7 @@ func doneMessage(code string) string {
 		"rejected":             "Rejected. The definition will not be queued again.",
 		"stale":                "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
 		"several-instructions": "Nothing was approved: several changed instructions are waiting, and gateways do not record which one the upstream sends now. Reject the ones you do not want, then approve the one you do.",
+		"not-declared":         "Nothing was approved: no gateway has seen the upstream declare this tool, so it cannot be told that this is its definition. Approve it once a gateway lists the tool.",
 		"superseded":           "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
 	}[code]
 }
@@ -377,8 +378,11 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 				data["Definition"] = driftreview.Indented(entry.Definition)
 			}
 		}
-		if newest, found, err := st.review.Newest(proxy, tool, view.Upstream()); err == nil && found && newest.Fingerprint != fingerprint {
+		switch err := driftreview.Current(st.review, view, proxy, tool, fingerprint); {
+		case errors.Is(err, driftreview.ErrSuperseded):
 			data["Superseded"] = true
+		case errors.Is(err, driftreview.ErrNotDeclared):
+			data["NotDeclared"] = true
 		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = kind, entry.FirstSeen, driftreview.ShownName(entry.Gateway)
 		data["Approved"] = approvedFingerprint == fingerprint
@@ -564,6 +568,9 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			switch err := driftreview.Current(review, view, proxy, tool, fingerprint); {
 			case errors.Is(err, driftreview.ErrSuperseded):
 				http.Redirect(w, r, back+"&done=superseded", http.StatusSeeOther)
+				return
+			case errors.Is(err, driftreview.ErrNotDeclared):
+				http.Redirect(w, r, back+"&done=not-declared", http.StatusSeeOther)
 				return
 			case err != nil:
 				s.fail(w, sess, http.StatusServiceUnavailable, "The shared declarations of this tool cannot be read, so it cannot be told whether this definition is still current.")

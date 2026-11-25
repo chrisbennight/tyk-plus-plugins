@@ -298,6 +298,23 @@ func TestASupersededDefinitionCannotBeApproved(t *testing.T) {
 	}
 }
 
+func TestADefinitionNoGatewaySawDeclaredCannotBeApproved(t *testing.T) {
+	d := newDashboard(t)
+	// An entry queued with no declaration from the active set's upstream,
+	// as when the upstream changed after it was queued.
+	fp := fingerprint(t, changedChange)
+	d.write(filepath.Join(encode("governed"), "tools", encode("change"), fp+".json"), map[string]any{
+		"proxy": "governed", "tool": "change", "fingerprint": fp, "definition": json.RawMessage(changedChange), "firstSeen": time.Now(), "gateway": "one"})
+	cookie, csrf := d.signIn(reviewer)
+	if page := body(t, d.get("/change?proxy=governed&tool=change&fp="+fp, cookie)); !strings.Contains(page, "Approve (not declared yet)") {
+		t.Fatalf("change page:\n%s", page)
+	}
+	res := d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {fp}, "base": {active(t, d.cfg.store)}, "action": {"approve"}})
+	if !strings.HasSuffix(res.Header.Get("Location"), "done=not-declared") {
+		t.Fatalf("approving an undeclared definition: %s", res.Header.Get("Location"))
+	}
+}
+
 func TestTheSignInCookieCarriesItsStateIntact(t *testing.T) {
 	l := loginState{state: "s", nonce: "n", verifier: "v-._~", next: "/queue?proxy=a.b", started: time.Unix(1700000000, 0)}
 	got, ok := decodeLogin(l.encode())
@@ -414,7 +431,8 @@ func TestRolesComeFromTheGroupsClaim(t *testing.T) {
 }
 
 func TestReturnPathsStayInTheDashboard(t *testing.T) {
-	for next, want := range map[string]string{"/queue?proxy=a": "/queue?proxy=a", "//evil.example": "/", "https://evil.example": "/", "": "/", "/\\evil": "/"} {
+	for next, want := range map[string]string{"/queue?proxy=a": "/queue?proxy=a", "//evil.example": "/", "https://evil.example": "/", "": "/", "/\\evil": "/",
+		"/../outside": "/", "/a/%2e%2e/outside": "/", "/queue?next=..": "/queue?next=.."} {
 		if got := localPath(next); got != want {
 			t.Errorf("localPath(%q) = %q, want %q", next, got, want)
 		}

@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -59,7 +61,7 @@ func driftSuite(k keys, version string) {
 	// approved declaration it read from the shared directory.
 	awaitSharedDeclaration("governed", "lookup", listedAt)
 	call(connectAt(peerGateway, k.support, version), k.support, "lookup", args("count", 1), "found")
-	checkPendingChange("governed", "change", catalog["change"])
+	queued := checkPendingChange("governed", "change", catalog["change"])
 	check(sameJSON(listed["lookup"], catalog["lookup"]), "%s: lookup listed as %v", version, listed["lookup"])
 	call(c, k.support, "lookup", args("count", 1), "found")
 	changed := call(c, k.operator, "change", args("count", 2))
@@ -74,7 +76,9 @@ func driftSuite(k keys, version string) {
 	check(sameJSON(listed["change"], approvedChange), "%s: change listed as %v", version, listed["change"])
 	call(c, k.operator, "change", args("count", 2))
 
-	// Approving what the upstream declares lets the call through again.
+	// A reviewer finds the change the gateways queued, rejects it, and then
+	// approves it, with cedar-policy drift.
+	reviewDrift(c, k.operator, version, queued)
 	tools["change"] = map[string]any{"definition": catalog["change"], "arguments": args("count", "long")}
 	inventory(map[string]any{}, tools)
 	call(c, k.operator, "change", args("count", 2), "updated")
@@ -114,8 +118,8 @@ func driftSuite(k keys, version string) {
 
 // checkPendingChange checks that the drift review directory holds an entry
 // for a changed tool, holding exactly the definition the upstream declared,
-// filed under its fingerprint.
-func checkPendingChange(proxy, tool string, declared map[string]any) {
+// filed under its fingerprint, and returns that fingerprint.
+func checkPendingChange(proxy, tool string, declared map[string]any) string {
 	encode := func(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
 	files, _ := filepath.Glob(filepath.Join("/pending", encode(proxy), "tools", encode(tool), "*.json"))
 	check(len(files) > 0, "no review entry for %s on %s", tool, proxy)
@@ -130,6 +134,58 @@ func checkPendingChange(proxy, tool string, declared map[string]any) {
 			regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(entry.Fingerprint) &&
 			filepath.Base(file) == entry.Fingerprint+".json", "review entry %s: %s", file, data)
 	}
+	var entry struct{ Fingerprint string }
+	data, _ := os.ReadFile(files[0])
+	json.Unmarshal(data, &entry)
+	return entry.Fingerprint
+}
+
+// reviewDrift reviews the queued change of the change tool with the real
+// cedar-policy drift commands, against the store and directory the gateways
+// use. Rejecting it keeps calls refused on both gateways; approving it, which
+// also lifts the rejection, lets calls through on both.
+func reviewDrift(c *conn, cred credential, version, fingerprint string) {
+	listed := reviewCommand("list")
+	check(strings.Contains(listed, "governed\tchanged\ttool change\t"+fingerprint+"\tlatest"), "%s: drift list:\n%s", version, listed)
+	shown := reviewCommand("show", "-proxy", "governed", "-tool", "change", fingerprint)
+	check(strings.Contains(shown, "Changed tool change on governed") && strings.Contains(shown, "Fingerprint: "+fingerprint) &&
+		strings.Contains(shown, "Description changed:\n- An approved description the upstream no longer declares\n+ "), "%s: drift show:\n%s", version, shown)
+
+	rejected := activeAfter(reviewCommand("reject", "-proxy", "governed", "-tool", "change", "-label", "probe reject", fingerprint))
+	listed = reviewCommand("list")
+	check(!strings.Contains(listed, fingerprint), "%s: a rejected change was listed:\n%s", version, listed)
+	call(c, cred, "change", args("count", 2))
+	call(connectAt(peerGateway, cred, version), cred, "change", args("count", 2))
+
+	approved := activeAfter(reviewCommand("approve", "-proxy", "governed", "-tool", "change", "-label", "probe approve", fingerprint))
+	check(approved != rejected, "%s: approval did not publish a new set", version)
+	// Approving lifts the rejection, so the definition is reviewed again if
+	// the upstream returns to it after another is approved.
+	inventory, err := os.ReadFile(filepath.Join(policyDir, "sets", approved, "approved_tools.json"))
+	check(err == nil && !strings.Contains(string(inventory), fingerprint), "%s: the approved set still rejects %s: %v\n%s", version, fingerprint, err, inventory)
+	listed = reviewCommand("list")
+	check(!strings.Contains(listed, fingerprint), "%s: an approved change was listed:\n%s", version, listed)
+	call(c, cred, "change", args("count", 2), "updated")
+	call(connectAt(peerGateway, cred, version), cred, "change", args("count", 2), "updated")
+}
+
+// reviewCommand runs a cedar-policy drift command against the shared store and
+// directory and returns its output; the command must succeed.
+func reviewCommand(command string, arguments ...string) string {
+	full := append([]string{"drift", command, "-store", policyDir, "-pending", "/pending"}, arguments...)
+	out, err := exec.Command("/cedar-policy", full...).CombinedOutput()
+	check(err == nil, "cedar-policy %v: %v\n%s", full, err, out)
+	return string(out)
+}
+
+// activeAfter waits until both gateways enforce the set a drift decision
+// printed, and returns it.
+func activeAfter(output string) string {
+	set := strings.TrimSpace(output)
+	check(regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(set), "drift decision printed %q", output)
+	awaitReport(set, "activated")
+	awaitPeerSet(set)
+	return set
 }
 
 // awaitPeerSet waits until the peer gateway enforces a set.

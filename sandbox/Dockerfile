@@ -4,10 +4,11 @@
 FROM golang:1.26.10-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY protocol/go.mod protocol/
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
-    go vet ./... && go test -race ./... && \
+    go vet ./... && go test -race ./... && (cd protocol && go vet ./... && go test -race ./...) && \
     CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/sandbox-launcher ./cmd/sandbox-service ./cmd/sandbox-worker && \
     mkdir -p /rootfs/proc /rootfs/dev /rootfs/scratch && chmod 0777 /rootfs/scratch && \
     cp /out/sandbox-worker /rootfs/worker && \

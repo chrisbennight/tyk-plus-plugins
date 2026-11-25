@@ -25,6 +25,7 @@ func main() {
 	}
 	k := keys{keyCred(key("support")), keyCred(key("operator")), keyCred(key("guest"))}
 	policySuite(k)
+	codeModeSuite(k)
 	for _, version := range []string{olderProtocol, newerProtocol} {
 		baseline(k, version)
 		driftSuite(k, version)
@@ -37,7 +38,7 @@ func main() {
 // gateway must be ready too.
 func waitForGateway() {
 	for range 60 {
-		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(peerGateway) && upstreamUp() {
+		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(secondGateway) && apiLoaded(peerGateway) && upstreamUp() {
 			return
 		}
 		time.Sleep(time.Second)

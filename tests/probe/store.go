@@ -129,8 +129,11 @@ func observed() (int, any) {
 
 func key(role string) string {
 	body, _ := json.Marshal(map[string]any{"org_id": "default",
-		"access_rights": map[string]any{"governed": map[string]any{"api_id": "governed", "versions": []string{"Default"}}},
-		"quota_max":     -1, "rate": 100, "per": 1,
+		"access_rights": map[string]any{
+			"governed":  map[string]any{"api_id": "governed", "versions": []string{"Default"}},
+			"governed2": map[string]any{"api_id": "governed2", "versions": []string{"Default"}},
+		},
+		"quota_max": -1, "rate": 100, "per": 1,
 		"meta_data": map[string]any{"cedar": map[string]any{"issuer": "integration", "subject": role, "roles": []string{role}}}})
 	req, _ := http.NewRequest(http.MethodPost, "http://gateway:9696/tyk/keys/create", bytes.NewReader(body))
 	req.Header.Set("X-Tyk-Authorization", os.Getenv("TYK_GW_SECRET"))

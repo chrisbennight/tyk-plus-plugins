@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/TykTechnologies/tyk/ctx"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/codemode"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/identity"
 	jsonv2 "github.com/go-json-experiment/json"
@@ -22,6 +23,9 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	// The context also holds the raw credential, so only claims are read from it.
 	data, _ := r.Context().Value(ctx.ContextData).(map[string]any)
 	who, method, callerErr := identity.Resolve(data, metadata, claimNames)
+	// A nested call from a Code Mode run carries the plug-in's own header,
+	// which is removed here so it never reaches an upstream.
+	nested, isNested := takeNested(r)
 	// Every request needs an identifiable caller, not only tool calls, so a
 	// credential the plug-in rejects cannot reach any other MCP method. Tool
 	// calls are refused below, through the logged decision. Other requests
@@ -61,6 +65,8 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			Arguments json.RawMessage `json:"arguments"`
 		} `json:"params"`
 	}
+	// builtIn is set when the plug-in answers the call itself.
+	builtIn := false
 	body, readErr := readBody(r)
 	validBody := readErr == nil && jsonv2.Unmarshal(body, &call) == nil
 	name := ctx.GetMCPPrimitiveName(r)
@@ -77,6 +83,19 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
+	case isNested && nested.Proxy != oas.GetTykExtension().Info.ID:
+		// The listen path Code Mode was given for the proxy leads elsewhere.
+		reason = "code_mode_wrong_proxy"
+	case isNested && isCodeModeTool(name):
+		reason = "code_mode_recursion"
+	case codeModeOn(oas.GetTykExtension().Info.ID) && isCodeModeTool(name):
+		// Code Mode tools ship with the plug-in, so they are not drift
+		// reviewed, but the caller's rules must permit them like any tool.
+		reason = "unknown_tool"
+		if validBody && call.Method == "tools/call" && call.Params.Name == name && name == codemode.ExecuteTool {
+			builtIn = true
+			reason, rules = state.DecideBuiltIn(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name)
+		}
 	default:
 		reason = "invalid_call"
 		proxy := oas.GetTykExtension().Info.ID
@@ -109,7 +128,19 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	slog.Info("Cedar authorization", "identity", method, "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules)
+	attrs := []any{"identity", method, "issuer", who.Issuer, "subject", who.Subject, "tool", name, "allowed", reason == "permitted", "reason", reason, "policy_version", version, "policy_label", label, "rules", rules}
+	if isNested {
+		attrs = append(attrs, "code_mode_run", nested.Run)
+	}
+	slog.Info("Cedar authorization", attrs...)
+	if reason == "permitted" && builtIn {
+		var outer struct {
+			Params json.RawMessage `json:"params"`
+		}
+		_ = json.Unmarshal(body, &outer)
+		execute(w, r, call.ID, outer.Params, who, method, oas.GetTykExtension().Info.ID)
+		return
+	}
 	if reason == "permitted" {
 		return
 	}

@@ -9,6 +9,7 @@ x-gateway-image: &gateway-image
     context: ../gateway
     additional_contexts:
       mcp-pdp: ../plugins/mcp-pdp
+      sandbox-protocol: ../sandbox/protocol
 
 services:
   gateway:

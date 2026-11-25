@@ -10,9 +10,12 @@ fail() { echo "FAILED: $*" >&2; exit 1; }
 
 # The module builds inside the Tyk workspace, which supplies some checksums;
 # built on its own, Go records the missing ones in this container only.
+# The plug-in shares the sandbox message format, so both keep their places.
 build=$(mktemp -d)
-cp -R plugins/mcp-pdp "$build/"
-(cd "$build/mcp-pdp" && CGO_ENABLED=0 go build -mod=mod -o /usr/local/bin/cedar-policy ./cmd/cedar-policy)
+mkdir -p "$build/plugins" "$build/sandbox"
+cp -R plugins/mcp-pdp "$build/plugins/"
+cp -R sandbox/protocol "$build/sandbox/"
+(cd "$build/plugins/mcp-pdp" && CGO_ENABLED=0 go build -mod=mod -o /usr/local/bin/cedar-policy ./cmd/cedar-policy)
 
 groupadd policy
 for user in alice bob reader; do

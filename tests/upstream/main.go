@@ -46,6 +46,11 @@ func main() {
 			http.Error(w, "unexpected caller credential", http.StatusBadRequest)
 			return
 		}
+		// The gateway removes the header that marks Code Mode's nested calls.
+		if r.Header.Get("X-Code-Mode-Call") != "" {
+			http.Error(w, "unexpected Code Mode header", http.StatusBadRequest)
+			return
+		}
 		handler.ServeHTTP(w, r)
 	})
 	http.HandleFunc("/requests", func(w http.ResponseWriter, _ *http.Request) {

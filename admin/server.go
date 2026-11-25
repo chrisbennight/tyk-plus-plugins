@@ -70,6 +70,14 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /change", s.signedIn(viewer, false, s.change))
 	mux.HandleFunc("GET /tools", s.signedIn(viewer, false, s.tools))
 	mux.HandleFunc("POST /decide", s.signedIn(reviewer, true, s.decide))
+	mux.HandleFunc("POST /bulk", s.signedIn(reviewer, true, s.bulkReview))
+	mux.HandleFunc("POST /bulk/decide", s.signedIn(reviewer, true, s.bulkDecide))
+	mux.HandleFunc("POST /revoke", s.signedIn(reviewer, true, s.revoke))
+	mux.HandleFunc("GET /history", s.signedIn(viewer, false, s.history))
+	mux.HandleFunc("POST /rollback", s.signedIn(reviewer, true, s.rollback))
+	mux.HandleFunc("GET /maintenance", s.signedIn(viewer, false, s.maintenance))
+	mux.HandleFunc("POST /prune", s.signedIn(reviewer, true, s.prune))
+	mux.HandleFunc("POST /retire", s.signedIn(reviewer, true, s.retire))
 	return headers(mux)
 }
 
@@ -229,9 +237,10 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request, sess *session)
 
 // queueItem is one waiting change on the review queue.
 type queueItem struct {
-	Tool, Shown, Kind, Fingerprint, State, Gateway string
-	FirstSeen                                      time.Time
-	Instructions                                   bool
+	Tool, Shown, Kind, Fingerprint, State, Gateway, Value string
+	Flags                                                 []driftreview.Flag
+	FirstSeen                                             time.Time
+	Instructions                                          bool
 }
 
 func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
@@ -240,6 +249,7 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 		return
 	}
 	defer st.review.Close()
+	names := toolNames(st.review, view, proxy)
 	tools, problems, err := driftreview.PendingTools(st.review, view, proxy)
 	if err != nil {
 		s.fail(w, sess, http.StatusServiceUnavailable, err.Error())
@@ -260,20 +270,27 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 			state = "no declaration shared yet"
 		}
 		items = append(items, queueItem{Tool: t.Entry.Tool, Shown: driftreview.ShownName(t.Entry.Tool), Kind: t.Kind + " tool",
-			Fingerprint: t.Entry.Fingerprint, State: state, Gateway: driftreview.ShownName(t.Entry.Gateway), FirstSeen: t.Entry.FirstSeen})
+			Fingerprint: t.Entry.Fingerprint, State: state, Gateway: driftreview.ShownName(t.Entry.Gateway), FirstSeen: t.Entry.FirstSeen,
+			Value: item{Tool: t.Entry.Tool, Fingerprint: t.Entry.Fingerprint}.encode(),
+			Flags: driftreview.Flags(t.Entry.Definition, "", driftreview.OtherTools(names, t.Entry.Tool))})
 	}
 	for _, e := range instructions {
 		// Gateways record changed instructions but not which text an
 		// upstream declares now, so whether these are current is unknown.
 		items = append(items, queueItem{Shown: "instructions", Kind: "changed instructions", Fingerprint: e.Fingerprint, State: "not tracked for instructions",
-			Gateway: driftreview.ShownName(e.Gateway), FirstSeen: e.FirstSeen, Instructions: true})
+			Gateway: driftreview.ShownName(e.Gateway), FirstSeen: e.FirstSeen, Instructions: true,
+			Value: item{Instructions: true, Fingerprint: e.Fingerprint}.encode(), Flags: driftreview.Flags(nil, e.Instructions, names)})
 	}
 	var shown []string
 	for _, p := range append(problems, more...) {
 		shown = append(shown, driftreview.ShownName(p.Error()))
 	}
+	done := doneMessage(r.URL.Query().Get("done"))
+	if done == "" {
+		done = bulkMessage(r.URL.Query())
+	}
 	s.render(w, "queue", s.page(sess, "Review queue", map[string]any{
-		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Items": items, "Problems": shown, "Done": doneMessage(r.URL.Query().Get("done")),
+		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Items": items, "Problems": shown, "Done": done, "Base": st.set, "Promoted": st.promoted,
 	}))
 }
 
@@ -287,6 +304,8 @@ func doneMessage(code string) string {
 		"several-instructions": "Nothing was approved: several changed instructions are waiting, and gateways do not record which one the upstream sends now. Reject the ones you do not want, then approve the one you do.",
 		"not-declared":         "Nothing was approved: no gateway has seen the upstream declare this tool, so it cannot be told that this is its definition. Approve it once a gateway lists the tool.",
 		"superseded":           "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
+		"revoked":              "Revoked. Gateways refuse the tool's calls once they load the new set, until a definition is approved again.",
+		"rolled-back":          "Rolled back. The previous set is active again; gateways enforce it within their refresh interval.",
 	}[code]
 }
 
@@ -326,9 +345,10 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 		return
 	}
 	defer st.review.Close()
+	names := toolNames(st.review, view, proxy)
 	q := r.URL.Query()
 	fingerprint, tool, instructions := q.Get("fp"), q.Get("tool"), q.Get("instructions") == "1"
-	data := map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Tool": tool, "Instructions": instructions, "Fingerprint": fingerprint, "Base": st.set, "Full": q.Get("full") == "1"}
+	data := map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Tool": tool, "Instructions": instructions, "Fingerprint": fingerprint, "Base": st.set, "Promoted": st.promoted, "Full": q.Get("full") == "1"}
 	var diff string
 	var length int
 	if instructions {
@@ -350,6 +370,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			}
 		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = "Changed instructions", entry.FirstSeen, driftreview.ShownName(entry.Gateway)
+		data["Flags"] = driftreview.Flags(nil, entry.Instructions, names)
 		data["Approved"] = policy.InstructionsFingerprint(approved) == fingerprint
 		data["Rejected"] = view.RejectedInstructions(fingerprint)
 	} else {
@@ -385,6 +406,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			data["NotDeclared"] = true
 		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = kind, entry.FirstSeen, driftreview.ShownName(entry.Gateway)
+		data["Flags"] = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(names, tool))
 		data["Approved"] = approvedFingerprint == fingerprint
 		data["Rejected"] = view.Rejected(tool, fingerprint)
 		data["ToolShown"] = driftreview.ShownName(tool)
@@ -420,7 +442,9 @@ func highlight(lines []driftreview.DiffLine) []diffRow {
 				before, after := lines[removed+k].Text, lines[added+k].Text
 				// Comparing words costs their product; past the page's
 				// budget, lines are shown whole rather than compared.
-				cost := len(strings.Fields(before)) * len(strings.Fields(after))
+				// The cost counts the tokens wordDiff compares, so runs of
+				// spaces count as it splits them.
+				cost := len(strings.SplitAfter(before, " ")) * len(strings.SplitAfter(after, " "))
 				o, n := []diffPart{{Text: before, Changed: true}}, []diffPart{{Text: after, Changed: true}}
 				if cost <= budget {
 					budget -= cost
@@ -494,18 +518,26 @@ func wordDiff(before, after string) ([]diffPart, []diffPart) {
 
 // toolRow is one tool on the Tools page.
 type toolRow struct {
-	Tool, Name, Reason, Waiting string
-	Callable                    bool
-	Seen                        time.Time
-	Found                       bool
+	Tool, Name, Reason, Waiting, Approved string
+	// PermitChecks counts the activation checks that expect the tool to be
+	// permitted, which revoking its approval would remove.
+	PermitChecks int
+	Callable     bool
+	Seen         time.Time
+	Found        bool
 }
 
 func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
-	st, _, proxy, ok := s.proxy(w, r, sess)
+	st, view, proxy, ok := s.proxy(w, r, sess)
 	if !ok {
 		return
 	}
 	defer st.review.Close()
+	_, contents, err := policy.ReadSet(s.cfg.store, st.set)
+	if err != nil {
+		s.fail(w, sess, http.StatusServiceUnavailable, "The active policy set cannot be read.")
+		return
+	}
 	states, err := driftreview.ToolStates(st.review, st.snapshot, proxy)
 	if err != nil {
 		s.fail(w, sess, http.StatusServiceUnavailable, err.Error())
@@ -513,10 +545,16 @@ func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
 	}
 	rows := make([]toolRow, 0, len(states))
 	for _, t := range states {
-		rows = append(rows, toolRow{Tool: t.Tool, Name: driftreview.ShownName(t.Tool), Reason: t.Reason, Waiting: t.Waiting,
-			Callable: t.Callable, Seen: t.Seen, Found: t.Found})
+		row := toolRow{Tool: t.Tool, Name: driftreview.ShownName(t.Tool), Reason: t.Reason, Waiting: t.Waiting,
+			Callable: t.Callable, Seen: t.Seen, Found: t.Found, Approved: t.Approved}
+		if t.Approved != "" {
+			found, _ := driftreview.PermitChecks(contents["checks.json"], proxy, t.Tool, view.Upstream())
+			row.PermitChecks = len(found)
+		}
+		rows = append(rows, row)
 	}
-	s.render(w, "tools", s.page(sess, "Tools", map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Rows": rows}))
+	s.render(w, "tools", s.page(sess, "Tools", map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Rows": rows,
+		"Base": st.set, "Promoted": st.promoted, "Done": doneMessage(r.URL.Query().Get("done"))}))
 }
 
 // decide approves or rejects exactly the fingerprint the page showed,
@@ -610,6 +648,12 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 	// The label travels into gateways' status and logs, so it names the
 	// decision, not the reviewer; the decision log records who made it.
 	label := fmt.Sprintf("dashboard %s %s %s", action, driftreview.Describe(d), short(fingerprint))
+	if !s.sameActivation(r) {
+		// A roll back can make the page's set active again later; the form
+		// names the activation it was made against.
+		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
+		return
+	}
 	set, err := driftreview.Apply(s.cfg.store, base, label, sess.actor, s.now, []driftreview.Decision{d})
 	switch {
 	case errors.Is(err, driftreview.ErrStale):

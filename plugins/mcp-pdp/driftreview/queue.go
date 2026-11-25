@@ -257,15 +257,18 @@ func Apply(store, base, label string, actor policy.Actor, now func() time.Time, 
 			instructions = map[string]string{}
 		}
 		entries := make([]policy.LogEntry, 0, len(decisions))
-		decided := map[string]bool{}
+		approved, fingerprints := map[string]bool{}, map[string]bool{}
 		for _, d := range decisions {
-			// One batch decides each tool, or each proxy's instructions, at
-			// most once, so its result does not depend on the order given.
+			// One batch approves each tool, or each proxy's instructions, at
+			// most once and decides each fingerprint at most once, so its
+			// result does not depend on the order given. Rejecting several
+			// fingerprints of one tool is order-independent.
 			key := fmt.Sprintf("%s\x00%t\x00%s", d.Proxy, d.Instructions, d.Tool)
-			if decided[key] {
+			if (d.Approve && approved[key]) || fingerprints[key+"\x00"+d.Fingerprint] {
 				return nil, fmt.Errorf("%s is decided more than once", Describe(d))
 			}
-			decided[key] = true
+			approved[key] = approved[key] || d.Approve
+			fingerprints[key+"\x00"+d.Fingerprint] = true
 			// An approval must carry exactly the content its fingerprint
 			// names, so the log never records one fingerprint for another.
 			if d.Approve && !holds(d) {
@@ -351,6 +354,101 @@ func apply(proxy map[string]jsontext.Value, instructions map[string]string, acti
 		delete(rejected, d.Tool)
 	}
 	return setDrift(proxy, settings, "rejectedTools", rejected)
+}
+
+// PermitChecks returns the positions of the activation checks that expect a
+// call to a proxy's listed tool to be permitted. Revoking the tool's
+// approval contradicts them, so the new set would fail them.
+func PermitChecks(checks []byte, proxy, tool, upstream string) ([]int, error) {
+	if len(checks) == 0 {
+		return nil, nil
+	}
+	var cases []map[string]jsontext.Value
+	if err := jsonv2.Unmarshal(checks, &cases); err != nil {
+		return nil, fmt.Errorf("checks.json: %w", err)
+	}
+	text := func(v jsontext.Value) string {
+		var s string
+		jsonv2.Unmarshal(v, &s)
+		return s
+	}
+	var found []int
+	for i, c := range cases {
+		if h, ok := c["hypotheticalTool"]; ok && string(h) != "null" {
+			continue
+		}
+		if text(c["proxy"]) == proxy && text(c["tool"]) == tool && text(c["upstream"]) == upstream && text(c["expect"]) == "permitted" {
+			found = append(found, i)
+		}
+	}
+	return found, nil
+}
+
+// Revoke withdraws a tool's approved definition, the one with this
+// fingerprint, in a new set made from base, so gateways hide the tool and
+// refuse calls to it until a definition is approved again. Its facts, tags
+// and arguments stay, ready for the next approval.
+//
+// Activation checks that expect the tool to be permitted would fail the new
+// set. They are the operator's own assertions, so they are removed only when
+// removeChecks says the reviewer chose to, and their removal is logged;
+// otherwise the revocation is refused with the checks' error.
+func Revoke(store, base, label string, actor policy.Actor, now func() time.Time, proxy, tool, fingerprint string, removeChecks bool) (string, error) {
+	return policy.Revise(store, label, actor, now, func(set string, active *policy.Snapshot, files map[string][]byte) ([]policy.LogEntry, error) {
+		if set != base {
+			return nil, fmt.Errorf("%w: the active set changed to %s while you reviewed; nothing was changed, so review again", ErrStale, set)
+		}
+		view, ok := active.Drift(proxy)
+		if !ok {
+			return nil, fmt.Errorf("proxy %q is not under drift review in the active set", proxy)
+		}
+		if approved, _, ok := view.Approved(tool); !ok || approved != fingerprint {
+			return nil, fmt.Errorf("%w: %s/%s does not have the approved definition %s", ErrStale, ShownName(proxy), ShownName(tool), fingerprint)
+		}
+		var inventory map[string]map[string]jsontext.Value
+		if err := jsonv2.Unmarshal(files["approved_tools.json"], &inventory); err != nil {
+			return nil, fmt.Errorf("approved_tools.json: %w", err)
+		}
+		var tools map[string]map[string]jsontext.Value
+		if err := jsonv2.Unmarshal(inventory[proxy]["tools"], &tools); err != nil {
+			return nil, err
+		}
+		delete(tools[tool], "definition")
+		encoded, err := jsonv2.Marshal(tools, jsonv2.Deterministic(true))
+		if err != nil {
+			return nil, err
+		}
+		inventory[proxy]["tools"] = encoded
+		if files["approved_tools.json"], err = marshalIndented(inventory); err != nil {
+			return nil, err
+		}
+		entries := []policy.LogEntry{{Action: "revoke", Proxy: proxy, Tool: tool, Fingerprint: fingerprint}}
+		if removeChecks {
+			found, err := PermitChecks(files["checks.json"], proxy, tool, view.Upstream())
+			if err != nil {
+				return nil, err
+			}
+			if len(found) > 0 {
+				var cases []jsontext.Value
+				if err := jsonv2.Unmarshal(files["checks.json"], &cases); err != nil {
+					return nil, fmt.Errorf("checks.json: %w", err)
+				}
+				kept := make([]jsontext.Value, 0, len(cases))
+				for i, c := range cases {
+					if !slices.Contains(found, i) {
+						kept = append(kept, c)
+					}
+				}
+				if files["checks.json"], err = marshalIndented(kept); err != nil {
+					return nil, err
+				}
+				for range found {
+					entries = append(entries, policy.LogEntry{Action: "remove-permit-check", Proxy: proxy, Tool: tool})
+				}
+			}
+		}
+		return entries, nil
+	})
 }
 
 // withoutMeta returns a definition without its top-level _meta member.

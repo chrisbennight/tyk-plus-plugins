@@ -115,25 +115,80 @@ func approveInDashboard(version, fingerprint string) string {
 	form.Set("action", "approve")
 	status, page = reviewer.post("/decide", form)
 	check(status == http.StatusOK && strings.Contains(page, "Approved."), "%s: dashboard approval: %d\n%s", version, status, page)
+	set := activeSet(version)
+	checkLastDecision(version, fingerprint, set)
+	return set
+}
+
+var revokeForm = regexp.MustCompile(`(?s)<form method="post" action="[^"]*/revoke".*?</form>`)
+
+// revokeInDashboard revokes the approval of the changed tool as a reviewer,
+// through the tools page's form, and returns the set it made active.
+func revokeInDashboard(version, approved string) string {
+	reviewer, _, _ := signIn("reviewer")
+	status, page := reviewer.get("/tools?proxy=governed")
+	check(status == http.StatusOK, "%s: dashboard tools as reviewer: %d\n%s", version, status, page)
+	var form url.Values
+	for _, f := range revokeForm.FindAllString(page, -1) {
+		if fields := decisionForm(f); fields.Get("tool") == "change" {
+			form = fields
+		}
+	}
+	check(form != nil && form.Get("base") == approved, "%s: no revoke form for change against %s:\n%s", version, approved, page)
+	status, page = reviewer.post("/revoke", form)
+	check(status == http.StatusOK && strings.Contains(page, "Revoked."), "%s: dashboard revocation: %d\n%s", version, status, page)
+	revoked := activeSet(version)
+	check(revoked != approved, "%s: revocation did not publish a new set", version)
+	last := lastDecision(version)
+	check(last.Action == "revoke" && last.Fingerprint == form.Get("fingerprint") && last.Set == revoked && last.Actor.Subject == "reviewer",
+		"%s: last decision %+v", version, last)
+	return revoked
+}
+
+// rollBackInDashboard rolls the revocation back as a reviewer, through the
+// history page's form, and checks the approved set is active again.
+func rollBackInDashboard(version, revoked, approved string) {
+	reviewer, _, _ := signIn("reviewer")
+	status, page := reviewer.get("/history")
+	check(status == http.StatusOK && strings.Contains(page, "governed/change") && strings.Contains(page, "revoke"), "%s: dashboard history: %d\n%s", version, status, page)
+	form := decisionForm(page)
+	check(form.Get("base") == revoked, "%s: rollback form against %q, want %s", version, form.Get("base"), revoked)
+	status, page = reviewer.post("/rollback", form)
+	check(status == http.StatusOK && strings.Contains(page, "Rolled back."), "%s: dashboard rollback: %d\n%s", version, status, page)
+	check(activeSet(version) == approved, "%s: rollback did not restore %s", version, approved)
+	last := lastDecision(version)
+	check(last.Action == "rollback" && last.Base == revoked && last.Set == approved, "%s: last decision %+v", version, last)
+}
+
+// activeSet reads the store's active set.
+func activeSet(version string) string {
 	pointer, err := os.ReadFile(filepath.Join(policyDir, "active"))
 	check(err == nil, "%s: active pointer: %v", version, err)
 	var active struct{ Set string }
 	json.Unmarshal(pointer, &active)
-	checkLastDecision(version, fingerprint, active.Set)
 	return active.Set
+}
+
+// decision is a line of the decision log.
+type decision struct {
+	Action, Fingerprint, Set, Base string
+	Actor                          struct{ Issuer, Subject, Name string }
+}
+
+// lastDecision reads the decision log's last line.
+func lastDecision(version string) decision {
+	data, err := os.ReadFile(filepath.Join(policyDir, "decisions.log"))
+	check(err == nil, "%s: decision log: %v", version, err)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	var last decision
+	check(json.Unmarshal([]byte(lines[len(lines)-1]), &last) == nil, "%s: decision log line %q", version, lines[len(lines)-1])
+	return last
 }
 
 // checkLastDecision checks that the decision log's last entry records the
 // reviewer's verified identity from the issuer, and the approval made.
 func checkLastDecision(version, fingerprint, set string) {
-	data, err := os.ReadFile(filepath.Join(policyDir, "decisions.log"))
-	check(err == nil, "%s: decision log: %v", version, err)
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	var last struct {
-		Action, Fingerprint, Set string
-		Actor                    struct{ Issuer, Subject, Name string }
-	}
-	check(json.Unmarshal([]byte(lines[len(lines)-1]), &last) == nil, "%s: decision log line %q", version, lines[len(lines)-1])
+	last := lastDecision(version)
 	check(last.Action == "approve" && last.Fingerprint == fingerprint && last.Set == set &&
 		last.Actor.Issuer == "https://issuer.test" && last.Actor.Subject == "reviewer" && last.Actor.Name == "Rita Reviewer",
 		"%s: last decision %+v", version, last)

@@ -43,7 +43,9 @@ func main() {
 			return
 		}
 		if err := runDrift(os.Args[2:], os.Stdout, time.Now); err != nil {
-			fmt.Fprintf(os.Stderr, "cedar-policy drift: %v\n\n%s", err, driftUsage)
+			// Messages can name files and tools from the shared directory,
+			// so hidden characters are written out.
+			fmt.Fprintf(os.Stderr, "cedar-policy drift: %s\n\n%s", shownName(err.Error()), driftUsage)
 			os.Exit(1)
 		}
 		return

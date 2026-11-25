@@ -213,6 +213,25 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 	return set, store.activate(set, now)
 }
 
+// Locked calls fn with the active set's name and compiled form while holding
+// the store's lock, so no set becomes active while fn runs.
+func Locked(root string, fn func(set string, active *Snapshot) error) error {
+	store, err := openStore(root)
+	if err != nil {
+		return err
+	}
+	defer store.unlock()
+	pointer, err := ReadPointer(root)
+	if err != nil {
+		return err
+	}
+	active, _, err := LoadSet(root, pointer.Set)
+	if err != nil {
+		return fmt.Errorf("active policy set %s: %w", pointer.Set, err)
+	}
+	return fn(pointer.Set, active)
+}
+
 // Revise changes the active set and makes the result active, all under the
 // store's lock, so a publish made meanwhile is never overwritten unseen.
 // change receives the active set's name, its compiled form, and its files

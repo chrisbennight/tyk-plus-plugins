@@ -8,10 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
+	"github.com/go-json-experiment/json/jsontext"
 )
 
 const (
@@ -22,6 +24,14 @@ const (
 )
 
 func epoch() time.Time { return time.Unix(0, 0) }
+
+func mustJSON(v any) []byte {
+	data, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
 
 func encode(name string) string { return base64.RawURLEncoding.EncodeToString([]byte(name)) }
 
@@ -42,6 +52,11 @@ type review struct {
 
 func newReview(t *testing.T, tools map[string]string) *review {
 	t.Helper()
+	return newReviewWith(t, tools, "Use these tools carefully.")
+}
+
+func newReviewWith(t *testing.T, tools map[string]string, instructions string) *review {
+	t.Helper()
 	r := &review{t: t, store: t.TempDir(), pending: t.TempDir()}
 	inventory := map[string]any{}
 	for name, definition := range tools {
@@ -50,7 +65,7 @@ func newReview(t *testing.T, tools map[string]string) *review {
 	data, _ := json.Marshal(map[string]any{"governed": map[string]any{"upstream": upstream, "drift": map[string]any{}, "tools": inventory}})
 	source := t.TempDir()
 	for name, text := range map[string]string{"rules.cedar": `permit (principal, action, resource);`, "approved_tools.json": string(data),
-		"approved_instructions.json": `{"governed":"Use these tools carefully."}`, "checks.json": "[]"} {
+		"approved_instructions.json": `{"governed":` + string(mustJSON(instructions)) + `}`, "checks.json": "[]"} {
 		if err := os.WriteFile(filepath.Join(source, name), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -226,24 +241,31 @@ func TestARejectionSticksUntilTheUpstreamChangesAgain(t *testing.T) {
 	}
 }
 
-func TestApproveAllAdoptsTheLatestDefinitionsAfterTheCountIsConfirmed(t *testing.T) {
-	r := newReview(t, map[string]string{})
+func TestApproveAllAdoptsTheLatestListAfterItIsConfirmed(t *testing.T) {
+	// Adopting an upstream: drift review starts with nothing approved.
+	r := newReviewWith(t, map[string]string{}, "")
 	start := time.Now()
 	lookup := `{"name":"lookup","description":"Find a record","inputSchema":{"type":"object"}}`
+	gone := `{"name":"gone","description":"Withdrawn","inputSchema":{"type":"object"}}`
+	// Each list declares all its tools at the time it is received.
 	older := r.queue("change", changedChange, "one", start)
+	r.queue("lookup", lookup, "one", start)
+	r.queue("gone", gone, "one", start)
 	latest := r.queue("change", newerChange, "one", start.Add(time.Minute))
-	found := r.queue("lookup", lookup, "one", start)
+	r.declare("lookup", fingerprint(t, lookup), "one", start.Add(time.Minute))
 	r.writeJSON(filepath.Join(encode("governed"), "instructions", policy.InstructionsFingerprint("Be brief.")+".json"), map[string]any{
 		"proxy": "governed", "fingerprint": policy.InstructionsFingerprint("Be brief."), "instructions": "Be brief.", "firstSeen": start, "gateway": "one"})
 	before := r.active().Version
 	out, err := r.run("approve-all", "-proxy", "governed")
-	if err == nil || !strings.Contains(err.Error(), "-confirm 3-") || !strings.Contains(out, latest) || strings.Contains(out, older) {
+	if err == nil || !strings.Contains(err.Error(), "-confirm 3-") || !strings.Contains(out, latest) || strings.Contains(out, older) ||
+		!strings.Contains(out, "governed/gone is not in the upstream's latest list") {
 		t.Fatalf("approve-all without confirmation: %q, %v", out, err)
 	}
 	code := strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
 	// The upstream changes lookup after the preview: the count is the same,
 	// but the code no longer matches.
 	changedLookup := r.queue("lookup", strings.Replace(lookup, "Find", "Locate", 1), "one", start.Add(2*time.Minute))
+	r.declare("change", latest, "one", start.Add(2*time.Minute))
 	if _, err := r.run("approve-all", "-proxy", "governed", "-confirm", code); err == nil {
 		t.Fatal("approve-all accepted a confirmation for a list that changed")
 	}
@@ -252,17 +274,85 @@ func TestApproveAllAdoptsTheLatestDefinitionsAfterTheCountIsConfirmed(t *testing
 	}
 	_, err = r.run("approve-all", "-proxy", "governed")
 	code = strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
+	// Another reviewer's decision lands between preview and confirmation.
+	if _, err := r.run("reject", "-proxy", "governed", "-tool", "gone", fingerprint(t, gone)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.run("approve-all", "-proxy", "governed", "-confirm", code); err == nil {
+		t.Fatal("approve-all accepted a confirmation made against an earlier set")
+	}
+	_, err = r.run("approve-all", "-proxy", "governed")
+	code = strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
 	if _, err := r.run("approve-all", "-proxy", "governed", "-confirm", code); err != nil {
 		t.Fatal(err)
 	}
-	found = changedLookup
 	snapshot := r.active()
 	view, _ := snapshot.Drift("governed")
 	approvedChange, _, _ := view.Approved("change")
 	approvedLookup, _, _ := view.Approved("lookup")
+	_, _, goneApproved := view.Approved("gone")
 	instructions, _ := snapshot.Instructions("governed")
-	if approvedChange != latest || approvedLookup != found || instructions != "Be brief." {
-		t.Fatalf("approve-all adopted change=%s lookup=%s instructions=%q", approvedChange, approvedLookup, instructions)
+	if approvedChange != latest || approvedLookup != changedLookup || goneApproved || instructions != "Be brief." {
+		t.Fatalf("approve-all adopted change=%s lookup=%s gone=%v instructions=%q", approvedChange, approvedLookup, goneApproved, instructions)
+	}
+}
+
+func TestApproveAllLeavesChangedInstructionsToSeparateReview(t *testing.T) {
+	r := newReview(t, map[string]string{})
+	fp := policy.InstructionsFingerprint("Be brief.")
+	r.writeJSON(filepath.Join(encode("governed"), "instructions", fp+".json"), map[string]any{
+		"proxy": "governed", "fingerprint": fp, "instructions": "Be brief.", "firstSeen": time.Now(), "gateway": "one"})
+	out, err := r.run("approve-all", "-proxy", "governed")
+	if err == nil || !strings.Contains(err.Error(), "-confirm 0-") || !strings.Contains(out, "Skipped: changed instructions") {
+		t.Fatalf("approve-all: %q, %v", out, err)
+	}
+}
+
+func TestANamedPipeDoesNotStallTheReview(t *testing.T) {
+	r := newReview(t, map[string]string{})
+	dir := filepath.Join(r.pending, encode("governed"), "instructions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, policy.InstructionsFingerprint("x")+".json"), 0o644); err != nil {
+		t.Skipf("cannot make a named pipe here: %v", err)
+	}
+	done := make(chan string)
+	go func() {
+		out, _ := r.run("list")
+		done <- out
+	}()
+	select {
+	case out := <-done:
+		if !strings.Contains(out, "not a regular file") {
+			t.Fatalf("list did not report the pipe:\n%s", out)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("list stalled on a named pipe")
+	}
+}
+
+func TestSchemasThatAreBooleansAreCompared(t *testing.T) {
+	diff := definitionDiff(jsontext.Value(`{"inputSchema":{"type":"object","properties":{"x":false}}}`),
+		jsontext.Value(`{"inputSchema":{"type":"object","properties":{"x":true}}}`))
+	if !strings.Contains(diff, "Schema of parameter x changed: false → true") {
+		t.Fatalf("diff:\n%s", diff)
+	}
+}
+
+func TestHiddenCharactersInMessagesAreWrittenOut(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	dir := filepath.Join(r.pending, encode("governed"), "latest", encode("change"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bad\x1b[2Jname.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fp := r.queue("change", changedChange, "one", time.Now())
+	out, _ := r.run("show", "-proxy", "governed", "-tool", "change", fp)
+	if strings.Contains(out, "\x1b") || !strings.Contains(out, "⟨U+001B⟩") {
+		t.Fatalf("show printed a raw control character:\n%q", out)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 	jsonv2 "github.com/go-json-experiment/json"
@@ -154,6 +155,21 @@ func (r *Review) Declarations(proxy, tool string) ([]Declared, error) {
 	return declared, nil
 }
 
+// DeclaredTools returns the tools any gateway has shared a declaration of.
+func (r *Review) DeclaredTools(proxy string) ([]string, error) {
+	encoded, err := r.names(path.Join(encodeName(proxy), "latest"))
+	if err != nil {
+		return nil, err
+	}
+	var tools []string
+	for _, name := range encoded {
+		if tool, ok := decodeName(name); ok {
+			tools = append(tools, tool)
+		}
+	}
+	return tools, nil
+}
+
 // Newest returns the newest declaration of a tool from an upstream across
 // gateways, as gateways decide calls on it.
 func (r *Review) Newest(proxy, tool, upstream string) (Declared, bool, error) {
@@ -244,12 +260,20 @@ func (r *Review) names(dir string) ([]string, error) {
 	return names, nil
 }
 
+// read decodes a regular file of at most limit bytes. The file is opened
+// without waiting, and anything but a regular file is refused, so a named
+// pipe or device placed in the directory cannot stall the reviewer.
 func (r *Review) read(name string, v any, limit int64) error {
-	f, err := r.root.Open(name)
+	f, err := r.root.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if info, err := f.Stat(); err != nil {
+		return err
+	} else if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", name)
+	}
 	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return err

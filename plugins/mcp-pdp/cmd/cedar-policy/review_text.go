@@ -243,6 +243,10 @@ func definitionDiff(approved, proposed jsontext.Value) string {
 
 func schemaDiff(b *strings.Builder, approved, proposed jsontext.Value) {
 	before, after := object(approved), object(proposed)
+	if before == nil || after == nil {
+		fmt.Fprintf(b, "Input schema changed: %s → %s\n", shownValue(approved), shownValue(proposed))
+		return
+	}
 	oldParams, newParams := object(before["properties"]), object(after["properties"])
 	for _, name := range unionKeys(oldParams, newParams) {
 		old, new := oldParams[name], newParams[name]
@@ -253,6 +257,11 @@ func schemaDiff(b *strings.Builder, approved, proposed jsontext.Value) {
 			fmt.Fprintf(b, "Parameter removed: %s\n", shownName(name))
 		case canonical(old) != canonical(new):
 			oldFields, newFields := object(old), object(new)
+			if oldFields == nil || newFields == nil {
+				// A schema can be true or false rather than an object.
+				fmt.Fprintf(b, "Schema of parameter %s changed: %s → %s\n", shownName(name), shownValue(old), shownValue(new))
+				continue
+			}
 			for _, field := range unionKeys(oldFields, newFields) {
 				if canonical(oldFields[field]) == canonical(newFields[field]) {
 					continue

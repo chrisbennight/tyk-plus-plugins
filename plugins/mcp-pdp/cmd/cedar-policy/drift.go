@@ -253,7 +253,7 @@ func driftList(out io.Writer, review *drift.Review, f driftFlags) error {
 			shown++
 		}
 		for _, problem := range append(problems, instructionProblems...) {
-			fmt.Fprintf(out, "%s\tunreadable\t%v\n", shownName(proxy), problem)
+			fmt.Fprintf(out, "%s\tunreadable\t%s\n", shownName(proxy), shownName(problem.Error()))
 		}
 	}
 	if shown == 0 {
@@ -302,7 +302,7 @@ func driftShow(out io.Writer, review *drift.Review, f driftFlags, fingerprint st
 		entry.FirstSeen.Format(time.RFC3339), shownName(entry.Gateway))
 	writeStatus(&b, view.Rejected(f.tool, fingerprint), approvedFingerprint == fingerprint)
 	if newest, found, err := review.Newest(f.proxy, f.tool, view.Upstream()); err != nil {
-		fmt.Fprintf(&b, "Latest declarations: %v\n", err)
+		fmt.Fprintf(&b, "Latest declarations: %s\n", shownName(err.Error()))
 	} else if found && newest.Fingerprint != fingerprint {
 		b.WriteString("Gateways have since seen the upstream declare a different definition.\n")
 	}
@@ -346,18 +346,17 @@ func writeCounts(b *strings.Builder, invisible, lookAlike int) {
 }
 
 // renameHints returns approved tools that take the same input or have the
-// same description as a new tool and that the upstream stopped declaring:
-// no gateway has seen it declare them since the new tool was first seen.
-// Every list declares all its tools, so a tool still listed was seen then.
+// same description as a new tool and that the upstream's latest list no
+// longer declares.
 func renameHints(review *drift.Review, view policy.DriftView, proxy string, entry drift.ToolEntry) ([]string, error) {
+	listed, err := latestList(review, view, proxy)
+	if err != nil {
+		return nil, err
+	}
 	proposed := object(entry.Definition)
 	var hints []string
 	for _, name := range view.ApprovedTools() {
-		newest, found, err := review.Newest(proxy, name, view.Upstream())
-		if err != nil {
-			return nil, err
-		}
-		if found && !newest.SeenAt.Before(entry.FirstSeen) {
+		if listed.has(name) {
 			continue
 		}
 		_, approved, _ := view.Approved(name)
@@ -369,6 +368,42 @@ func renameHints(review *drift.Review, view policy.DriftView, proxy string, entr
 		}
 	}
 	return hints, nil
+}
+
+// listing is the newest declaration of each tool a proxy's reviewed upstream
+// declared, and when the latest list was received.
+type listing struct {
+	newest map[string]drift.Declared
+	at     time.Time
+}
+
+// has reports whether the upstream's latest list declared a tool. A list
+// declares all its tools at the time it was received, so a tool whose newest
+// declaration is older was left out of it.
+func (l listing) has(tool string) bool {
+	d, ok := l.newest[tool]
+	return ok && !d.SeenAt.Before(l.at)
+}
+
+func latestList(review *drift.Review, view policy.DriftView, proxy string) (listing, error) {
+	l := listing{newest: map[string]drift.Declared{}}
+	tools, err := review.DeclaredTools(proxy)
+	if err != nil {
+		return l, err
+	}
+	for _, tool := range tools {
+		d, found, err := review.Newest(proxy, tool, view.Upstream())
+		if err != nil {
+			return l, err
+		}
+		if found {
+			l.newest[tool] = d
+			if d.SeenAt.After(l.at) {
+				l.at = d.SeenAt
+			}
+		}
+	}
+	return l, nil
 }
 
 // decision is one approval or rejection to make in a new set.
@@ -592,19 +627,34 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 		return err
 	}
 	for _, problem := range append(problems, instructionProblems...) {
-		fmt.Fprintf(out, "Skipped: %v\n", problem)
+		fmt.Fprintf(out, "Skipped: %s\n", shownName(problem.Error()))
+	}
+	listed, err := latestList(review, view, f.proxy)
+	if err != nil {
+		return err
 	}
 	var decisions []decision
 	for _, t := range tools {
-		// Only what gateways saw the upstream declare last is adopted; an
-		// older definition would be refused at once anyway.
-		if t.latest {
+		// Only what gateways saw the upstream declare last is adopted, and
+		// only for tools its latest list still declares; an older definition
+		// would be refused at once anyway.
+		switch {
+		case !t.latest:
+		case !listed.has(t.entry.Tool):
+			fmt.Fprintf(out, "Skipped: %s is not in the upstream's latest list.\n", describe(decision{proxy: f.proxy, tool: t.entry.Tool}))
+		default:
 			decisions = append(decisions, decision{proxy: f.proxy, tool: t.entry.Tool, fingerprint: t.entry.Fingerprint, definition: t.entry.Definition, approve: true})
 		}
 	}
-	switch len(instructions) {
-	case 0:
-	case 1:
+	// Gateways record no sighting of instructions that match the approved
+	// text, so a waiting text may have been withdrawn since. Only a proxy
+	// with no approved instructions yet adopts them in bulk.
+	approvedText, _ := snapshot.Instructions(f.proxy)
+	switch {
+	case len(instructions) == 0:
+	case approvedText != "":
+		fmt.Fprintf(out, "Skipped: changed instructions; review them with drift show and approve them with drift approve -instructions.\n")
+	case len(instructions) == 1:
 		decisions = append(decisions, decision{proxy: f.proxy, instructions: true, fingerprint: instructions[0].Fingerprint, text: instructions[0].Instructions, approve: true})
 	default:
 		fmt.Fprintf(out, "Skipped: %d different instructions are waiting; approve one with drift approve -instructions.\n", len(instructions))
@@ -612,7 +662,7 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 	for _, d := range decisions {
 		fmt.Fprintf(out, "%s\t%s\n", describe(d), d.fingerprint)
 	}
-	code := confirmation(decisions)
+	code := confirmation(snapshot.Version, decisions)
 	if f.confirm == "" {
 		return fmt.Errorf("%d change(s) would be approved; review them with drift show, then run again with -confirm %s", len(decisions), code)
 	}
@@ -635,53 +685,65 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 	return nil
 }
 
-// confirmation is a code for an exact list of decisions: their count and a
-// digest of what each approves, so a confirmation never covers a list that
-// changed after it was shown.
-func confirmation(decisions []decision) string {
+// confirmation is a code for an exact list of decisions against one active
+// set: their count and a digest of the set and of what each approves, so a
+// confirmation never covers a list, or a set, that changed after it was
+// shown.
+func confirmation(set string, decisions []decision) string {
 	lines := make([]string, len(decisions))
 	for i, d := range decisions {
 		lines[i] = fmt.Sprintf("%s\x00%s\x00%t\x00%s", d.proxy, d.tool, d.instructions, d.fingerprint)
 	}
 	slices.Sort(lines)
-	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	sum := sha256.Sum256([]byte(set + "\n" + strings.Join(lines, "\n")))
 	return fmt.Sprintf("%d-%s", len(decisions), hex.EncodeToString(sum[:6]))
 }
 
+// driftPrune removes settled entries while holding the store's lock, so a
+// rollback cannot make an entry waiting again while it is being removed.
 func driftPrune(out io.Writer, review *drift.Review, f driftFlags) error {
-	snapshot, err := activeSet(f.store)
+	removed := 0
+	err := policy.Locked(f.store, func(_ string, snapshot *policy.Snapshot) error {
+		var err error
+		removed, err = pruneSettled(review, snapshot)
+		return err
+	})
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(out, "Removed %d review entry(ies) the active set settles.\n", removed)
+	return nil
+}
+
+func pruneSettled(review *drift.Review, snapshot *policy.Snapshot) (int, error) {
 	removed := 0
 	for _, proxy := range snapshot.DriftProxies() {
 		view, _ := snapshot.Drift(proxy)
 		entries, _, err := review.Tools(proxy)
 		if err != nil {
-			return err
+			return removed, err
 		}
 		for _, entry := range entries {
 			if approved, _, _ := view.Approved(entry.Tool); approved == entry.Fingerprint || view.Rejected(entry.Tool, entry.Fingerprint) {
 				if err := review.RemoveTool(proxy, entry.Tool, entry.Fingerprint); err != nil {
-					return err
+					return removed, err
 				}
 				removed++
 			}
 		}
 		instructions, _, err := review.Instructions(proxy)
 		if err != nil {
-			return err
+			return removed, err
 		}
 		approved, _ := snapshot.Instructions(proxy)
 		for _, entry := range instructions {
 			if entry.Fingerprint == policy.InstructionsFingerprint(approved) || view.RejectedInstructions(entry.Fingerprint) {
 				if err := review.RemoveInstructions(proxy, entry.Fingerprint); err != nil {
-					return err
+					return removed, err
 				}
 				removed++
 			}
 		}
 	}
-	fmt.Fprintf(out, "Removed %d review entry(ies) the active set settles.\n", removed)
-	return nil
+	return removed, nil
 }

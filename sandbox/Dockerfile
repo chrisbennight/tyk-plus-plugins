@@ -1,6 +1,6 @@
 # The sandbox host image: the network-facing sandbox service, the root launcher
-# helper, the gVisor and runc runtimes, and the read-only worker image every
-# sandbox runs.
+# helper, the gVisor runtime, and the read-only worker image every sandbox
+# runs. The "dev" target adds runc for machines without gVisor.
 FROM golang:1.26.10-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -28,10 +28,21 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-cert
     echo "${SUM}  /tmp/gvisor.tar.zstd" | sha512sum -c - && \
     mkdir /gvisor && tar --zstd -xf /tmp/gvisor.tar.zstd -C /gvisor
 
-FROM debian:bookworm-slim
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends runc >/dev/null && rm -rf /var/lib/apt/lists/* && \
-    useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin sandbox
-COPY --from=gvisor /gvisor/ /usr/local/bin/
+# Development only: adds runc, for machines without gVisor. Never released;
+# select it with the target "dev", as compose.runc.yaml does.
+FROM debian:bookworm-slim AS dev
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends runc >/dev/null && rm -rf /var/lib/apt/lists/*
+COPY --from=gvisor /gvisor/runsc /usr/local/bin/runsc
+COPY --from=gvisor /gvisor/gvisor-bin/gvisor_sentry /gvisor/gvisor-bin/gvisor-sentry-prewarmer /gvisor/gvisor-bin/gvisor-proc-umounter /gvisor/gvisor-bin/runsc-fd-parking /usr/local/bin/gvisor-bin/
 COPY --from=build /out/sandbox-launcher /out/sandbox-service /usr/local/bin/
 COPY --from=build /rootfs /opt/sandbox/rootfs
 RUN runsc --version && runc --version
+
+# The released image: only what the gVisor backend needs, on a distroless
+# base with no shell or package manager. It is the default target.
+FROM gcr.io/distroless/static-debian12 AS release
+COPY --from=gvisor /gvisor/runsc /usr/local/bin/runsc
+COPY --from=gvisor /gvisor/gvisor-bin/gvisor_sentry /gvisor/gvisor-bin/gvisor-sentry-prewarmer /gvisor/gvisor-bin/gvisor-proc-umounter /gvisor/gvisor-bin/runsc-fd-parking /usr/local/bin/gvisor-bin/
+COPY --from=build /out/sandbox-launcher /out/sandbox-service /usr/local/bin/
+COPY --from=build /rootfs /opt/sandbox/rootfs
+RUN ["/usr/local/bin/runsc", "--version"]

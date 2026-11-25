@@ -3,6 +3,13 @@
 # use this file in production.
 services:
   sandbox-launcher:
+    build:
+      target: dev
+    image: tyk-plus-plugins-sandbox-dev
     privileged: true
     environment:
       SANDBOX_BACKEND: runc
+  sandbox:
+    build:
+      target: dev
+    image: tyk-plus-plugins-sandbox-dev

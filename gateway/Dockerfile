@@ -5,7 +5,7 @@ COPY --from=tyk /go/src/github.com/TykTechnologies/tyk ./tyk
 COPY --from=mcp-pdp . ./mcp-pdp
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go work init ./tyk ./mcp-pdp && cd mcp-pdp && \
-    go test -race ./policy/ ./identity/ ./bench/ ./drift/ && \
+    go test -race ./policy/ ./identity/ ./bench/ ./drift/ ./cmd/cedar-policy/ && \
     go build -trimpath -tags=goplugin -buildmode=plugin -o /mcp-pdp.so . && \
     CGO_ENABLED=0 go build -trimpath -o /cedar-policy ./cmd/cedar-policy
 # The default store activates the shipped policy, which grants nothing.

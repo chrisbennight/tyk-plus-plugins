@@ -73,6 +73,30 @@ func (s *Snapshot) Drift(proxy string) (DriftView, bool) {
 	return DriftView{settings: inv.Drift, upstream: inv.Upstream, tools: inv.Tools}, true
 }
 
+// DriftProxies returns, sorted, the proxies under drift review.
+func (s *Snapshot) DriftProxies() []string {
+	var proxies []string
+	for proxy, inv := range s.tools {
+		if inv.Drift != nil {
+			proxies = append(proxies, proxy)
+		}
+	}
+	slices.Sort(proxies)
+	return proxies
+}
+
+// ApprovedTools returns, sorted, the tools with an approved definition.
+func (v DriftView) ApprovedTools() []string {
+	var names []string
+	for name, t := range v.tools {
+		if t.Definition != nil {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
 // Approved returns a tool's approved definition and its fingerprint. A tool
 // without an approved definition is not approved, even if listed.
 func (v DriftView) Approved(name string) (fingerprint string, definition json.RawMessage, ok bool) {

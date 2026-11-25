@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 )
 
 const (
@@ -146,6 +147,9 @@ console.log("called both");
 return [a.content[0].text, b.content[0].text];`, nil, nil)
 		parallel.succeeded(version+" parallel calls", []string{"found", "found"})
 		check(reflect.DeepEqual(parallel.Console, []string{"called both"}), "%s: console %v", version, parallel.Console)
+		// The run closes any session it opened on the second proxy after it
+		// replies; counts of upstream requests start once that has finished.
+		quiet()
 
 		// A call inside a program gets the decision and refusal a direct call
 		// gets. Each caller's own rules apply, and a refusal reaches no upstream.
@@ -216,4 +220,18 @@ return [a.content[0].text, b.content[0].text];`, nil, nil)
 	check(off.reply.Status == http.StatusForbidden && off.reply.Error != nil && off.reply.Error.Message == "Tool call denied" && after == before,
 		"Code Mode ran on a gateway where it is off: %v", off)
 	fmt.Println("Verified that Code Mode is off where it is not configured.")
+}
+
+// quiet waits until no request has reached the upstream for a moment.
+func quiet() {
+	last, _ := observed()
+	for range 50 {
+		time.Sleep(200 * time.Millisecond)
+		now, _ := observed()
+		if now == last {
+			return
+		}
+		last = now
+	}
+	panic("the upstream kept receiving requests")
 }

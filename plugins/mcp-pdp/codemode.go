@@ -142,14 +142,21 @@ func execute(w http.ResponseWriter, r *http.Request, id json.RawMessage, params 
 	run := codemode.NewRunID()
 	sum := sha256.Sum256([]byte(args.Source))
 	session := gatewayCalls.Session(origin, run, limits.ValueBytes)
+	// The sessions the run opened are closed after its result is written,
+	// so closing them never delays the reply.
+	defer func() { go session.Close() }()
 	started := time.Now()
 	out := runner.Run(r.Context(), codemode.Request{
 		Source: args.Source, Input: args.Input, Limits: limits, Call: session.Call,
 		OnCall: func(c codemode.CallRecord) {
+			// A call to a proxy without Code Mode never reaches the gateway,
+			// so its names are only program data and are not logged.
+			if _, known := codeMode.Proxies[c.Proxy]; !known {
+				c.Proxy, c.Tool = "", ""
+			}
 			slog.Info("Code Mode call", "run", run, "call", c.ID, "proxy", c.Proxy, "tool", c.Tool, "outcome", c.Outcome)
 		},
 	})
-	session.Close()
 	outcome, kind := "result", ""
 	if out.Failure != nil {
 		outcome, kind = "failed", out.Failure.Kind

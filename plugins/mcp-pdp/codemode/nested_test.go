@@ -230,3 +230,74 @@ func TestLoad(t *testing.T) {
 		t.Errorf("a malformed proxy list was accepted: %v", err)
 	}
 }
+
+func TestNestedCallNeverFollowsRedirects(t *testing.T) {
+	elsewhere := make(chan http.Header, 1)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { elsewhere <- r.Header }))
+	defer other.Close()
+	gateway, _ := newGateway(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		http.Redirect(w, r, other.URL+"/steal", http.StatusTemporaryRedirect)
+	})
+	s := gateway.Session(Origin{Proxy: "a", Credential: http.Header{"X-Api-Key": {"k"}}}, "r", 1024)
+	_, refused, err := s.Call(context.Background(), "a", "t", json.RawMessage(`{}`))
+	if err != nil || refused == nil || !strings.HasPrefix(refused.Message, "HTTP 307") {
+		t.Fatalf("refused %+v, err %v", refused, err)
+	}
+	select {
+	case h := <-elsewhere:
+		t.Fatalf("the redirect was followed with headers %v", h)
+	default:
+	}
+}
+
+func TestNestedCallReadsStreamsEventByEvent(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	gateway, _ := newGateway(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// The reply's data spans two lines, and the stream stays open after it.
+		io.WriteString(w, "data: {\"jsonrpc\":\"2.0\",\ndata: \"id\":"+jsonNumber(body["id"])+",\"result\":{\"ok\":true}}\n\n")
+		w.(http.Flusher).Flush()
+		<-release
+	})
+	s := gateway.Session(Origin{Proxy: "a"}, "r", 1024)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, refused, err := s.Call(ctx, "a", "t", json.RawMessage(`{}`))
+	if err != nil || refused != nil || string(result) != `{"ok":true}` {
+		t.Fatalf("result %s, refused %+v, err %v", result, refused, err)
+	}
+}
+
+func jsonNumber(v any) string {
+	data, _ := json.Marshal(v)
+	return string(data)
+}
+
+func TestNestedSessionClosedWhenHandshakeFails(t *testing.T) {
+	var mu sync.Mutex
+	var deleted []string
+	gateway, _ := newGateway(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		switch {
+		case r.Method == http.MethodDelete:
+			mu.Lock()
+			deleted = append(deleted, r.Header.Get("Mcp-Session-Id"))
+			mu.Unlock()
+		case body["method"] == "initialize":
+			w.Header().Set("Mcp-Session-Id", "opened")
+			reply(w, body, map[string]any{"protocolVersion": OlderProtocol})
+		case body["method"] == "notifications/initialized":
+			// The connection drops before the handshake completes.
+			conn, _, _ := w.(http.Hijacker).Hijack()
+			conn.Close()
+		}
+	})
+	s := gateway.Session(Origin{Proxy: "a", Version: OlderProtocol}, "r", 1024)
+	if _, _, err := s.Call(context.Background(), "b", "t", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("the call succeeded without a session")
+	}
+	s.Close()
+	if len(deleted) != 1 || deleted[0] != "opened" {
+		t.Fatalf("closed sessions %v", deleted)
+	}
+}

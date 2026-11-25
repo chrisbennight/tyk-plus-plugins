@@ -55,7 +55,7 @@ Every limit is an operator maximum. A caller can lower any of them, with `timeou
 | Input, each tool result, the final result | `value_bytes` | `CODEMODE_MAX_VALUE_BYTES` | 1 MiB each |
 | Runs at once on this gateway | | `CODEMODE_MAX_RUNS` | 8 |
 
-The sandbox host has its own maximums and lowers any limit above them.
+The sandbox host has its own maximums and lowers any limit above them. The gateway's limit on a whole MCP request, 1 MiB, also applies: the input travels inside the `codemode.execute` request, and each call's arguments inside a nested request, so each must fit with the rest of its request. Results are not affected.
 
 Tyk ends any response that takes longer than its `write_timeout` (120 seconds by default), and a plug-in cannot extend it. If the run time limit, plus 10 seconds for the sandbox host to start a run and 5 seconds to reply, does not fit within `write_timeout`, Code Mode reports itself unavailable at startup and every run returns `unavailable`.
 

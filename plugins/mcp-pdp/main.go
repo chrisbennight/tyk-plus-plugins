@@ -26,6 +26,21 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	// A nested call from a Code Mode run carries the plug-in's own header,
 	// which is removed here so it never reaches an upstream.
 	nested, isNested := takeNested(r)
+	if isNested {
+		// Every nested request, including a session's handshake and teardown,
+		// must arrive at the proxy the plug-in sent it to. Otherwise the listen
+		// path Code Mode was given for that proxy leads elsewhere.
+		if oas := ctx.GetOASDefinition(r); oas == nil || oas.GetTykExtension() == nil || oas.GetTykExtension().Info.ID != nested.Proxy {
+			var envelope struct {
+				ID json.RawMessage `json:"id"`
+			}
+			body, _ := readBody(r)
+			_ = json.Unmarshal(body, &envelope)
+			slog.Warn("Code Mode request refused", "code_mode_run", nested.Run, "method", ctx.GetMCPMethod(r), "reason", "code_mode_wrong_proxy")
+			refuse(w, envelope.ID, "Tool call denied")
+			return
+		}
+	}
 	// Every request needs an identifiable caller, not only tool calls, so a
 	// credential the plug-in rejects cannot reach any other MCP method. Tool
 	// calls are refused below, through the logged decision. Other requests
@@ -83,9 +98,6 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
-	case isNested && nested.Proxy != oas.GetTykExtension().Info.ID:
-		// The listen path Code Mode was given for the proxy leads elsewhere.
-		reason = "code_mode_wrong_proxy"
 	case isNested && isCodeModeTool(name):
 		reason = "code_mode_recursion"
 	case codeModeOn(oas.GetTykExtension().Info.ID) && isCodeModeTool(name):

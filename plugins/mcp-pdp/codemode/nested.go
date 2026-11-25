@@ -97,14 +97,19 @@ type Gateway struct {
 	Registry *Registry
 }
 
-// NewClient returns the HTTP client nested calls use. It never uses a proxy
-// from the environment: nested calls go only to this gateway.
+// NewClient returns the HTTP client nested calls use. Nested calls carry the
+// caller's credential and go only to this gateway, so the client uses no
+// proxy from the environment and never follows a redirect; a redirect reaches
+// the program as an HTTP error.
 func NewClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{
-		Proxy:               nil,
-		MaxIdleConnsPerHost: 32,
-		IdleConnTimeout:     90 * time.Second,
-	}}
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy:               nil,
+			MaxIdleConnsPerHost: 32,
+			IdleConnTimeout:     90 * time.Second,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 }
 
 // Session makes one run's nested calls.
@@ -201,40 +206,56 @@ func (s *Session) open(ctx context.Context, proxy string) (string, *protocol.Err
 	if err != nil {
 		return "", nil, err
 	}
+	// The session exists once the server names it, so it is returned, and
+	// closed with the run, even if the rest of the handshake fails.
 	session := res.Header.Get("Mcp-Session-Id")
 	_, refused, err := readReply(res, id, replyOverhead)
 	res.Body.Close()
 	if err != nil || refused != nil {
-		return "", refused, err
+		return session, refused, err
 	}
 	note, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 	res, err = s.post(ctx, proxy, session, "notifications/initialized", "", note)
 	if err != nil {
-		return "", nil, err
+		return session, nil, err
 	}
 	io.Copy(io.Discard, io.LimitReader(res.Body, replyOverhead))
 	res.Body.Close()
 	return session, nil, nil
 }
 
-// Close ends the sessions the run opened.
+// closeWait bounds closing a run's sessions, all at once.
+const closeWait = 5 * time.Second
+
+// Close ends the sessions the run opened, in parallel. A session that cannot
+// be closed expires on its server.
 func (s *Session) Close() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	opened := map[string]string{}
 	for proxy, ps := range s.sessions {
-		if ps.id == "" {
-			continue
+		if ps.id != "" {
+			opened[proxy] = ps.id
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		req, err := s.request(ctx, http.MethodDelete, proxy, ps.id, "", "", nil)
-		if err == nil {
+	}
+	s.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), closeWait)
+	defer cancel()
+	var wg sync.WaitGroup
+	for proxy, id := range opened {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := s.request(ctx, http.MethodDelete, proxy, id, "", "", nil)
+			if err != nil {
+				return
+			}
 			if res, err := s.do(req, proxy); err == nil {
 				io.Copy(io.Discard, io.LimitReader(res.Body, replyOverhead))
 				res.Body.Close()
 			}
-		}
-		cancel()
+		}()
 	}
+	wg.Wait()
 }
 
 func (s *Session) post(ctx context.Context, proxy, session, method, name string, body []byte) (*http.Response, error) {
@@ -284,17 +305,18 @@ func (s *Session) do(req *http.Request, proxy string) (*http.Response, error) {
 }
 
 // readReply reads the JSON-RPC reply to request id, plain or streamed, from
-// at most limit bytes.
+// at most limit bytes. A stream is read only up to the event that answers.
 func readReply(res *http.Response, id int64, limit int) (json.RawMessage, *protocol.Error, error) {
-	data, err := io.ReadAll(io.LimitReader(res.Body, int64(limit)+1))
+	body := io.LimitReader(res.Body, int64(limit)+1)
+	var data []byte
+	var err error
+	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
+		data, err = streamedReply(body, id, limit)
+	} else if data, err = io.ReadAll(body); err == nil && len(data) > limit {
+		err = ErrTooLarge
+	}
 	if err != nil {
 		return nil, nil, err
-	}
-	if len(data) > limit {
-		return nil, nil, ErrTooLarge
-	}
-	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
-		data = streamedReply(data, id)
 	}
 	var reply struct {
 		ID     json.RawMessage `json:"id"`
@@ -320,28 +342,44 @@ func readReply(res *http.Response, id int64, limit int) (json.RawMessage, *proto
 	if json.Unmarshal(data, &gateway) == nil && gateway.Error != "" {
 		message = gateway.Error
 	}
-	if res.StatusCode >= 400 {
+	if res.StatusCode >= 300 {
 		return nil, &protocol.Error{Code: -32000, Message: fmt.Sprintf("HTTP %d: %s", res.StatusCode, message)}, nil
 	}
 	return nil, nil, errors.New("the gateway's reply was not a JSON-RPC reply to the call")
 }
 
-// streamedReply returns the event in a stream that answers request id.
-func streamedReply(stream []byte, id int64) []byte {
+// streamedReply reads a stream event by event and returns the data of the
+// event that answers request id, or nil if the stream ends without one. An
+// event's data may span several lines, which are joined as the event-stream
+// format requires.
+func streamedReply(r io.Reader, id int64, limit int) ([]byte, error) {
 	want := strconv.FormatInt(id, 10)
-	scanner := bufio.NewScanner(bytes.NewReader(stream))
-	scanner.Buffer(make([]byte, 64<<10), len(stream)+1)
-	for scanner.Scan() {
-		line, ok := strings.CutPrefix(scanner.Text(), "data:")
-		if !ok {
-			continue
+	reader := bufio.NewReader(r)
+	var lines []string
+	read := 0
+	for {
+		line, err := reader.ReadString('\n')
+		if read += len(line); read > limit {
+			return nil, ErrTooLarge
 		}
-		var message struct {
-			ID json.RawMessage `json:"id"`
+		switch line = strings.TrimRight(line, "\r\n"); {
+		case line == "" && len(lines) > 0:
+			data := strings.Join(lines, "\n")
+			lines = lines[:0]
+			var message struct {
+				ID json.RawMessage `json:"id"`
+			}
+			if json.Unmarshal([]byte(data), &message) == nil && string(message.ID) == want {
+				return []byte(data), nil
+			}
+		case strings.HasPrefix(line, "data:"):
+			lines = append(lines, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
-		if json.Unmarshal([]byte(line), &message) == nil && string(message.ID) == want {
-			return []byte(strings.TrimSpace(line))
+		if err == io.EOF {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
 		}
 	}
-	return nil
 }

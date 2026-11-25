@@ -132,6 +132,9 @@ func CheckResponse(w http.ResponseWriter, res *http.Response, req *http.Request)
 		}
 		out := drift.FilterToolsList(message, view, limits, requestID(req), isVisible, func(tool, fingerprint string, approved bool, definition jsontext.Value) {
 			declared = append(declared, drift.Observation{Tool: tool, Fingerprint: fingerprint, Approved: approved})
+			if isCodeModeTool(tool) {
+				reportReserved(proxy)(tool)
+			}
 			approvedFingerprint, _, _ := view.Approved(tool)
 			shared.Saw(proxy, upstream, tool, fingerprint, approved, receivedAt)
 			if fingerprint != approvedFingerprint && !view.Rejected(tool, fingerprint) {
@@ -269,12 +272,19 @@ func firstPage(r *http.Request) bool {
 // depends on the caller, so it is marked private.
 func editList(res *http.Response, req *http.Request) {
 	oas := ctx.GetOASDefinition(req)
-	if oas == nil || oas.GetTykExtension() == nil || res.Header.Get("Content-Encoding") != "" {
-		// Authorize asked for an uncompressed reply; one compressed anyway
-		// cannot be edited and passes as the upstream sent it.
+	if oas == nil || oas.GetTykExtension() == nil {
 		return
 	}
 	proxy, upstream := oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL
+	// Authorize asked for an uncompressed reply. One compressed anyway cannot
+	// be edited, so it is not passed on, as under drift review.
+	if res.Header.Get("Content-Encoding") != "" {
+		res.Body.Close()
+		replaceBody(res, drift.Failed(requestID(req)))
+		res.Header.Del("Content-Encoding")
+		slog.Warn("Refused a compressed tool list", "proxy", proxy)
+		return
+	}
 	add := codeModeListing(req, current(), proxy, upstream)
 	edit := func(message []byte) []byte { return codemode.EditList(message, add, reportReserved(proxy)) }
 	res.Header.Del("ETag")

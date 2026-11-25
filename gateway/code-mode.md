@@ -4,7 +4,7 @@ Code Mode lets an MCP client run a short JavaScript program that calls several t
 
 ## Finding tools
 
-On a proxy where Code Mode is on, `tools/list` includes each Code Mode tool the caller's rules permit, once, on the first page of the list. An upstream tool whose name starts with `codemode.` is hidden from lists on every proxy, and the gateway logs a warning naming it. To do this, the gateway reads every `tools/list` reply, plain or streamed, and asks upstreams for uncompressed replies; such a reply depends on the caller, so it is marked `Cache-Control: private, no-cache`. A reply compressed anyway passes as the upstream sent it.
+On a proxy where Code Mode is on, `tools/list` includes each Code Mode tool the caller's rules permit, once, on the first page of the list. An upstream tool whose name starts with `codemode.` is hidden from lists on every proxy, and the gateway logs a warning naming it. To do this, the gateway reads every `tools/list` reply, plain or streamed, and asks upstreams for uncompressed replies; such a reply depends on the caller, so it is marked `Cache-Control: private, no-cache`. A compressed reply is refused with the gateway's error, as it is under drift review.
 
 - **`codemode.search`** takes an optional `query`, `detail`, `limit` and `cursor`. It returns the tools the caller could call from a program, on every proxy where Code Mode is on that the caller's Tyk session may use: approved, passing the drift check that refuses calls, and visible under the caller's rules. Every word of the query must appear in a tool's name or description. `detail` is `summary` (the default: name, call form and first line of the description) or `full` (adds the approved input schema). Results come a page at a time, with a `nextCursor` for the next page of the same search.
 - **`codemode.describe`** takes a `proxy` and a `name`, and returns the tool's approved description and input schema and its call form, such as `connectors["governed"]["lookup"]`. A tool approved without its upstream definition is described without a schema. A tool the caller could not call is described exactly as one that does not exist.
@@ -78,7 +78,7 @@ Code Mode is off unless `CODEMODE_SANDBOX_ADDRESS` or `CODEMODE_PROXIES` is set.
 | Setting | Meaning |
 |---|---|
 | `CODEMODE_SANDBOX_ADDRESS` | The sandbox host, or a load balancer in front of several, as `host:port`. |
-| `CODEMODE_PROXIES` | The proxies where Code Mode is on, with their listen paths, as `governed=/mcp/,second=/mcp2/`. Programs may call tools on any of them. A nested call that reaches a different proxy than the one named here is refused. |
+| `CODEMODE_PROXIES` | The proxies where Code Mode is on, with their listen paths, as `governed=/mcp/,second=/mcp2/`. Programs may call tools on any of them. A nested call that reaches a different proxy than the one named here is refused. Every listed proxy must accept the same credentials, such as tokens from the same issuer for the same audience, because a run presents the caller's one credential to each of them, and search offers tools on every listed proxy the caller's Tyk session may use. |
 | `CODEMODE_TLS_CERT`, `CODEMODE_TLS_KEY` | The gateway's client certificate and key files. |
 | `CODEMODE_TLS_CA` | The certificate authority file that signed the sandbox host's certificate. |
 | `CODEMODE_SANDBOX_SERVER_NAME` | The name on the sandbox host's certificate, when it differs from the host in the address. |

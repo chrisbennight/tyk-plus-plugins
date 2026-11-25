@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/codemode"
@@ -127,13 +128,29 @@ func codeModeListing(req *http.Request, state *policy.Snapshot, proxy, upstream 
 }
 
 // reservedReported keeps the upstream tools already reported for using the
-// reserved prefix, so each is logged once.
-var reservedReported sync.Map
+// reserved prefix, so each is logged once, up to maxReserved tools.
+var (
+	reservedReported sync.Map
+	reservedCount    atomic.Int64
+)
+
+const maxReserved = 1024
 
 func reportReserved(proxy string) func(name string) {
 	return func(name string) {
-		if _, seen := reservedReported.LoadOrStore(proxy+"\x00"+name, true); !seen {
-			slog.Warn("Upstream tool hidden: its name uses the reserved Code Mode prefix", "proxy", proxy, "tool", name)
+		key := proxy + "\x00" + name
+		if _, seen := reservedReported.Load(key); seen {
+			return
+		}
+		switch n := reservedCount.Add(1); {
+		case n <= maxReserved:
+			if _, seen := reservedReported.LoadOrStore(key, true); !seen {
+				slog.Warn("Upstream tool hidden: its name uses the reserved Code Mode prefix", "proxy", proxy, "tool", name)
+			}
+		case n == maxReserved+1:
+			slog.Warn("Upstream tools hidden for using the reserved Code Mode prefix are no longer reported", "reported", maxReserved)
+		default:
+			reservedCount.Add(-1)
 		}
 	}
 }

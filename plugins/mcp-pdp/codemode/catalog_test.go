@@ -122,3 +122,18 @@ func TestDefinitionsAreValid(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchResumesAfterTheLastTool(t *testing.T) {
+	first, _ := Search(entries(), "", "", 1, "", "v1")
+	cursor := first["nextCursor"].(string)
+	// The first tool stops being callable before the next page: the page
+	// still starts with the tool after it, skipping nothing.
+	found, err := Search(entries()[1:], "", "", 1, cursor, "v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := found["tools"].([]map[string]any)
+	if len(tools) != 1 || tools[0]["proxy"] != "a" || tools[0]["name"] != "plain" {
+		t.Fatalf("next page %+v", tools)
+	}
+}

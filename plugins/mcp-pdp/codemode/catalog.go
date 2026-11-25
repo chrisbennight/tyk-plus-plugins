@@ -135,16 +135,24 @@ const (
 // ErrCursor reports a cursor from another query or policy set.
 var ErrCursor = errors.New("the cursor is not from this search; search again without it")
 
+// cursor records the last tool a page returned, so the next page resumes
+// after it in proxy and name order even if tools became callable or stopped
+// being callable in between.
 type cursor struct {
 	Version string `json:"v"`
 	Query   string `json:"q"`
-	Offset  int    `json:"o"`
+	Proxy   string `json:"p"`
+	Name    string `json:"n"`
+}
+
+// after reports whether e comes after the tool a cursor names.
+func (c cursor) after(e Entry) bool {
+	return e.Proxy > c.Proxy || e.Proxy == c.Proxy && e.Name > c.Name
 }
 
 // Search returns what codemode.search reports: the entries matching query,
-// one page at a time. Entries must be in a stable order. version identifies
-// the policy set, so a cursor from another set is refused rather than
-// skipping or repeating tools.
+// one page at a time. Entries must be in proxy and name order. version
+// identifies the policy set, so a cursor from another set is refused.
 func Search(entries []Entry, query, detail string, limit int, after, version string) (map[string]any, error) {
 	if limit <= 0 {
 		limit = defaultSearchLimit
@@ -154,14 +162,14 @@ func Search(entries []Entry, query, detail string, limit int, after, version str
 	if detail != "" && detail != "summary" && !full {
 		return nil, errors.New(`detail must be "summary" or "full"`)
 	}
-	offset := 0
+	var resume *cursor
 	if after != "" {
 		data, err := base64.RawURLEncoding.DecodeString(after)
 		var c cursor
-		if err != nil || json.Unmarshal(data, &c) != nil || c.Version != version || c.Query != query || c.Offset < 0 {
+		if err != nil || json.Unmarshal(data, &c) != nil || c.Version != version || c.Query != query {
 			return nil, ErrCursor
 		}
-		offset = c.Offset
+		resume = &c
 	}
 	terms := strings.Fields(strings.ToLower(query))
 	var matched []Entry
@@ -174,12 +182,12 @@ func Search(entries []Entry, query, detail string, limit int, after, version str
 				break
 			}
 		}
-		if all {
+		if all && (resume == nil || resume.after(e)) {
 			matched = append(matched, e)
 		}
 	}
 	tools := []map[string]any{}
-	for i := offset; i < len(matched) && len(tools) < limit; i++ {
+	for i := 0; i < len(matched) && len(tools) < limit; i++ {
 		e := matched[i]
 		a := e.approved()
 		item := map[string]any{"proxy": e.Proxy, "name": e.Name, "call": CallForm(e.Proxy, e.Name)}
@@ -194,8 +202,9 @@ func Search(entries []Entry, query, detail string, limit int, after, version str
 		tools = append(tools, item)
 	}
 	out := map[string]any{"tools": tools}
-	if next := offset + len(tools); next < len(matched) {
-		data, _ := json.Marshal(cursor{Version: version, Query: query, Offset: next})
+	if len(tools) < len(matched) {
+		last := matched[len(tools)-1]
+		data, _ := json.Marshal(cursor{Version: version, Query: query, Proxy: last.Proxy, Name: last.Name})
 		out["nextCursor"] = base64.RawURLEncoding.EncodeToString(data)
 	}
 	return out, nil
@@ -207,7 +216,7 @@ func LimitsReport(s *Settings) map[string]any {
 		"run_ms": s.Max.RunMillis, "call_ms": s.Max.CallMillis, "memory_bytes": s.Max.MemoryBytes,
 		"calls": s.Max.Calls, "calls_at_once": s.Max.CallsAtOnce, "program_bytes": s.Max.ProgramBytes,
 		"console_bytes": s.Max.ConsoleBytes, "value_bytes": s.Max.ValueBytes, "runs_at_once": s.Runs,
-		"note": "These are maximums. A run may lower any of them with codemode.execute's limits or timeout_seconds, but not raise them.",
+		"note": "Every limit except runs_at_once is a maximum for one run, which a run may lower with codemode.execute's limits or timeout_seconds but not raise. runs_at_once is this gateway's limit on runs at the same time.",
 	}
 }
 

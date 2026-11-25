@@ -127,8 +127,36 @@ func TestApprovingAFingerprintReleasesOnlyThatDefinition(t *testing.T) {
 	if strings.Contains(out, reviewed) || !strings.Contains(out, newer) || !strings.Contains(out, "changed") {
 		t.Fatalf("after approval the list was:\n%s", out)
 	}
+	// The entry stays until pruned, so rolling back to the previous set
+	// leaves it to review again.
+	if out, err := r.run("prune"); err != nil || !strings.Contains(out, "Removed 1") {
+		t.Fatalf("prune: %q, %v", out, err)
+	}
 	if _, err := os.Stat(filepath.Join(r.pending, encode("governed"), "tools", encode("change"), reviewed+".json")); !os.IsNotExist(err) {
-		t.Fatalf("the approved entry was not removed: %v", err)
+		t.Fatalf("prune left the approved entry: %v", err)
+	}
+}
+
+func TestApprovalLeavesOutUnreviewedMetadata(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	withMeta := strings.Replace(changedChange, `{"name"`, `{"_meta":{"note":"not reviewed"},"name"`, 1)
+	fp := r.queue("change", withMeta, "one", time.Now())
+	if _, err := r.run("approve", "-proxy", "governed", "-tool", "change", fp); err != nil {
+		t.Fatal(err)
+	}
+	view, _ := r.active().Drift("governed")
+	approved, definition, _ := view.Approved("change")
+	if approved != fp || strings.Contains(string(definition), "_meta") {
+		t.Fatalf("approved %s: %s", approved, definition)
+	}
+}
+
+func TestShowKeepsNumbersAsWritten(t *testing.T) {
+	r := newReview(t, map[string]string{"change": strings.Replace(approvedChange, `"name"`, `"annotations":{"rank":1},"name"`, 1)})
+	fp := r.queue("change", strings.Replace(approvedChange, `"name"`, `"annotations":{"rank":1.0},"name"`, 1), "one", time.Now())
+	out, err := r.run("show", "-proxy", "governed", "-tool", "change", fp)
+	if err != nil || !strings.Contains(out, "Annotation rank changed: 1 → 1.0") {
+		t.Fatalf("show: %v\n%s", err, out)
 	}
 }
 
@@ -154,8 +182,11 @@ func TestShowLabelsChangesAndWritesOutHiddenCharacters(t *testing.T) {
 
 func TestShowHintsAtARename(t *testing.T) {
 	r := newReview(t, map[string]string{"change": approvedChange})
+	// The upstream listed change, then renamed it.
+	start := time.Now()
+	r.declare("change", fingerprint(t, approvedChange), "one", start)
 	renamed := strings.Replace(approvedChange, `"name":"change"`, `"name":"modify"`, 1)
-	fp := r.queue("modify", renamed, "one", time.Now())
+	fp := r.queue("modify", renamed, "one", start.Add(time.Minute))
 	out, err := r.run("show", "-proxy", "governed", "-tool", "modify", fp)
 	if err != nil {
 		t.Fatal(err)
@@ -205,18 +236,26 @@ func TestApproveAllAdoptsTheLatestDefinitionsAfterTheCountIsConfirmed(t *testing
 	r.writeJSON(filepath.Join(encode("governed"), "instructions", policy.InstructionsFingerprint("Be brief.")+".json"), map[string]any{
 		"proxy": "governed", "fingerprint": policy.InstructionsFingerprint("Be brief."), "instructions": "Be brief.", "firstSeen": start, "gateway": "one"})
 	before := r.active().Version
-	if out, err := r.run("approve-all", "-proxy", "governed"); err == nil || !strings.Contains(err.Error(), "-count 3") || !strings.Contains(out, latest) || strings.Contains(out, older) {
-		t.Fatalf("approve-all without a count: %q, %v", out, err)
+	out, err := r.run("approve-all", "-proxy", "governed")
+	if err == nil || !strings.Contains(err.Error(), "-confirm 3-") || !strings.Contains(out, latest) || strings.Contains(out, older) {
+		t.Fatalf("approve-all without confirmation: %q, %v", out, err)
 	}
-	if _, err := r.run("approve-all", "-proxy", "governed", "-count", "2"); err == nil {
-		t.Fatal("approve-all accepted the wrong count")
+	code := strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
+	// The upstream changes lookup after the preview: the count is the same,
+	// but the code no longer matches.
+	changedLookup := r.queue("lookup", strings.Replace(lookup, "Find", "Locate", 1), "one", start.Add(2*time.Minute))
+	if _, err := r.run("approve-all", "-proxy", "governed", "-confirm", code); err == nil {
+		t.Fatal("approve-all accepted a confirmation for a list that changed")
 	}
 	if r.active().Version != before {
-		t.Fatal("approve-all changed the set before the count was confirmed")
+		t.Fatal("approve-all changed the set before the list was confirmed")
 	}
-	if _, err := r.run("approve-all", "-proxy", "governed", "-count", "3"); err != nil {
+	_, err = r.run("approve-all", "-proxy", "governed")
+	code = strings.Fields(err.Error()[strings.Index(err.Error(), "-confirm "):])[1]
+	if _, err := r.run("approve-all", "-proxy", "governed", "-confirm", code); err != nil {
 		t.Fatal(err)
 	}
+	found = changedLookup
 	snapshot := r.active()
 	view, _ := snapshot.Drift("governed")
 	approvedChange, _, _ := view.Approved("change")

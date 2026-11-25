@@ -79,7 +79,7 @@ func (r *Review) Tool(proxy, tool, fingerprint string) (ToolEntry, error) {
 		return entry, fmt.Errorf("%q is not a fingerprint", fingerprint)
 	}
 	name := path.Join(encodeName(proxy), "tools", encodeName(tool), fingerprint+".json")
-	if err := r.read(name, &entry); err != nil {
+	if err := r.read(name, &entry, maxEntryFile); err != nil {
 		return entry, err
 	}
 	actual, err := policy.DefinitionFingerprint(entry.Definition)
@@ -117,7 +117,7 @@ func (r *Review) InstructionsEntry(proxy, fingerprint string) (InstructionsEntry
 	if !fingerprintPattern.MatchString(fingerprint) {
 		return entry, fmt.Errorf("%q is not a fingerprint", fingerprint)
 	}
-	if err := r.read(path.Join(encodeName(proxy), "instructions", fingerprint+".json"), &entry); err != nil {
+	if err := r.read(path.Join(encodeName(proxy), "instructions", fingerprint+".json"), &entry, maxEntryFile); err != nil {
 		return entry, err
 	}
 	if entry.Proxy != proxy || entry.Fingerprint != fingerprint || policy.InstructionsFingerprint(entry.Instructions) != fingerprint {
@@ -135,10 +135,14 @@ func (r *Review) Declarations(proxy, tool string) ([]Declared, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Gateways read no further than this, and refuse calls past it.
+	if len(files) > maxGatewaysPerTool {
+		return nil, fmt.Errorf("%s/%s has %d declaration files; gateways refuse calls on %s until retired gateways' files are removed", proxy, tool, len(files), proxy)
+	}
 	var declared []Declared
 	for _, file := range files {
 		var d Declared
-		if err := r.read(path.Join(dir, file), &d); err != nil {
+		if err := r.read(path.Join(dir, file), &d, maxDeclarationFile); err != nil {
 			return nil, err
 		}
 		if d.Gateway == "" || d.Upstream == "" || d.SeenAt.IsZero() || file != declarationFile(d.Gateway, d.Upstream) ||
@@ -240,18 +244,18 @@ func (r *Review) names(dir string) ([]string, error) {
 	return names, nil
 }
 
-func (r *Review) read(name string, v any) error {
+func (r *Review) read(name string, v any, limit int64) error {
 	f, err := r.root.Open(name)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, maxEntryFile+1))
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return err
 	}
-	if len(data) > maxEntryFile {
-		return fmt.Errorf("%s is larger than any entry a gateway writes", name)
+	if int64(len(data)) > limit {
+		return fmt.Errorf("%s is larger than any file a gateway writes", name)
 	}
 	if err := jsonv2.Unmarshal(data, v); err != nil {
 		return fmt.Errorf("%s: %w", name, err)

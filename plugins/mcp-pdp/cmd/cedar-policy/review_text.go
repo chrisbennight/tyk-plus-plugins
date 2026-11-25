@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 	jsonv2 "github.com/go-json-experiment/json"
 	"github.com/go-json-experiment/json/jsontext"
 )
@@ -153,21 +154,18 @@ func text(value jsontext.Value) (string, bool) {
 	return s, len(value) > 0 && jsonv2.Unmarshal(value, &s) == nil
 }
 
-// canonical returns a value's compact JSON with object keys sorted, so equal
-// values compare equal however they were written.
+// canonical returns a value in the canonical form fingerprints use: keys
+// sorted, strings by their text, and numbers exactly as written, so values
+// compare equal exactly when they would fingerprint alike.
 func canonical(value jsontext.Value) string {
 	if len(value) == 0 {
 		return ""
 	}
-	var v any
-	if jsonv2.Unmarshal(value, &v) != nil {
-		return string(value)
-	}
-	out, err := jsonv2.Marshal(v, jsonv2.Deterministic(true))
+	out, err := policy.Canonical(value)
 	if err != nil {
 		return string(value)
 	}
-	return string(out)
+	return out
 }
 
 // indented returns a value as indented JSON, made visible. Strings are

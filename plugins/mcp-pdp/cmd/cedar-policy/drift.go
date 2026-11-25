@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -28,13 +30,13 @@ const driftUsage = `Usage:
       in a new set made from the active one and made active.
   cedar-policy drift reject -store DIR -pending DIR -proxy NAME (-tool NAME | -instructions) [-label TEXT] FINGERPRINT
       Record a rejection in a new active set, so gateways no longer queue it.
-  cedar-policy drift approve-all -store DIR -pending DIR -proxy NAME [-count N] [-label TEXT]
+  cedar-policy drift approve-all -store DIR -pending DIR -proxy NAME [-confirm CODE] [-label TEXT]
       Adopt what a proxy's upstream now declares: approve, for each tool, the
       definition gateways saw last, and the waiting instructions when there
-      is only one. Without -count it lists them; with -count it approves them
-      if there are exactly that many.
+      is only one. Without -confirm it lists them with their count and a
+      confirmation code; with that code it approves exactly that list.
   cedar-policy drift prune -store DIR -pending DIR
-      Remove waiting changes the active set already approves or rejects.
+      Remove review entries the active set already approves or rejects.
   cedar-policy drift retire -pending DIR GATEWAY
       Remove the declarations a gateway shared, once it will not run again.
       A running gateway's sightings would be lost until it lists tools again.
@@ -42,9 +44,8 @@ const driftUsage = `Usage:
 
 // driftFlags are the options the drift commands share.
 type driftFlags struct {
-	store, pending, proxy, tool, label string
-	instructions                       bool
-	count                              int
+	store, pending, proxy, tool, label, confirm string
+	instructions                                bool
 }
 
 func runDrift(args []string, out io.Writer, now func() time.Time) error {
@@ -61,7 +62,7 @@ func runDrift(args []string, out io.Writer, now func() time.Time) error {
 	flags.StringVar(&f.tool, "tool", "", "tool name")
 	flags.BoolVar(&f.instructions, "instructions", false, "the proxy's instructions rather than a tool")
 	flags.StringVar(&f.label, "label", "", "label for the new set")
-	flags.IntVar(&f.count, "count", -1, "number of changes approve-all should approve")
+	flags.StringVar(&f.confirm, "confirm", "", "confirmation code approve-all printed for the list it showed")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -146,6 +147,9 @@ func pendingTools(review *drift.Review, view policy.DriftView, proxy string) ([]
 		return nil, nil, err
 	}
 	var waiting []pendingTool
+	// Each tool's declarations are read once, so at most one of its waiting
+	// definitions is the latest, however gateways write meanwhile.
+	latest := map[string]string{}
 	for _, entry := range entries {
 		approved, _, ok := view.Approved(entry.Tool)
 		if approved == entry.Fingerprint || view.Rejected(entry.Tool, entry.Fingerprint) {
@@ -155,11 +159,18 @@ func pendingTools(review *drift.Review, view policy.DriftView, proxy string) ([]
 		if ok {
 			kind = "changed"
 		}
-		newest, found, err := review.Newest(proxy, entry.Tool, view.Upstream())
-		if err != nil {
-			problems = append(problems, err)
+		fingerprint, read := latest[entry.Tool]
+		if !read {
+			newest, found, err := review.Newest(proxy, entry.Tool, view.Upstream())
+			if err != nil {
+				problems = append(problems, err)
+			}
+			if found {
+				fingerprint = newest.Fingerprint
+			}
+			latest[entry.Tool] = fingerprint
 		}
-		waiting = append(waiting, pendingTool{entry: entry, kind: kind, latest: found && newest.Fingerprint == entry.Fingerprint})
+		waiting = append(waiting, pendingTool{entry: entry, kind: kind, latest: fingerprint != "" && fingerprint == entry.Fingerprint})
 	}
 	return waiting, problems, nil
 }
@@ -297,12 +308,12 @@ func driftShow(out io.Writer, review *drift.Review, f driftFlags, fingerprint st
 	}
 	writeCounts(&b, invisible, lookAlike)
 	if !isApproved {
-		hints, err := renameHints(review, view, f.proxy, entry.Definition)
+		hints, err := renameHints(review, view, f.proxy, entry)
 		if err != nil {
 			return err
 		}
 		for _, name := range hints {
-			fmt.Fprintf(&b, "This may be a rename of %s, which is approved but no longer declared.\n", shownName(name))
+			fmt.Fprintf(&b, "This may be a rename of %s, which is approved but has not been declared since.\n", shownName(name))
 		}
 	}
 	if isApproved {
@@ -334,17 +345,21 @@ func writeCounts(b *strings.Builder, invisible, lookAlike int) {
 	}
 }
 
-// renameHints returns approved tools no gateway sees the upstream declare
-// any more that take the same input or have the same description as a new
-// tool.
-func renameHints(review *drift.Review, view policy.DriftView, proxy string, definition jsontext.Value) ([]string, error) {
-	missing, err := missingTools(review, view, proxy)
-	if err != nil {
-		return nil, err
-	}
-	proposed := object(definition)
+// renameHints returns approved tools that take the same input or have the
+// same description as a new tool and that the upstream stopped declaring:
+// no gateway has seen it declare them since the new tool was first seen.
+// Every list declares all its tools, so a tool still listed was seen then.
+func renameHints(review *drift.Review, view policy.DriftView, proxy string, entry drift.ToolEntry) ([]string, error) {
+	proposed := object(entry.Definition)
 	var hints []string
-	for _, name := range missing {
+	for _, name := range view.ApprovedTools() {
+		newest, found, err := review.Newest(proxy, name, view.Upstream())
+		if err != nil {
+			return nil, err
+		}
+		if found && !newest.SeenAt.Before(entry.FirstSeen) {
+			continue
+		}
 		_, approved, _ := view.Approved(name)
 		old := object(jsontext.Value(approved))
 		sameSchema := proposed["inputSchema"] != nil && canonical(old["inputSchema"]) == canonical(proposed["inputSchema"])
@@ -398,15 +413,17 @@ func driftDecide(out io.Writer, review *drift.Review, f driftFlags, fingerprint 
 		return err
 	}
 	fmt.Fprintln(out, set)
-	removeEntries(out, review, []decision{d})
 	return nil
 }
 
+// describe names a decision's subject for a terminal, with hidden
+// characters written out, as tool and proxy names come from upstreams and
+// operators.
 func describe(d decision) string {
 	if d.instructions {
-		return d.proxy + " instructions"
+		return shownName(d.proxy) + " instructions"
 	}
-	return d.proxy + "/" + d.tool
+	return shownName(d.proxy) + "/" + shownName(d.tool)
 }
 
 // applyDecisions writes decisions into a new set made from the active one,
@@ -479,7 +496,13 @@ func apply(proxy map[string]jsontext.Value, instructions map[string]string, acti
 		if tools[d.tool] == nil {
 			tools[d.tool] = map[string]jsontext.Value{}
 		}
-		tools[d.tool]["definition"] = d.definition
+		// A definition's fingerprint leaves out its top-level _meta, so the
+		// reviewer never approved it; the approved definition has none.
+		definition, err := withoutMeta(d.definition)
+		if err != nil {
+			return err
+		}
+		tools[d.tool]["definition"] = definition
 	} else if approved, _, _ := view.Approved(d.tool); approved == d.fingerprint {
 		return errors.New("this is the approved definition")
 	}
@@ -499,6 +522,16 @@ func apply(proxy map[string]jsontext.Value, instructions map[string]string, acti
 		delete(rejected, d.tool)
 	}
 	return setDrift(proxy, settings, "rejectedTools", rejected)
+}
+
+// withoutMeta returns a definition without its top-level _meta member.
+func withoutMeta(definition jsontext.Value) (jsontext.Value, error) {
+	var members map[string]jsontext.Value
+	if err := jsonv2.Unmarshal(definition, &members); err != nil {
+		return nil, err
+	}
+	delete(members, "_meta")
+	return jsonv2.Marshal(members, jsonv2.Deterministic(true))
 }
 
 // setDrift writes a drift setting back, leaving it out when it is empty.
@@ -541,23 +574,6 @@ func marshalIndented(v any) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// removeEntries removes the review entries of decisions now in the active
-// set. The set already settles them, so a failure only leaves an entry that
-// prune can remove later.
-func removeEntries(out io.Writer, review *drift.Review, decisions []decision) {
-	for _, d := range decisions {
-		var err error
-		if d.instructions {
-			err = review.RemoveInstructions(d.proxy, d.fingerprint)
-		} else {
-			err = review.RemoveTool(d.proxy, d.tool, d.fingerprint)
-		}
-		if err != nil {
-			fmt.Fprintf(out, "Warning: could not remove the review entry for %s: %v; drift prune removes it later.\n", describe(d), err)
-		}
-	}
-}
-
 func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func() time.Time) error {
 	snapshot, err := activeSet(f.store)
 	if err != nil {
@@ -596,11 +612,12 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 	for _, d := range decisions {
 		fmt.Fprintf(out, "%s\t%s\n", describe(d), d.fingerprint)
 	}
-	if f.count < 0 {
-		return fmt.Errorf("%d change(s) would be approved; review them with drift show, then run again with -count %d", len(decisions), len(decisions))
+	code := confirmation(decisions)
+	if f.confirm == "" {
+		return fmt.Errorf("%d change(s) would be approved; review them with drift show, then run again with -confirm %s", len(decisions), code)
 	}
-	if f.count != len(decisions) {
-		return fmt.Errorf("%d change(s) are waiting, not %d; nothing was approved", len(decisions), f.count)
+	if f.confirm != code {
+		return fmt.Errorf("the waiting changes are not the ones confirmed; nothing was approved. %d change(s) are waiting now, with code %s", len(decisions), code)
 	}
 	if len(decisions) == 0 {
 		fmt.Fprintln(out, "Nothing to approve.")
@@ -615,8 +632,20 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 		return err
 	}
 	fmt.Fprintln(out, set)
-	removeEntries(out, review, decisions)
 	return nil
+}
+
+// confirmation is a code for an exact list of decisions: their count and a
+// digest of what each approves, so a confirmation never covers a list that
+// changed after it was shown.
+func confirmation(decisions []decision) string {
+	lines := make([]string, len(decisions))
+	for i, d := range decisions {
+		lines[i] = fmt.Sprintf("%s\x00%s\x00%t\x00%s", d.proxy, d.tool, d.instructions, d.fingerprint)
+	}
+	slices.Sort(lines)
+	sum := sha256.Sum256([]byte(strings.Join(lines, "\n")))
+	return fmt.Sprintf("%d-%s", len(decisions), hex.EncodeToString(sum[:6]))
 }
 
 func driftPrune(out io.Writer, review *drift.Review, f driftFlags) error {

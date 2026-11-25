@@ -29,7 +29,7 @@ docker compose run --build --rm runner
 - the mock servers `directory`, `payments`, `notes` and `older`;
 - `policy`, which publishes the example policy set into the gateway's store and exits.
 
-The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
+The runner checks every row of [`expected.json`](expected.json) with clients of both supported protocol versions. It confirms what the client sees, whether the call reached the server, and that each client used the protocol version it should. It also checks each caller's tool list on each server against `listed`: a caller is shown the approved tools it could call with some arguments, and no others. It ends by printing how many checks passed and failed, and exits non-zero on any failure.
 
 The gateway listens on `127.0.0.1:8080` (`GATEWAY_PORT`) and the issuer on `127.0.0.1:8090` (`ISSUER_PORT`). Stop everything with `docker compose down -v`.
 
@@ -69,7 +69,7 @@ Every server reports, outside MCP at `GET /requests`, how many MCP requests it r
 
 [`policy/`](policy) is the example policy set: [rules](policy/rules.cedar), [approved tools](policy/approved_tools.json), approved instructions and activation checks. The [policy guide](../gateway/policy/README.md) explains the format.
 
-The approved tool definitions are copied from each server's `tools/list`.
+Every proxy is under drift review, so clients see only the approved tool definitions, and each caller sees only the tools it could call. A tool that was never approved, such as `notes.archive`, is neither listed nor callable. The approved tool definitions are copied exactly from each server's `tools/list`; a tool whose definition differs from what the server declares is hidden, and its calls are refused once the gateway has seen the difference in a tool list, until the new definition is approved.
 
 The activation checks are generated from `expected.json`. The gateway rejects a policy set whose checks fail, and the runner refuses to run while the committed checks differ from `expected.json`. Regenerate the checks whenever you change `expected.json` or the approved tools, so the published policy is checked against the current expectations. After changing `expected.json`, regenerate the checks and publish again:
 
@@ -101,7 +101,7 @@ The configurations name two callers with different access side by side, so the d
 
 Check in each client:
 
-1. Each server lists its tools.
+1. Each server lists only the tools that caller may call. For example, `indexer` sees `search` and `get_person` on `directory`, and `deployer` also sees the tools that change records.
 2. A permitted call works. For example, `indexer` searches the directory.
 3. A refused call is reported. Both clients show a refusal as an error from the server, not as a failed tool result: Claude Code shows the server's reply, containing `-32002` and `Tool call denied`, and Codex shows `Mcp error: -32002: Tool call denied`.
 4. The two callers differ. For example, `deployer` may delete a person and `indexer` may not.
@@ -111,5 +111,5 @@ Check in each client:
 | To check | Do this |
 | --- | --- |
 | Another gateway | Configure it with an equivalent policy. Run the runner against it with `GATEWAY_URL`, and set `EXAMPLE_INDEXER_KEY` and `EXAMPLE_DEPLOYER_KEY` to credentials your gateway accepts for those callers, and `EXAMPLE_KEY_WITHOUT_METADATA_KEY` to a key it recognizes that carries no identity. `expected.json` states every outcome without naming Cedar. |
-| Another MCP server | Replace a mock server's service in `compose.yaml` and point that proxy's API definition in `gateway/apps/` at it. In `policy/approved_tools.json`, set that proxy's `upstream` to the same URL and approve the new server's tools; the gateway refuses every call while the two URLs differ. The runner also reads each mock's `GET /requests` report to see what arrived, so to use the runner, the replacement must serve the same report; otherwise check it with a client. |
+| Another MCP server | Replace a mock server's service in `compose.yaml` and point that proxy's API definition in `gateway/apps/` at it. In `policy/approved_tools.json`, set that proxy's `upstream` to the same URL and approve the new server's tools, copying each definition exactly from its `tools/list`; the gateway refuses every call while the two URLs differ, and hides any tool whose definition differs. The runner also reads each mock's `GET /requests` report to see what arrived, so to use the runner, the replacement must serve the same report; otherwise check it with a client. |
 | Another MCP client | Connect it to `http://127.0.0.1:8080/<server>/` with a key in `X-API-Key` or a token in `Authorization: Bearer`, and compare what it shows with `expected.json`. |

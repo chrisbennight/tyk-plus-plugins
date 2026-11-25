@@ -71,6 +71,7 @@ func run(e *examples) bool {
 				k.Key+"+"+k.Token, key.with(token), version, k.Server, k.Tool, k.Arguments, k.Expect)
 		}
 	}
+	r.listedTools()
 	r.refusedCallers()
 
 	fmt.Printf("\n%d checks passed, %d failed.\n", r.passed, len(r.failed))
@@ -151,6 +152,63 @@ func (r *runner) check(what, caller string, cred credential, version, server, to
 			r.pass(what)
 		}
 	}
+}
+
+// listedTools confirms that each caller's tools/list on each server shows
+// exactly the tools expected.json names: the approved tools the caller could
+// call with some arguments.
+func (r *runner) listedTools() {
+	for _, caller := range sortedKeys(r.e.expected.Listed) {
+		servers := r.e.expected.Listed[caller]
+		cred, err := r.creds.of(caller)
+		if err != nil {
+			fail(err)
+		}
+		for _, server := range sortedKeys(servers) {
+			want := slices.Sorted(slices.Values(servers[server]))
+			for _, version := range versions {
+				what := fmt.Sprintf("%s lists the tools on %s with a %s client: %v", caller, server, version, want)
+				session, err := r.session(caller, cred, version, server)
+				if err != nil {
+					r.fail(what, "could not connect: "+err.Error())
+					continue
+				}
+				got, err := toolNames(session)
+				switch {
+				case err != nil:
+					r.fail(what, "listing failed: "+err.Error())
+				case !slices.Equal(got, want):
+					r.fail(what, fmt.Sprintf("listed %v", got))
+				default:
+					r.pass(what)
+				}
+			}
+		}
+	}
+}
+
+// toolNames lists every tool a session is shown, across pages, sorted.
+func toolNames(session *mcp.ClientSession) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	names := []string{}
+	for tool, err := range session.Tools(ctx, nil) {
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	return names, nil
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 // wantVersion is the protocol version a client asking for version should end

@@ -19,7 +19,11 @@ type expectations struct {
 	// client asks for.
 	OlderProtocolOnly []string `json:"olderProtocolOnly"`
 	Calls             []call   `json:"calls"`
-	RefusedCallers    []string `json:"refusedCallers"`
+	// Listed gives, for each caller and server, the tools the caller's
+	// tools/list shows: every approved tool it could call with some
+	// arguments, and no other.
+	Listed         map[string]map[string][]string `json:"listed"`
+	RefusedCallers []string                       `json:"refusedCallers"`
 	// KeyAndToken lists requests carrying both a key and a token. The key
 	// identifies the caller, so each expectation follows the key's access.
 	KeyAndToken []struct {
@@ -64,6 +68,9 @@ type approvedTools map[string]struct {
 	Upstream string `json:"upstream"`
 	Tools    map[string]struct {
 		Arguments map[string]string `json:"arguments"`
+		// Definition is the approved definition. On a proxy under drift
+		// review, a tool without one is never listed or called.
+		Definition json.RawMessage `json:"definition"`
 	} `json:"tools"`
 }
 
@@ -129,7 +136,44 @@ func load(dir string) (*examples, error) {
 			return nil, fmt.Errorf("expected.json call %d: %w", i, err)
 		}
 	}
+	if err := e.checkListed(); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// checkListed reports an error when expected.json's listed tools leave out a
+// caller that calls uses or a proxy for a caller they name, so no check is
+// dropped by deleting a row; or when they name an unknown caller or proxy, or
+// a tool without an approved definition, which is never listed.
+func (e *examples) checkListed() error {
+	for _, c := range e.expected.Calls {
+		if _, ok := e.expected.Listed[c.Caller]; !ok {
+			return fmt.Errorf("expected.json listed: %s makes calls but its tool list is not given", c.Caller)
+		}
+	}
+	for caller, servers := range e.expected.Listed {
+		if _, err := e.identity(caller); err != nil {
+			return fmt.Errorf("expected.json listed: %w", err)
+		}
+		for server := range e.tools {
+			if _, ok := servers[server]; !ok {
+				return fmt.Errorf("expected.json listed: %s's tool list on %s is not given", caller, server)
+			}
+		}
+		for server, tools := range servers {
+			inv, ok := e.tools[server]
+			if !ok {
+				return fmt.Errorf("expected.json listed: there is no proxy named %q", server)
+			}
+			for _, tool := range tools {
+				if t, approved := inv.Tools[tool]; !approved || len(t.Definition) == 0 {
+					return fmt.Errorf("expected.json listed: %s should see %s.%s, but that tool has no approved definition", caller, server, tool)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // callerName is the issuer's rule for a person's name, applied to every caller.

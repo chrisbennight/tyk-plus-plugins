@@ -1,6 +1,7 @@
 {
   "directory": {
     "upstream": "http://directory:8000/mcp",
+    "drift": {},
     "tools": {
       "search": {
         "facts": {
@@ -237,6 +238,7 @@
   },
   "payments": {
     "upstream": "http://payments:8000/mcp",
+    "drift": {},
     "tools": {
       "get_balance": {
         "facts": {
@@ -393,6 +395,7 @@
   },
   "notes": {
     "upstream": "http://notes:8000/mcp",
+    "drift": {},
     "tools": {
       "search": {
         "tags": [
@@ -526,6 +529,7 @@
   },
   "older": {
     "upstream": "http://older:8000/mcp",
+    "drift": {},
     "tools": {
       "search": {
         "facts": {

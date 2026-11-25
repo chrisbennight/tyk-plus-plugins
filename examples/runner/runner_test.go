@@ -98,6 +98,43 @@ func TestPermittedRowForUnapprovedToolIsAnError(t *testing.T) {
 	}
 }
 
+// An unapproved tool is never listed, so expecting a caller to see one
+// contradicts the approved tools.
+func TestListedUnapprovedToolIsAnError(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.expected.Listed) == 0 {
+		t.Fatal("expected.json lists no tools")
+	}
+	e.expected.Listed["admin"]["notes"] = append(e.expected.Listed["admin"]["notes"], "archive")
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a listed unapproved tool was accepted")
+	}
+	e.expected.Listed["admin"]["nowhere"] = nil
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a listed unknown proxy was accepted")
+	}
+}
+
+// Deleting a row of listed must not silently drop its checks.
+func TestListedMustCoverEveryCallerAndProxy(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	delete(e.expected.Listed["analyst"], "notes")
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a caller missing a proxy was accepted")
+	}
+	e, _ = load("..")
+	delete(e.expected.Listed, "analyst")
+	if err := e.checkListed(); err == nil {
+		t.Fatal("a caller that makes calls but has no tool list was accepted")
+	}
+}
+
 func TestRefusalOfReadsBothErrorShapes(t *testing.T) {
 	transport := errors.New(`Error POSTing to endpoint: {"error":{"code":-32002,"message":"Tool call denied"},"id":4,"jsonrpc":"2.0"}`)
 	if r, ok := refusalOf(transport); !ok || *r != (rpcError{-32002, "Tool call denied", ""}) {

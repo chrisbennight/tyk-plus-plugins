@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -83,7 +84,7 @@ type Settings struct {
 // Tyk holds the gateway settings Code Mode depends on.
 type Tyk struct {
 	// ListenAddress is the address Tyk listens on; empty means every
-	// address, so nested calls use the loopback address.
+	// address.
 	ListenAddress string
 	ListenPort    int
 	UseTLS        bool
@@ -127,13 +128,21 @@ func Load(getenv func(string) string, tyk Tyk) (*Settings, error) {
 		if tyk.UseTLS {
 			scheme = "https"
 		}
-		host := tyk.ListenAddress
-		if host == "" {
-			host = "127.0.0.1"
+		// Nested calls stay on this machine: they use Tyk's listen address
+		// when it is a loopback address, and 127.0.0.1 otherwise, which
+		// reaches Tyk when it listens on every address, its default.
+		host := "127.0.0.1"
+		if ip := net.ParseIP(tyk.ListenAddress); ip != nil && ip.IsLoopback() {
+			host = tyk.ListenAddress
 		}
 		s.Gateway = fmt.Sprintf("%s://%s", scheme, net.JoinHostPort(host, strconv.Itoa(tyk.ListenPort)))
 	}
 	s.Gateway = strings.TrimSuffix(s.Gateway, "/")
+	// Nested calls carry the caller's credential, so they may only go to
+	// this gateway, on this machine.
+	if !loopbackURL(s.Gateway) {
+		fail("CODEMODE_GATEWAY_URL must be an http or https address on this machine (localhost or a loopback address), not %q", s.Gateway)
+	}
 	number := func(name string, target *int64) {
 		if value := getenv(name); value != "" {
 			n, err := strconv.ParseInt(value, 10, 64)
@@ -171,6 +180,20 @@ func Load(getenv func(string) string, tyk Tyk) (*Settings, error) {
 		return s, errors.New(strings.Join(problems, "; "))
 	}
 	return s, nil
+}
+
+// loopbackURL reports whether a URL is http or https on a loopback host.
+func loopbackURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" {
+		return false
+	}
+	host := u.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 var proxyID = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)

@@ -312,8 +312,9 @@ func (r *Runner) call(ctx context.Context, call Call, m protocol.Message, limits
 		return reply, "unknown", nil
 	case refused != nil:
 		reply.Error = refused
-		if len(reply.Error.Message) > limits.ValueBytes {
-			reply.Error.Message = reply.Error.Message[:limits.ValueBytes]
+		const marker = " [shortened to the value size limit]"
+		if len(reply.Error.Message) > limits.ValueBytes && limits.ValueBytes > len(marker) {
+			reply.Error.Message = strings.ToValidUTF8(reply.Error.Message[:limits.ValueBytes-len(marker)], "") + marker
 		}
 		return reply, "refused", nil
 	case len(result) > limits.ValueBytes:

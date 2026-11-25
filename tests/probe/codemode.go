@@ -180,7 +180,9 @@ return [a.content[0].text, b.content[0].text];`, nil, nil)
 		// Tyk's own checks apply to nested calls too: token callers have no
 		// access right to the second proxy, so a program sees the refusal a
 		// direct request gets.
-		second := &conn{url: secondGateway, version: c.version}
+		// Calls to another proxy use the older protocol, which every upstream
+		// speaks, so the direct request does too.
+		second := &conn{url: secondGateway, version: olderProtocol}
 		direct := second.rpc(supportToken, "tools/call", map[string]any{"name": "lookup", "arguments": args("count", 7)})
 		seen, _ := programCall(c, supportToken, "governed2", "lookup", args("count", 7))
 		check(direct.Status == http.StatusForbidden && direct.Error != nil && seen["code"] == float64(direct.Error.Code) && seen["message"] == direct.Error.Message,

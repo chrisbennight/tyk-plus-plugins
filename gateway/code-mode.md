@@ -8,6 +8,8 @@ Code Mode lets an MCP client run a short JavaScript program that calls several t
 2. The plug-in opens one mutual-TLS connection to the sandbox host and refuses the run unless the host reports a backend this gateway accepts. It then sends the program, its input and its limits.
 3. For each tool call the program makes, the plug-in checks only that the proxy is one where Code Mode is on and that the tool name is well formed. It builds the request and every header itself and sends it to this gateway's own address for that proxy, with the caller's credential. Tyk's authentication, access rights and rate limits, the drift checks and the caller's rules then apply as they do to a direct call.
 4. The result, or the refusal a direct caller would get, goes back to the program.
+
+Calls on the run's own proxy use the client's protocol version and session. Calls to another proxy use protocol version `2025-11-25`, which every supported upstream speaks, with a session the run opens there as the caller and closes when it ends.
 5. When the program returns, the client receives its result and console output, and the sandbox is destroyed.
 
 The sandbox host never receives a credential or the caller's identity, and the plug-in never contacts an upstream itself.
@@ -71,7 +73,7 @@ Code Mode is off unless `CODEMODE_SANDBOX_ADDRESS` or `CODEMODE_PROXIES` is set.
 | `CODEMODE_TLS_CA` | The certificate authority file that signed the sandbox host's certificate. |
 | `CODEMODE_SANDBOX_SERVER_NAME` | The name on the sandbox host's certificate, when it differs from the host in the address. |
 | `CODEMODE_BACKENDS` | The sandbox backends this gateway accepts, comma separated. The default, `gvisor`, is the only one for production; add `runc` only for development. |
-| `CODEMODE_GATEWAY_URL` | Where nested calls reach this gateway. By default, Tyk's own listen address and port, using `127.0.0.1` when Tyk listens on every address. |
+| `CODEMODE_GATEWAY_URL` | Where nested calls reach this gateway. It must be on this machine: `localhost` or a loopback address, because nested calls carry the caller's credential. By default, Tyk's own port on `127.0.0.1`, which reaches Tyk when it listens on every address, as it does by default. |
 
 With the reference Compose deployment, set these in the shell or an `.env` file, and mount the certificate files with an override file, since Compose cannot assume they exist:
 

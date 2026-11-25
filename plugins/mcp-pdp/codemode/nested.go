@@ -158,7 +158,7 @@ func (s *Session) Call(ctx context.Context, proxy, tool string, args json.RawMes
 		return nil, refused, err
 	}
 	params := map[string]json.RawMessage{}
-	if len(s.origin.Meta) > 0 {
+	if len(s.origin.Meta) > 0 && proxy == s.origin.Proxy {
 		params["_meta"] = s.origin.Meta
 	}
 	params["name"], _ = json.Marshal(tool)
@@ -174,15 +174,13 @@ func (s *Session) Call(ctx context.Context, proxy, tool string, args json.RawMes
 }
 
 // sessionFor returns the session a call to proxy uses. Calls on the run's
-// own proxy use the caller's session. Under the older protocol, a call to
-// another proxy uses a session the run opens there as the caller, because a
-// server that keeps sessions refuses calls without one.
+// own proxy use the caller's protocol and session. Calls to another proxy use
+// the older protocol, which every supported upstream speaks, with a session
+// the run opens there as the caller, because a server that keeps sessions
+// refuses calls without one. A server that keeps none returns no session.
 func (s *Session) sessionFor(ctx context.Context, proxy string) (string, *protocol.Error, error) {
 	if proxy == s.origin.Proxy {
 		return s.origin.Session, nil, nil
-	}
-	if s.origin.Version != OlderProtocol {
-		return "", nil, nil
 	}
 	s.mu.Lock()
 	ps := s.sessions[proxy]
@@ -201,7 +199,7 @@ func (s *Session) sessionFor(ctx context.Context, proxy string) (string, *protoc
 func (s *Session) open(ctx context.Context, proxy string) (string, *protocol.Error, error) {
 	id := s.id()
 	body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": "initialize", "params": map[string]any{
-		"protocolVersion": s.origin.Version, "capabilities": map[string]any{},
+		"protocolVersion": OlderProtocol, "capabilities": map[string]any{},
 		"clientInfo": map[string]any{"name": "tyk-code-mode", "version": "1"},
 	}})
 	res, err := s.post(ctx, proxy, "", "initialize", "", body)
@@ -277,13 +275,16 @@ func (s *Session) request(ctx context.Context, verb, proxy, session, method, nam
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	if s.origin.Version != "" {
-		req.Header.Set("MCP-Protocol-Version", s.origin.Version)
+	own := proxy == s.origin.Proxy
+	if version := s.origin.Version; !own {
+		req.Header.Set("MCP-Protocol-Version", OlderProtocol)
+	} else if version != "" {
+		req.Header.Set("MCP-Protocol-Version", version)
 	}
 	if session != "" {
 		req.Header.Set("Mcp-Session-Id", session)
 	}
-	if s.origin.NamedHeaders && method != "" {
+	if own && s.origin.NamedHeaders && method != "" {
 		req.Header.Set("Mcp-Method", method)
 		if name != "" {
 			req.Header.Set("Mcp-Name", name)

@@ -58,16 +58,16 @@ func TestNestedCallCarriesOnlyTheOrigin(t *testing.T) {
 	origin := Origin{Proxy: "a", Version: "2026-07-28", Meta: json.RawMessage(`{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}`),
 		NamedHeaders: true, Credential: http.Header{"Authorization": {"Bearer t"}}}
 	s := gateway.Session(origin, "run-1", 1<<20)
-	result, refused, err := s.Call(context.Background(), "b", "lookup", json.RawMessage(`{"count":7}`))
+	result, refused, err := s.Call(context.Background(), "a", "lookup", json.RawMessage(`{"count":7}`))
 	if err != nil || refused != nil || string(result) != `{"content":[]}` {
 		t.Fatalf("result %s, refused %+v, err %v", result, refused, err)
 	}
 	r := fake.requests[0]
-	if r.URL.Path != "/b/" || r.Header.Get("Authorization") != "Bearer t" || r.Header.Get("X-Api-Key") != "" ||
+	if r.URL.Path != "/a/" || r.Header.Get("Authorization") != "Bearer t" || r.Header.Get("X-Api-Key") != "" ||
 		r.Header.Get("Mcp-Method") != "tools/call" || r.Header.Get("Mcp-Name") != "lookup" || r.Header.Get("MCP-Protocol-Version") != "2026-07-28" {
 		t.Fatalf("request %s with headers %v", r.URL.Path, r.Header)
 	}
-	if fake.seen[0] != (Nested{Run: "run-1", Proxy: "b"}) {
+	if fake.seen[0] != (Nested{Run: "run-1", Proxy: "a"}) {
 		t.Fatalf("the gateway saw nested call %+v", fake.seen[0])
 	}
 	if _, ok := gateway.Registry.Lookup(r.Header.Get(CallHeader)); ok {
@@ -299,5 +299,39 @@ func TestNestedSessionClosedWhenHandshakeFails(t *testing.T) {
 	s.Close()
 	if len(deleted) != 1 || deleted[0] != "opened" {
 		t.Fatalf("closed sessions %v", deleted)
+	}
+}
+
+func TestNestedCallsToOtherProxiesUseTheOlderProtocol(t *testing.T) {
+	gateway, fake := newGateway(t, func(w http.ResponseWriter, r *http.Request, body map[string]any) {
+		if body["method"] == "notifications/initialized" {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		reply(w, body, map[string]any{"ok": true})
+	})
+	origin := Origin{Proxy: "a", Version: "2026-07-28", Meta: json.RawMessage(`{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}`), NamedHeaders: true}
+	s := gateway.Session(origin, "run-1", 1<<20)
+	if _, refused, err := s.Call(context.Background(), "b", "lookup", json.RawMessage(`{}`)); err != nil || refused != nil {
+		t.Fatalf("refused %+v, err %v", refused, err)
+	}
+	if len(fake.requests) != 3 || !strings.Contains(fake.bodies[0], `"initialize"`) || !strings.Contains(fake.bodies[0], OlderProtocol) {
+		t.Fatalf("requests %v", fake.bodies)
+	}
+	for i, r := range fake.requests {
+		if r.Header.Get("MCP-Protocol-Version") != OlderProtocol || r.Header.Get("Mcp-Method") != "" || strings.Contains(fake.bodies[i], "_meta") {
+			t.Fatalf("request %d used the newer protocol: %v %s", i, r.Header, fake.bodies[i])
+		}
+	}
+}
+
+func TestGatewayURLStaysOnThisMachine(t *testing.T) {
+	for url, ok := range map[string]bool{
+		"http://127.0.0.1:8080": true, "https://localhost:8443/": true, "http://[::1]:8080": true,
+		"http://gateway:8080": false, "http://10.0.0.5:8080": false, "http://user:pass@127.0.0.1:8080": false, "ftp://127.0.0.1": false,
+	} {
+		if loopbackURL(url) != ok {
+			t.Errorf("%s: loopback %v, want %v", url, !ok, ok)
+		}
 	}
 }

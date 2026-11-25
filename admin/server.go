@@ -399,6 +399,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 // removed lines are followed by as many added ones.
 func highlight(lines []driftreview.DiffLine) []diffRow {
 	var rows []diffRow
+	budget := maxComparedWords
 	for i := 0; i < len(lines); {
 		if lines[i].Op != '-' {
 			rows = append(rows, diffRow{Op: string(lines[i].Op), Parts: []diffPart{{Text: lines[i].Text}}})
@@ -416,7 +417,15 @@ func highlight(lines []driftreview.DiffLine) []diffRow {
 		if added-removed == i-added {
 			var olds, news []diffRow
 			for k := 0; k < added-removed; k++ {
-				o, n := wordDiff(lines[removed+k].Text, lines[added+k].Text)
+				before, after := lines[removed+k].Text, lines[added+k].Text
+				// Comparing words costs their product; past the page's
+				// budget, lines are shown whole rather than compared.
+				cost := len(strings.Fields(before)) * len(strings.Fields(after))
+				o, n := []diffPart{{Text: before, Changed: true}}, []diffPart{{Text: after, Changed: true}}
+				if cost <= budget {
+					budget -= cost
+					o, n = wordDiff(before, after)
+				}
 				olds = append(olds, diffRow{Op: "-", Parts: o})
 				news = append(news, diffRow{Op: "+", Parts: n})
 			}
@@ -433,6 +442,10 @@ func highlight(lines []driftreview.DiffLine) []diffRow {
 // maxWords bounds the words compared on one line; longer lines are marked
 // as wholly changed.
 const maxWords = 500
+
+// maxComparedWords bounds the word comparisons on one page, the sum of the
+// products of the words of each pair of lines compared.
+const maxComparedWords = 1 << 20
 
 // wordDiff marks the words of two lines that are not part of their longest
 // common run of words.

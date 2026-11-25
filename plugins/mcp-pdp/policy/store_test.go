@@ -404,6 +404,26 @@ func TestReviseConvertsTheActiveSetAndLeavesTheStoreUnchangedOnError(t *testing.
 	}
 }
 
+func TestADecisionThatCannotBeLoggedIsNotMade(t *testing.T) {
+	store := t.TempDir()
+	first, err := Promote(store, writeSource(t, permitAll, "{}", "[]"), "first", epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A directory where the log should be makes every append fail.
+	if err := os.Mkdir(filepath.Join(store, logFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Revise(store, "unlogged", Actor{Issuer: "local", Subject: "test"}, epoch, func(_ string, _ *Snapshot, files map[string][]byte) ([]LogEntry, error) {
+		files["approved_instructions.json"] = []byte(`{"governed":"unlogged"}`)
+		return []LogEntry{{Action: "approve", Proxy: "governed", Instructions: true}}, nil
+	})
+	pointer, readErr := ReadPointer(store)
+	if err == nil || readErr != nil || pointer.Set != first {
+		t.Fatalf("Revise = %v; active %s, want %s (%v)", err, pointer.Set, first, readErr)
+	}
+}
+
 func TestAnEmptyDecisionLogHasNoEntries(t *testing.T) {
 	store := t.TempDir()
 	if err := os.WriteFile(filepath.Join(store, logFile), nil, 0o644); err != nil {

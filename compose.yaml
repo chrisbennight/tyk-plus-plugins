@@ -43,6 +43,9 @@ services:
       # The review dashboard, which /extensions/admin routes to; see the
       # admin service below.
       ADMIN_UPSTREAM_URL: ${ADMIN_UPSTREAM_URL:-http://admin:8000}
+      # The drift directory outlasts the container, so the gateway keeps one
+      # name for its shared declarations however often it is recreated.
+      CEDAR_GATEWAY_ID: ${CEDAR_GATEWAY_ID:-gateway}
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
       TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
     ports:

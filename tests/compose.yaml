@@ -35,7 +35,10 @@ services:
     extends:
       file: compose.yaml
       service: gateway
-    environment: *test-gateway-environment
+    environment:
+      <<: *test-gateway-environment
+      # Its own name for the declarations it shares.
+      CEDAR_GATEWAY_ID: gateway-peer
     ports: !reset []
     volumes: !override
       - policy:/opt/tyk-gateway/cedar:ro

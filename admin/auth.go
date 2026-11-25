@@ -120,7 +120,19 @@ func (a *auth) connect(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifi
 	if a.provider != nil {
 		return a.oauth, a.verifier, nil
 	}
-	ctx = oidc.ClientContext(ctx, &http.Client{Timeout: 10 * time.Second})
+	// The provider's configuration and keys are the trust root for every
+	// signed-in identity, so they are fetched only over https, redirects
+	// included, unless an operator allows otherwise on a test network.
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" && !a.cfg.insecureProvider {
+			return fmt.Errorf("refusing a redirect to %s, which is not https", req.URL.Redacted())
+		}
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}}
+	ctx = oidc.ClientContext(ctx, client)
 	discovery := a.cfg.issuer
 	if a.cfg.discoveryURL != "" {
 		// The provider is reached at another address than the issuer it
@@ -132,15 +144,24 @@ func (a *auth) connect(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifi
 	if err != nil {
 		return nil, nil, fmt.Errorf("identity provider: %w", err)
 	}
-	a.provider = provider
-	if token := provider.Endpoint().TokenURL; !strings.HasPrefix(token, "https://") {
-		// The client secret is sent to the token endpoint.
-		if !a.cfg.insecureProvider {
-			a.provider = nil
-			return nil, nil, fmt.Errorf("identity provider: the token endpoint %s is not https; set ADMIN_OIDC_ALLOW_INSECURE_HTTP=true only on a local or test network", token)
-		}
-		slog.Warn("The identity provider's token endpoint is not https, as ADMIN_OIDC_ALLOW_INSECURE_HTTP allows.", "url", token)
+	var keys struct {
+		JWKSURI string `json:"jwks_uri"`
 	}
+	if err := provider.Claims(&keys); err != nil {
+		return nil, nil, fmt.Errorf("identity provider: %w", err)
+	}
+	// The browser is sent to the authorization endpoint, the client secret to
+	// the token endpoint, and ID tokens are verified with the keys.
+	for name, endpoint := range map[string]string{"authorization": provider.Endpoint().AuthURL, "token": provider.Endpoint().TokenURL, "keys": keys.JWKSURI} {
+		if strings.HasPrefix(endpoint, "https://") {
+			continue
+		}
+		if !a.cfg.insecureProvider {
+			return nil, nil, fmt.Errorf("identity provider: the %s endpoint %s is not https; set ADMIN_OIDC_ALLOW_INSECURE_HTTP=true only on a local or test network", name, endpoint)
+		}
+		slog.Warn("An identity provider endpoint is not https, as ADMIN_OIDC_ALLOW_INSECURE_HTTP allows.", "endpoint", name, "url", endpoint)
+	}
+	a.provider = provider
 	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.cfg.clientID})
 	a.oauth = &oauth2.Config{
 		ClientID:     a.cfg.clientID,

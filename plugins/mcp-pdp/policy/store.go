@@ -282,7 +282,12 @@ func Revise(root, label string, actor Actor, now func() time.Time, change func(s
 		entries[i].Time, entries[i].Actor, entries[i].Base, entries[i].Set, entries[i].Label = at, actor, pointer.Set, set, label
 	}
 	if err := store.appendLog(entries); err != nil {
-		return set, fmt.Errorf("set %s is active, but the decision log could not be written: %w", set, err)
+		// A decision is either in force and logged, or neither: the set that
+		// was active is put back, so nothing is enforced without its record.
+		if restoreErr := store.writePointer(pointer); restoreErr != nil {
+			return set, fmt.Errorf("set %s is active, but the decision log could not be written (%w), and the previous set could not be restored: %w", set, err, restoreErr)
+		}
+		return "", fmt.Errorf("the decision log could not be written, so the decision was not made: %w", err)
 	}
 	return set, nil
 }
@@ -549,11 +554,16 @@ func (s *store) activate(set string, now func() time.Time) error {
 			pointer.Previous = current.Set
 		}
 	}
+	return s.writePointer(pointer)
+}
+
+// writePointer replaces the active pointer by renaming a completed, synced
+// file over it.
+func (s *store) writePointer(pointer Pointer) error {
 	data, err := json.MarshalIndent(pointer, "", "  ")
 	if err != nil {
 		return err
 	}
-	// The pointer is replaced by renaming a completed, synced file over it.
 	prepared := tempName("." + pointerFile + "-")
 	defer s.dir.Remove(prepared)
 	if err := s.writeFile(prepared, append(data, '\n'), s.fileMode); err != nil {

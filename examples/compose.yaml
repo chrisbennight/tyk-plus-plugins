@@ -17,8 +17,11 @@ services:
     environment:
       CEDAR_REFRESH_INTERVAL: 2s
       CEDAR_STATUS_FILE: /opt/tyk-gateway/cedar-status/status.json
-      # Changes the gateway sees an upstream make wait here for review.
+      # Changes the gateway sees an upstream make wait here for review. A fixed
+      # name keeps one file per tool there however often the gateway is
+      # recreated.
       CEDAR_PENDING_DIR: /opt/tyk-gateway/cedar-pending
+      CEDAR_GATEWAY_ID: examples-gateway
       # Plain HTTP is acceptable only because the issuer is on this local network.
       MCP_TOKEN_JWKS_URL: http://issuer:8000/jwks
       MCP_TOKEN_ISSUER: https://issuer.example

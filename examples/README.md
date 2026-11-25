@@ -65,7 +65,7 @@ Every proxy is under drift review, and `changing` exists to show it. The example
 | 8 | Only the server instructions change | The approved instructions are still given |
 | 9 | Only `lookup`'s `_meta` changes | Nothing; `_meta` is not part of a definition |
 | 10 | `lookup`'s description gains different text | Held separately from version 1's change |
-| 0 | Back to the approved version | Every tool works again. The earlier changes stay in the review queue, marked superseded, until a reviewer rejects them |
+| 0 | Back to the approved version | Every tool works again. The earlier changes stay in the review queue until a reviewer rejects them |
 
 Each switch tells connected clients that the tool list changed, in both protocol versions: on `subscriptions/listen` streams for `2026-07-28` clients, and on the session stream for `2025-11-25` clients. Clients that connect later see the change at once. Set `CHANGING_VERSION` before `docker compose up` to start the server at a later version, so drift is visible on first connect.
 

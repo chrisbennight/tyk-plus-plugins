@@ -23,8 +23,12 @@ func main() {
 		MemoryBytes:  number("SANDBOX_MEMORY_BYTES", 512<<20),
 		MaxRuns:      int(number("SANDBOX_MAX_RUNS", 16)),
 	}
-	if config.Backend != protocol.BackendGVisor && config.Backend != protocol.BackendRunc {
-		slog.Error("SANDBOX_BACKEND must be gvisor or runc", "value", config.Backend)
+	switch {
+	case config.Backend == protocol.BackendRunc && !launcher.RuncBuilt:
+		slog.Error("SANDBOX_BACKEND is runc, but this launcher was built without it; runc is only in development builds", "value", config.Backend)
+		os.Exit(1)
+	case config.Backend != protocol.BackendGVisor && config.Backend != protocol.BackendRunc:
+		slog.Error("SANDBOX_BACKEND must be gvisor, or runc in a development build", "value", config.Backend)
 		os.Exit(1)
 	}
 	l := launcher.New(context.Background(), config)

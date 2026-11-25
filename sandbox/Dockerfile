@@ -9,7 +9,9 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go vet ./... && go test -race ./... && (cd protocol && go vet ./... && go test -race ./...) && \
+    go vet -tags dev ./launcher/ ./cmd/sandbox-launcher && go test -race -tags dev ./launcher/ && \
     CGO_ENABLED=0 go build -trimpath -o /out/ ./cmd/sandbox-launcher ./cmd/sandbox-service ./cmd/sandbox-worker && \
+    CGO_ENABLED=0 go build -trimpath -tags dev -o /out/dev/ ./cmd/sandbox-launcher && \
     mkdir -p /rootfs/proc /rootfs/dev /rootfs/scratch && chmod 0777 /rootfs/scratch && \
     cp /out/sandbox-worker /rootfs/worker && \
     /out/sandbox-worker precompile /rootfs/cache
@@ -28,13 +30,16 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-cert
     echo "${SUM}  /tmp/gvisor.tar.zstd" | sha512sum -c - && \
     mkdir /gvisor && tar --zstd -xf /tmp/gvisor.tar.zstd -C /gvisor
 
-# Development only: adds runc, for machines without gVisor. Never released;
-# select it with the target "dev", as compose.runc.yaml does.
+# Development only: adds runc and a launcher built with the runc backend, for
+# machines without gVisor. Never released; select it with the target "dev", as
+# compose.runc.yaml does.
 FROM debian:trixie-slim AS dev
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends runc >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY --from=gvisor /gvisor/runsc /usr/local/bin/runsc
 COPY --from=gvisor /gvisor/gvisor-bin/gvisor_sentry /gvisor/gvisor-bin/gvisor-sentry-prewarmer /gvisor/gvisor-bin/gvisor-proc-umounter /gvisor/gvisor-bin/runsc-fd-parking /usr/local/bin/gvisor-bin/
-COPY --from=build /out/sandbox-launcher /out/sandbox-service /usr/local/bin/
+# The development launcher, built with the runc backend.
+COPY --from=build /out/dev/sandbox-launcher /usr/local/bin/
+COPY --from=build /out/sandbox-service /usr/local/bin/
 COPY --from=build /rootfs /opt/sandbox/rootfs
 RUN runsc --version && runc --version
 

@@ -8,7 +8,7 @@ COPY --from=mcp-pdp . ./plugins/mcp-pdp
 COPY --from=sandbox-protocol . ./sandbox/protocol
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go work init ./tyk ./plugins/mcp-pdp ./sandbox/protocol && cd plugins/mcp-pdp && \
-    go test -race ./policy/ ./identity/ ./bench/ ./drift/ ./cmd/cedar-policy/ ./codemode/ && \
+    go test -race ./policy/ ./identity/ ./bench/ ./drift/ ./cmd/cedar-policy/ ./driftreview/ ./codemode/ && \
     go build -trimpath -tags=goplugin -buildmode=plugin -o /mcp-pdp.so . && \
     CGO_ENABLED=0 go build -trimpath -o /cedar-policy ./cmd/cedar-policy
 # The default store activates the shipped policy, which grants nothing.

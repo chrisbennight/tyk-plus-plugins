@@ -373,18 +373,18 @@ func TestReviseConvertsTheActiveSetAndLeavesTheStoreUnchangedOnError(t *testing.
 	if err := Activate(store, legacy, epoch); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Revise(store, "refused", epoch, func(string, *Snapshot, map[string][]byte) error { return errors.New("no") }); err == nil {
+	if _, err := Revise(store, "refused", Actor{Issuer: "local", Subject: "test"}, epoch, func(string, *Snapshot, map[string][]byte) ([]LogEntry, error) { return nil, errors.New("no") }); err == nil {
 		t.Fatal("a failed change was published")
 	}
 	if pointer, _ := ReadPointer(store); pointer.Set != legacy {
 		t.Fatalf("a failed change moved the pointer to %s", pointer.Set)
 	}
-	set, err := Revise(store, "revised", epoch, func(base string, active *Snapshot, files map[string][]byte) error {
+	set, err := Revise(store, "revised", Actor{Issuer: "local", Subject: "test"}, epoch, func(base string, active *Snapshot, files map[string][]byte) ([]LogEntry, error) {
 		if base != legacy || active.Version != legacy || files["approved_instructions.json"] == nil || files["tools.json"] != nil {
 			t.Fatalf("change received base %s and files %v", base, slices.Collect(maps.Keys(files)))
 		}
 		files["approved_instructions.json"] = []byte(`{"governed":"Be brief."}`)
-		return nil
+		return []LogEntry{{Action: "approve", Proxy: "governed", Instructions: true}}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -396,5 +396,10 @@ func TestReviseConvertsTheActiveSetAndLeavesTheStoreUnchangedOnError(t *testing.
 	}
 	if text, _ := snapshot.Instructions("governed"); text != "Be brief." {
 		t.Fatalf("instructions %q", text)
+	}
+	log, err := ReadLog(store)
+	if err != nil || len(log) != 1 || log[0].Base != legacy || log[0].Set != set || log[0].Label != "revised" ||
+		log[0].Actor.Subject != "test" || log[0].Time == "" {
+		t.Fatalf("decision log %+v, %v", log, err)
 	}
 }

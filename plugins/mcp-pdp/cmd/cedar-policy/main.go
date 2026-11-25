@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/driftreview"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
 
@@ -45,7 +46,7 @@ func main() {
 		if err := runDrift(os.Args[2:], os.Stdout, time.Now); err != nil {
 			// Messages can name files and tools from the shared directory,
 			// so hidden characters are written out.
-			fmt.Fprintf(os.Stderr, "cedar-policy drift: %s\n\n%s", shownName(err.Error()), driftUsage)
+			fmt.Fprintf(os.Stderr, "cedar-policy drift: %s\n\n%s", driftreview.ShownName(err.Error()), driftUsage)
 			os.Exit(1)
 		}
 		return

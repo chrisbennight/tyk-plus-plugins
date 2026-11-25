@@ -195,6 +195,8 @@ cedar-policy drift reject -store /path/to/store -pending /path/to/pending -proxy
 
 Each command decides against the set active when it starts and writes its new set under the store's lock. If another set became active in between, nothing is changed and the command asks you to review again, so two reviewers working at once cannot undo each other's decisions. Each one is a new set, so `cedar-policy activate` with the previous fingerprint rolls it back.
 
+Every approval and rejection is recorded in `decisions.log` in the store: one JSON line each, with who made it, when, the proxy, tool or instructions, the fingerprint, the set it was made against and the set it made active. The command line records the local user, with the issuer `local`. The line is written under the store's lock once the new set is active.
+
 ## Deploying changes
 
 A policy set is the files above published together: `rules.cedar`, `approved_tools.json`, `approved_instructions.json` and `checks.json`. They take effect as a whole or not at all, so a rule and the tools it depends on never go live separately. When you have no rules, tools, instructions or checks, use an empty `rules.cedar`, `{}`, `{}` and `[]` respectively.

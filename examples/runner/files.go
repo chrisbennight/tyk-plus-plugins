@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -24,6 +25,8 @@ type expectations struct {
 	// arguments, and no other.
 	Listed         map[string]map[string][]string `json:"listed"`
 	RefusedCallers []string                       `json:"refusedCallers"`
+	// Drift walks a server through changes to what it declares.
+	Drift *driftWalk `json:"drift"`
 	// KeyAndToken lists requests carrying both a key and a token. The key
 	// identifies the caller, so each expectation follows the key's access.
 	KeyAndToken []struct {
@@ -35,6 +38,30 @@ type expectations struct {
 		Expect    string         `json:"expect"`
 		Why       string         `json:"why"`
 	} `json:"keyAndToken"`
+}
+
+// driftWalk is what a caller should see while a server changes what it
+// declares. Every step switches the server to a version through its control
+// path, outside MCP, and states what the caller then sees.
+type driftWalk struct {
+	Server string `json:"server"`
+	Caller string `json:"caller"`
+	// Instructions are the approved instructions, which the caller must be
+	// given at every step, whatever the server sends.
+	Instructions string `json:"instructions"`
+	// Arguments are the arguments each tool is called with.
+	Arguments map[string]map[string]any `json:"arguments"`
+	Steps     []driftStep               `json:"steps"`
+}
+
+type driftStep struct {
+	Version int    `json:"version"`
+	Why     string `json:"why"`
+	// Listed is every tool the caller is shown. Permitted tools must work,
+	// and refused ones must be refused without reaching the server.
+	Listed    []string `json:"listed"`
+	Permitted []string `json:"permitted"`
+	Refused   []string `json:"refused"`
 }
 
 type call struct {
@@ -139,7 +166,40 @@ func load(dir string) (*examples, error) {
 	if err := e.checkListed(); err != nil {
 		return nil, err
 	}
+	if err := e.checkDrift(); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// checkDrift reports an error when the drift walk names an unknown caller or
+// proxy, expects an unapproved tool to be listed or to work, or calls a tool
+// it gives no arguments for.
+func (e *examples) checkDrift() error {
+	d := e.expected.Drift
+	if d == nil {
+		return nil
+	}
+	if _, err := e.identity(d.Caller); err != nil {
+		return fmt.Errorf("expected.json drift: %w", err)
+	}
+	inv, ok := e.tools[d.Server]
+	if !ok {
+		return fmt.Errorf("expected.json drift: there is no proxy named %q", d.Server)
+	}
+	for i, step := range d.Steps {
+		for _, tool := range append(slices.Clone(step.Listed), step.Permitted...) {
+			if t, approved := inv.Tools[tool]; !approved || len(t.Definition) == 0 {
+				return fmt.Errorf("expected.json drift step %d: %s.%s is expected to be listed or to work, but it has no approved definition", i, d.Server, tool)
+			}
+		}
+		for _, tool := range append(slices.Clone(step.Permitted), step.Refused...) {
+			if _, ok := d.Arguments[tool]; !ok {
+				return fmt.Errorf("expected.json drift step %d: no arguments for %s", i, tool)
+			}
+		}
+	}
+	return nil
 }
 
 // checkListed reports an error when expected.json's listed tools leave out a

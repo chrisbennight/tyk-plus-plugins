@@ -17,6 +17,10 @@ bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
 url = "http://127.0.0.1:8080/older/"
 bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
 
+[mcp_servers.changing_analyst]
+url = "http://127.0.0.1:8080/changing/"
+bearer_token_env_var = "EXAMPLE_ANALYST_TOKEN"
+
 [mcp_servers.directory_admin]
 url = "http://127.0.0.1:8080/directory/"
 bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
@@ -31,4 +35,8 @@ bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
 
 [mcp_servers.older_admin]
 url = "http://127.0.0.1:8080/older/"
+bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"
+
+[mcp_servers.changing_admin]
+url = "http://127.0.0.1:8080/changing/"
 bearer_token_env_var = "EXAMPLE_ADMIN_TOKEN"

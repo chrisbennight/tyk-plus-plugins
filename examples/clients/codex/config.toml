@@ -18,6 +18,10 @@ env_http_headers = { "X-API-Key" = "EXAMPLE_INDEXER_KEY" }
 url = "http://127.0.0.1:8080/older/"
 env_http_headers = { "X-API-Key" = "EXAMPLE_INDEXER_KEY" }
 
+[mcp_servers.changing_indexer]
+url = "http://127.0.0.1:8080/changing/"
+env_http_headers = { "X-API-Key" = "EXAMPLE_INDEXER_KEY" }
+
 [mcp_servers.directory_deployer]
 url = "http://127.0.0.1:8080/directory/"
 env_http_headers = { "X-API-Key" = "EXAMPLE_DEPLOYER_KEY" }
@@ -32,4 +36,8 @@ env_http_headers = { "X-API-Key" = "EXAMPLE_DEPLOYER_KEY" }
 
 [mcp_servers.older_deployer]
 url = "http://127.0.0.1:8080/older/"
+env_http_headers = { "X-API-Key" = "EXAMPLE_DEPLOYER_KEY" }
+
+[mcp_servers.changing_deployer]
+url = "http://127.0.0.1:8080/changing/"
 env_http_headers = { "X-API-Key" = "EXAMPLE_DEPLOYER_KEY" }

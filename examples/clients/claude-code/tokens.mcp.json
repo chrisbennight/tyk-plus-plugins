@@ -28,6 +28,13 @@
         "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
       }
     },
+    "changing-analyst": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/changing/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ANALYST_TOKEN}"
+      }
+    },
     "directory-admin": {
       "type": "http",
       "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
@@ -52,6 +59,13 @@
     "older-admin": {
       "type": "http",
       "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
+      }
+    },
+    "changing-admin": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/changing/",
       "headers": {
         "Authorization": "Bearer ${EXAMPLE_ADMIN_TOKEN}"
       }

@@ -28,6 +28,13 @@
         "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
       }
     },
+    "changing-indexer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/changing/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_INDEXER_KEY}"
+      }
+    },
     "directory-deployer": {
       "type": "http",
       "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/directory/",
@@ -52,6 +59,13 @@
     "older-deployer": {
       "type": "http",
       "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/older/",
+      "headers": {
+        "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
+      }
+    },
+    "changing-deployer": {
+      "type": "http",
+      "url": "${EXAMPLE_GATEWAY_URL:-http://127.0.0.1:8080}/changing/",
       "headers": {
         "X-API-Key": "${EXAMPLE_DEPLOYER_KEY}"
       }

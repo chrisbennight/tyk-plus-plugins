@@ -47,6 +47,27 @@ func run(e *examples) bool {
 	if err := r.waitForServers(); err != nil {
 		fail(err)
 	}
+	// The expectations describe the changing server at version 0, where a
+	// review walk-through may have left it elsewhere. The gateway decides
+	// calls on the definitions it last saw listed, so the tools are listed
+	// once before any call.
+	if d := e.expected.Drift; d != nil {
+		if err := setVersion(d.Server, 0); err != nil {
+			fail(fmt.Errorf("setting %s to version 0: %w", d.Server, err))
+		}
+		cred, err := creds.of(d.Caller)
+		if err != nil {
+			fail(err)
+		}
+		s, err := connect(cred, versions[0], d.Server, nil)
+		if err == nil {
+			_, err = toolNames(s)
+			s.Close()
+		}
+		if err != nil {
+			fail(fmt.Errorf("listing %s's tools at version 0: %w", d.Server, err))
+		}
+	}
 	for _, c := range e.expected.Calls {
 		for _, version := range versions {
 			cred, err := creds.of(c.Caller)
@@ -73,6 +94,7 @@ func run(e *examples) bool {
 	}
 	r.listedTools()
 	r.refusedCallers()
+	r.drift()
 
 	fmt.Printf("\n%d checks passed, %d failed.\n", r.passed, len(r.failed))
 	for _, f := range r.failed {
@@ -104,6 +126,12 @@ func (r *runner) check(what, caller string, cred credential, version, server, to
 		r.fail(what, "could not connect: "+err.Error())
 		return
 	}
+	r.checkCall(what, session, version, server, tool, args, expect)
+}
+
+// checkCall makes one tool call on a session and confirms both the outcome the
+// client sees and whether the call reached the server.
+func (r *runner) checkCall(what string, session *mcp.ClientSession, version, server, tool string, args map[string]any, expect string) {
 	before, err := observe(server)
 	if err != nil {
 		r.fail(what, err.Error())
@@ -271,7 +299,7 @@ func (r *runner) session(caller string, cred credential, version, server string)
 	if s, ok := r.sessions[id]; ok {
 		return s, nil
 	}
-	s, err := connect(cred, version, server)
+	s, err := connect(cred, version, server, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -293,10 +321,11 @@ func endpoint(server string) string {
 	return strings.TrimSuffix(setting("GATEWAY_URL", "http://gateway:8080"), "/") + "/" + server + "/"
 }
 
-func connect(cred credential, version, server string) (*mcp.ClientSession, error) {
+// connect opens a client session through the gateway. opts may be nil.
+func connect(cred credential, version, server string, opts *mcp.ClientOptions) (*mcp.ClientSession, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "examples-runner", Version: "1"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "examples-runner", Version: "1"}, opts)
 	transport := &mcp.StreamableClientTransport{Endpoint: endpoint(server), HTTPClient: &http.Client{Transport: withHeaders(cred), CheckRedirect: noRedirects}}
 	return client.Connect(ctx, transport, &mcp.ClientSessionOptions{ProtocolVersion: version})
 }

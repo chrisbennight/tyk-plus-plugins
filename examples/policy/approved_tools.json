@@ -668,5 +668,150 @@
         }
       }
     }
+  },
+  "changing": {
+    "upstream": "http://changing:8000/mcp",
+    "drift": {},
+    "tools": {
+      "lookup": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "changing"
+        ],
+        "definition": {
+          "name": "lookup",
+          "title": "Lookup",
+          "description": "Read one record by its id.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      },
+      "update": {
+        "facts": {
+          "readOnly": false
+        },
+        "tags": [
+          "changing"
+        ],
+        "definition": {
+          "name": "update",
+          "title": "Update",
+          "description": "Change one record's value.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "value"
+            ]
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      },
+      "report": {
+        "facts": {
+          "readOnly": true
+        },
+        "tags": [
+          "changing"
+        ],
+        "definition": {
+          "name": "report",
+          "title": "Report",
+          "description": "Summarize the records changed in a period.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "period": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "period"
+            ]
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "result"
+            ],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "_meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          }
+        }
+      }
+    }
   }
 }

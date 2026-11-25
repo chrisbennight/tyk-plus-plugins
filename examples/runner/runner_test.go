@@ -112,9 +112,32 @@ func TestListedUnapprovedToolIsAnError(t *testing.T) {
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unapproved tool was accepted")
 	}
+	e, _ = load("..")
 	e.expected.Listed["admin"]["nowhere"] = nil
 	if err := e.checkListed(); err == nil {
 		t.Fatal("a listed unknown proxy was accepted")
+	}
+}
+
+// The drift walk may expect only approved tools to be listed or to work, and
+// must give arguments for every tool it calls.
+func TestDriftWalkIsChecked(t *testing.T) {
+	e, err := load("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.expected.Drift == nil || len(e.expected.Drift.Steps) == 0 {
+		t.Fatal("expected.json has no drift walk")
+	}
+	step := &e.expected.Drift.Steps[0]
+	step.Permitted = append(step.Permitted, "delete")
+	if err := e.checkDrift(); err == nil {
+		t.Fatal("an unapproved tool expected to work was accepted")
+	}
+	e, _ = load("..")
+	delete(e.expected.Drift.Arguments, e.expected.Drift.Steps[0].Refused[0])
+	if err := e.checkDrift(); err == nil {
+		t.Fatal("a refused call without arguments was accepted")
 	}
 }
 

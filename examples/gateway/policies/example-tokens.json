@@ -34,6 +34,13 @@
       "versions": [
         "Default"
       ]
+    },
+    "changing": {
+      "api_id": "changing",
+      "api_name": "Changing",
+      "versions": [
+        "Default"
+      ]
     }
   }
 }

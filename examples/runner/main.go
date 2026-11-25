@@ -4,6 +4,8 @@
 //	runner run     check every row of expected.json in both protocol versions (the default)
 //	runner env     print shell exports of example credentials for Claude Code and Codex
 //	runner checks  print the policy set's activation checks, derived from expected.json
+//	runner version N
+//	               switch the changing server to version N, as the drift walk does
 //
 // Settings come from the environment; the defaults suit the examples' Compose network:
 //
@@ -21,10 +23,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -50,8 +54,20 @@ func main() {
 			fail(err)
 		}
 		os.Stdout.Write(out)
+	case "version":
+		if e.expected.Drift == nil || len(os.Args) != 3 {
+			fail(errors.New("use: runner version N, with expected.json naming the changing server"))
+		}
+		n, err := strconv.Atoi(os.Args[2])
+		if err != nil {
+			fail(fmt.Errorf("version %q is not a number", os.Args[2]))
+		}
+		if err := setVersion(e.expected.Drift.Server, n); err != nil {
+			fail(err)
+		}
+		fmt.Printf("%s is now at version %d.\n", e.expected.Drift.Server, n)
 	default:
-		fail(fmt.Errorf("unknown command %q; use run, env or checks", command))
+		fail(fmt.Errorf("unknown command %q; use run, env, checks or version", command))
 	}
 }
 

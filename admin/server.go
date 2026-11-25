@@ -40,6 +40,12 @@ var pages = template.Must(template.New("").Funcs(template.FuncMap{
 // full before it can be approved, so no part of it goes unread.
 const longDefinition = 2000
 
+// maxShown is the largest text the dashboard formats for review, well above
+// the gateway's default limit on a definition. Formatting text much larger
+// would cost memory out of proportion, so larger text is reviewed with
+// cedar-policy drift show and cannot be approved here.
+const maxShown = 1 << 20
+
 // server serves the dashboard's pages. Every page reads the store and the
 // shared directory afresh; decisions go through driftreview, the same code
 // cedar-policy drift uses.
@@ -74,7 +80,9 @@ func headers(next http.Handler) http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer: under no-referrer browsers send
+		// "Origin: null" with form posts, which the form check refuses.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
@@ -328,14 +336,18 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			return
 		}
 		approved, _ := st.snapshot.Instructions(proxy)
-		var b strings.Builder
-		driftreview.LineDiff(&b, approved, entry.Instructions)
-		diff = "Instructions changed:\n" + b.String()
-		invisible, lookAlike := countText(entry.Instructions)
-		shown, _, _ := driftreview.Visible(entry.Instructions)
 		length = len(entry.Instructions)
+		if length <= maxShown {
+			var b strings.Builder
+			driftreview.LineDiff(&b, approved, entry.Instructions)
+			diff = "Instructions changed:\n" + b.String()
+			shown, invisible, lookAlike := driftreview.Visible(entry.Instructions)
+			data["Invisible"], data["LookAlike"] = invisible, lookAlike
+			if length <= longDefinition || data["Full"] == true {
+				data["Definition"] = shown
+			}
+		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = "Changed instructions", entry.FirstSeen, driftreview.ShownName(entry.Gateway)
-		data["Invisible"], data["LookAlike"], data["Definition"] = invisible, lookAlike, shown
 		data["Approved"] = policy.InstructionsFingerprint(approved) == fingerprint
 		data["Rejected"] = view.RejectedInstructions(fingerprint)
 	} else {
@@ -345,36 +357,37 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			return
 		}
 		approvedFingerprint, approved, isApproved := view.Approved(tool)
+		length = len(entry.Definition)
 		kind := "New tool"
 		if isApproved {
 			kind = "Changed tool"
-			diff = driftreview.DefinitionDiff(jsontext.Value(approved), entry.Definition)
 		}
-		invisible, lookAlike := driftreview.Hidden(entry.Definition)
-		hints, _ := driftreview.RenameHints(st.review, view, proxy, entry)
-		for i := range hints {
-			hints[i] = driftreview.ShownName(hints[i])
+		if length <= maxShown {
+			if isApproved {
+				diff = driftreview.DefinitionDiff(jsontext.Value(approved), entry.Definition)
+			}
+			invisible, lookAlike := driftreview.Hidden(entry.Definition)
+			hints, _ := driftreview.RenameHints(st.review, view, proxy, entry)
+			for i := range hints {
+				hints[i] = driftreview.ShownName(hints[i])
+			}
+			data["Invisible"], data["LookAlike"], data["Hints"] = invisible, lookAlike, hints
+			if length <= longDefinition || data["Full"] == true {
+				data["Definition"] = driftreview.Indented(entry.Definition)
+			}
 		}
 		if newest, found, err := st.review.Newest(proxy, tool, view.Upstream()); err == nil && found && newest.Fingerprint != fingerprint {
 			data["Superseded"] = true
 		}
-		length = len(entry.Definition)
 		data["Kind"], data["FirstSeen"], data["Gateway"] = kind, entry.FirstSeen, driftreview.ShownName(entry.Gateway)
-		data["Invisible"], data["LookAlike"], data["Hints"] = invisible, lookAlike, hints
-		data["Definition"] = driftreview.Indented(entry.Definition)
 		data["Approved"] = approvedFingerprint == fingerprint
 		data["Rejected"] = view.Rejected(tool, fingerprint)
 		data["ToolShown"] = driftreview.ShownName(tool)
 	}
 	data["Diff"] = highlight(driftreview.ParseDiff(diff))
 	data["Long"] = length > longDefinition
+	data["TooLarge"] = length > maxShown
 	s.render(w, "change", s.page(sess, "Change", data))
-}
-
-// countText counts the invisible and look-alike characters in a text.
-func countText(text string) (int, int) {
-	_, invisible, lookAlike := driftreview.Visible(text)
-	return invisible, lookAlike
 }
 
 // highlight turns diff lines into rows, marking the words that differ when
@@ -528,19 +541,22 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 				return
 			}
 			view, _ := snapshot.Drift(proxy)
-			newest, found, err := review.Newest(proxy, tool, view.Upstream())
-			if err != nil {
-				s.fail(w, sess, http.StatusServiceUnavailable, "The shared declarations of this tool cannot be read, so it cannot be told whether this definition is still current.")
-				return
-			}
-			if found && newest.Fingerprint != fingerprint {
+			switch err := driftreview.Current(review, view, proxy, tool, fingerprint); {
+			case errors.Is(err, driftreview.ErrSuperseded):
 				http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=superseded", http.StatusSeeOther)
+				return
+			case err != nil:
+				s.fail(w, sess, http.StatusServiceUnavailable, "The shared declarations of this tool cannot be read, so it cannot be told whether this definition is still current.")
 				return
 			}
 		}
 	}
 	// The change page offers approval of long text only once it is shown in
 	// full; the form says whether it was.
+	if d.Approve && max(len(d.Definition), len(d.Text)) > maxShown {
+		s.fail(w, sess, http.StatusBadRequest, "This text is too large to review here: review it with cedar-policy drift show, and approve it there.")
+		return
+	}
 	if d.Approve && max(len(d.Definition), len(d.Text)) > longDefinition && r.PostFormValue("full") != "1" {
 		s.fail(w, sess, http.StatusBadRequest, "This text is long: open it in full before approving it.")
 		return
@@ -556,7 +572,7 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 		// A failure after the new set became active leaves the decision in
 		// force without its log line; this record names who made it.
 		slog.Error("A decision failed", "action", action, "proxy", proxy, "tool", tool, "instructions", instructions, "fingerprint", fingerprint,
-			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject, "error", err)
+			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject, "name", sess.actor.Name, "error", err)
 		s.fail(w, sess, http.StatusInternalServerError, driftreview.ShownName(err.Error()))
 		return
 	}

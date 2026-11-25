@@ -8,7 +8,7 @@ Operators reach it through the gateway at `/extensions/admin/`.
 
 - **Overview.** For each proxy under drift review: changes waiting, tools refused, the active policy set, and each gateway sharing declarations with when it was last heard from.
 - **Review queue.** Every waiting change, whether it is what the upstream declares now or has been superseded, and when and where it was first seen.
-- **Change.** A labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved.
+- **Change.** A labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved. Text larger than 1 MiB, well above the gateway's default limit, is not formatted here: review it with `cedar-policy drift show`, and approve it there. It can still be rejected here.
 - **Tools.** Every tool the set reviews, and every new one waiting, with whether drift review lets calls through and why, linking to the change that resolves it.
 
 ## Decisions

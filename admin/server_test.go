@@ -306,6 +306,35 @@ func TestTheSignInCookieCarriesItsStateIntact(t *testing.T) {
 	}
 }
 
+func TestBrowsersSendTheOriginWithForms(t *testing.T) {
+	// Under no-referrer, browsers send "Origin: null" with form posts,
+	// which the form check refuses.
+	d := newDashboard(t)
+	cookie, _ := d.signIn(viewer)
+	if policy := d.get("/", cookie).Header.Get("Referrer-Policy"); policy != "same-origin" {
+		t.Fatalf("Referrer-Policy %q", policy)
+	}
+}
+
+func TestTextTooLargeToShowIsNotApprovedHere(t *testing.T) {
+	d := newDashboard(t)
+	huge := `{"name":"change","description":"` + strings.Repeat("x", maxShown) + `","inputSchema":{"type":"object"}}`
+	fp := d.queue("change", huge)
+	cookie, csrf := d.signIn(reviewer)
+	page := body(t, d.get("/change?proxy=governed&tool=change&fp="+fp+"&full=1", cookie))
+	if !strings.Contains(page, "too large to review here") || strings.Contains(page, strings.Repeat("x", 100)) {
+		t.Fatalf("change page shows the text or no notice (%d bytes)", len(page))
+	}
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {fp}, "base": {active(t, d.cfg.store)}, "action": {"approve"}, "full": {"1"}}
+	if res := d.post("/decide", cookie, form); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("approving text too large to show: %d", res.StatusCode)
+	}
+	form.Set("action", "reject")
+	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=rejected") {
+		t.Fatalf("rejecting text too large to show: %s", res.Header.Get("Location"))
+	}
+}
+
 func TestLongTextMustBeOpenedBeforeApproval(t *testing.T) {
 	d := newDashboard(t)
 	long := `{"name":"change","description":"` + strings.Repeat("Change a record. ", 200) + `","inputSchema":{"type":"object"}}`

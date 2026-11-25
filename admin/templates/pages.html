@@ -121,7 +121,9 @@
 {{end}}
 </div>
 {{end}}
-{{if or .Full (not .Long)}}
+{{if .TooLarge}}
+<p class="warning">This {{if .Instructions}}text{{else}}definition{{end}} is too large to review here. Review it with <code>cedar-policy drift show</code>, and approve it there if you accept it. It can be rejected here.</p>
+{{else if or .Full (not .Long)}}
 <h2>{{if .Instructions}}Full text{{else}}Full definition{{end}}</h2>
 <pre class="definition">{{.Definition}}</pre>
 {{else}}
@@ -137,7 +139,7 @@
   <input type="hidden" name="fingerprint" value="{{.Fingerprint}}">
   <input type="hidden" name="base" value="{{.Base}}">
   {{if .Full}}<input type="hidden" name="full" value="1">{{end}}
-  {{if .Superseded}}<button type="submit" name="action" value="approve" disabled>Approve (superseded)</button>{{else if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
+  {{if .TooLarge}}<button type="submit" name="action" value="approve" disabled>Approve (too large to review here)</button>{{else if .Superseded}}<button type="submit" name="action" value="approve" disabled>Approve (superseded)</button>{{else if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
   <button type="submit" name="action" value="reject" class="secondary">Reject</button>
 </form>
 {{end}}

@@ -207,6 +207,26 @@ func holds(d Decision) bool {
 	return err == nil && fp == d.Fingerprint
 }
 
+// ErrSuperseded reports a tool definition to approve that the upstream has
+// since replaced. Gateways compare the approved definition with what the
+// upstream declares now, so approving it could only refuse calls, even ones
+// that work today.
+var ErrSuperseded = errors.New("the upstream now declares a different definition of this tool, so approving this one could only refuse calls; review what it declares now")
+
+// Current checks that a tool definition is the one gateways last saw the
+// upstream declare, or that none has been seen; otherwise it returns
+// ErrSuperseded.
+func Current(review *drift.Review, view policy.DriftView, proxy, tool, fingerprint string) error {
+	newest, found, err := review.Newest(proxy, tool, view.Upstream())
+	if err != nil {
+		return err
+	}
+	if found && newest.Fingerprint != fingerprint {
+		return ErrSuperseded
+	}
+	return nil
+}
+
 // Apply writes decisions into a new set made from the active one,
 // under the store's lock, and makes it active. The decisions were made
 // against the set named base; if another set became active since, nothing is

@@ -28,11 +28,27 @@ const usage = `Usage:
   cedar-policy bench (-store DIR | -synthetic) [options]
       Measure how long the active set, or a generated one, takes to compile
       and to decide tool calls. Run "cedar-policy bench -h" for options.
+  cedar-policy drift COMMAND [options]
+      Review upstream changes gateways queued in CEDAR_PENDING_DIR. Run
+      "cedar-policy drift help" for the commands.
 `
 
 func main() {
 	if len(os.Args) < 2 {
 		fail(fmt.Errorf("a command is required"))
+	}
+	if os.Args[1] == "drift" {
+		if len(os.Args) > 2 && (os.Args[2] == "help" || os.Args[2] == "-h") {
+			fmt.Print(driftUsage)
+			return
+		}
+		if err := runDrift(os.Args[2:], os.Stdout, time.Now); err != nil {
+			// Messages can name files and tools from the shared directory,
+			// so hidden characters are written out.
+			fmt.Fprintf(os.Stderr, "cedar-policy drift: %s\n\n%s", shownName(err.Error()), driftUsage)
+			os.Exit(1)
+		}
+		return
 	}
 	if os.Args[1] == "bench" {
 		if err := runBench(os.Args[2:]); err != nil {

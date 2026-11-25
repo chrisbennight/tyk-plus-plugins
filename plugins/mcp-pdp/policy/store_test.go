@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -363,5 +364,37 @@ func TestARepairThatMayNotBeDurableKeepsTheDamagedSet(t *testing.T) {
 	}
 	if damaged != 1 {
 		t.Fatalf("damaged copies kept: %d", damaged)
+	}
+}
+
+func TestReviseConvertsTheActiveSetAndLeavesTheStoreUnchangedOnError(t *testing.T) {
+	store := t.TempDir()
+	legacy := writeLegacySet(t, store)
+	if err := Activate(store, legacy, epoch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Revise(store, "refused", epoch, func(string, *Snapshot, map[string][]byte) error { return errors.New("no") }); err == nil {
+		t.Fatal("a failed change was published")
+	}
+	if pointer, _ := ReadPointer(store); pointer.Set != legacy {
+		t.Fatalf("a failed change moved the pointer to %s", pointer.Set)
+	}
+	set, err := Revise(store, "revised", epoch, func(base string, active *Snapshot, files map[string][]byte) error {
+		if base != legacy || active.Version != legacy || files["approved_instructions.json"] == nil || files["tools.json"] != nil {
+			t.Fatalf("change received base %s and files %v", base, slices.Collect(maps.Keys(files)))
+		}
+		files["approved_instructions.json"] = []byte(`{"governed":"Be brief."}`)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer, _ := ReadPointer(store)
+	snapshot, manifest, err := LoadSet(store, set)
+	if err != nil || pointer.Set != set || pointer.Previous != legacy || manifest.Format != FormatVersion || manifest.Label != "revised" {
+		t.Fatalf("revised set %s: pointer %+v, manifest %+v, %v", set, pointer, manifest, err)
+	}
+	if text, _ := snapshot.Instructions("governed"); text != "Be brief." {
+		t.Fatalf("instructions %q", text)
 	}
 }

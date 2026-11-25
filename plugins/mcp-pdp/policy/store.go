@@ -213,6 +213,67 @@ func Promote(root, source, label string, now func() time.Time) (string, error) {
 	return set, store.activate(set, now)
 }
 
+// Locked calls fn with the active set's name and compiled form while holding
+// the store's lock, so no set becomes active while fn runs.
+func Locked(root string, fn func(set string, active *Snapshot) error) error {
+	store, err := openStore(root)
+	if err != nil {
+		return err
+	}
+	defer store.unlock()
+	pointer, err := ReadPointer(root)
+	if err != nil {
+		return err
+	}
+	active, _, err := LoadSet(root, pointer.Set)
+	if err != nil {
+		return fmt.Errorf("active policy set %s: %w", pointer.Set, err)
+	}
+	return fn(pointer.Set, active)
+}
+
+// Revise changes the active set and makes the result active, all under the
+// store's lock, so a publish made meanwhile is never overwritten unseen.
+// change receives the active set's name, its compiled form, and its files
+// laid out as format 2, which it edits in place; an error from change leaves
+// the store unchanged. The result is validated like any promoted set.
+func Revise(root, label string, now func() time.Time, change func(set string, active *Snapshot, files map[string][]byte) error) (string, error) {
+	store, err := openStore(root)
+	if err != nil {
+		return "", err
+	}
+	defer store.unlock()
+	pointer, err := ReadPointer(root)
+	if err != nil {
+		return "", err
+	}
+	manifest, contents, err := ReadSet(root, pointer.Set)
+	if err != nil {
+		return "", fmt.Errorf("active policy set %s: %w", pointer.Set, err)
+	}
+	active, err := Compile(InputsOf(manifest.Format, contents), pointer.Set)
+	if err != nil {
+		return "", fmt.Errorf("active policy set %s: %w", pointer.Set, err)
+	}
+	files := contents
+	if manifest.Format == legacyFormat {
+		files = map[string][]byte{"rules.cedar": contents["rules.cedar"], "approved_tools.json": contents["tools.json"],
+			"approved_instructions.json": []byte("{}\n"), "checks.json": contents["checks.json"]}
+	}
+	if err := change(pointer.Set, active, files); err != nil {
+		return "", err
+	}
+	hashes := hashFiles(Files, files)
+	set := Fingerprint(FormatVersion, hashes)
+	if _, err := Compile(InputsOf(FormatVersion, files), set); err != nil {
+		return "", fmt.Errorf("policy set rejected: %w", err)
+	}
+	if err := store.writeSet(set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, files); err != nil {
+		return "", err
+	}
+	return set, store.activate(set, now)
+}
+
 // readSource reads policy files laid out as either format and returns them
 // as format-2 files. A format-1 directory has tools.json and no approved
 // instructions; approved_instructions.json is optional and defaults to none.

@@ -40,13 +40,47 @@ services:
       CODEMODE_MAX_CONSOLE_BYTES: ${CODEMODE_MAX_CONSOLE_BYTES:-}
       CODEMODE_MAX_VALUE_BYTES: ${CODEMODE_MAX_VALUE_BYTES:-}
       CODEMODE_MAX_RUNS: ${CODEMODE_MAX_RUNS:-}
+      # The review dashboard, which /extensions/admin routes to; see the
+      # admin service below.
+      ADMIN_UPSTREAM_URL: ${ADMIN_UPSTREAM_URL:-http://admin:8000}
       TYK_GW_SECRET: ${TYK_GW_SECRET:?Set a random local gateway admin secret}
       TYK_GW_NODESECRET: ${TYK_GW_NODESECRET:?Set a random secret shared by gateways that use the same Redis}
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+    # The policy store and the drift directory are volumes, so approvals and
+    # queued changes outlast the container, and the review dashboard shares
+    # them. A new volume starts with the image's contents.
+    volumes:
+      - policy:/opt/tyk-gateway/cedar
+      - pending:/opt/tyk-gateway/cedar-pending
     depends_on:
       redis:
         condition: service_healthy
+  # The drift review dashboard, at http://127.0.0.1:8080/extensions/admin/.
+  # It starts only with the admin profile: docker compose --profile admin up.
+  # It signs operators in with your OpenID Connect identity provider; see
+  # admin/README.md for the settings.
+  admin:
+    profiles: [admin]
+    build:
+      context: ./admin
+      additional_contexts:
+        mcp-pdp: ./plugins/mcp-pdp
+        sandbox-protocol: ./sandbox/protocol
+    environment:
+      ADMIN_PUBLIC_URL: ${ADMIN_PUBLIC_URL:-}
+      ADMIN_OIDC_ISSUER: ${ADMIN_OIDC_ISSUER:-}
+      ADMIN_OIDC_CLIENT_ID: ${ADMIN_OIDC_CLIENT_ID:-}
+      ADMIN_OIDC_CLIENT_SECRET_FILE: /run/secrets/admin-oidc-client-secret
+      ADMIN_GROUPS_CLAIM: ${ADMIN_GROUPS_CLAIM:-groups}
+      ADMIN_REVIEWER_GROUP: ${ADMIN_REVIEWER_GROUP:-}
+      ADMIN_VIEWER_GROUP: ${ADMIN_VIEWER_GROUP:-}
+    volumes:
+      - policy:/opt/tyk-gateway/cedar
+      - pending:/opt/tyk-gateway/cedar-pending
+      - ${ADMIN_OIDC_CLIENT_SECRET_PATH:-./admin-oidc-client-secret}:/run/secrets/admin-oidc-client-secret:ro
+    depends_on:
+      - gateway
   redis:
     image: redis:7.4-alpine
     healthcheck:
@@ -54,3 +88,6 @@ services:
       interval: 2s
       timeout: 2s
       retries: 15
+volumes:
+  policy:
+  pending:

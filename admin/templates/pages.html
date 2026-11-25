@@ -1,0 +1,165 @@
+{{define "head"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · Drift review</title>
+<link rel="stylesheet" href="{{.Base}}/style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="{{.Base}}/">Drift review</a>
+  {{if .User}}<span class="who">{{.User}} · {{.Role}}</span>
+  <form method="post" action="{{.Base}}/logout" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit">Sign out</button>
+  </form>{{end}}
+</header>
+<main>
+{{end}}
+
+{{define "foot"}}
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "signed-out"}}{{template "head" .}}
+<h1>Signed out</h1>
+<p><a href="{{.Base}}/">Sign in again</a></p>
+{{template "foot" .}}{{end}}
+
+{{define "problem"}}{{template "head" .}}
+<h1>Something needs attention</h1>
+<p class="problem">{{.Content}}</p>
+<p><a href="{{.Base}}/">Back to the overview</a></p>
+{{template "foot" .}}{{end}}
+
+{{define "overview"}}{{template "head" .}}{{with .Content}}
+<h1>Overview</h1>
+<section>
+  <h2>Proxies under drift review</h2>
+  {{if .Proxies}}
+  <table>
+    <thead><tr><th scope="col">Proxy</th><th scope="col">Waiting for review</th><th scope="col">Tools refused</th><th scope="col"></th></tr></thead>
+    <tbody>
+    {{range .Proxies}}
+      <tr>
+        <td>{{.Shown}}</td>
+        <td><a href="{{$.Base}}/queue?proxy={{.Name}}">{{.Waiting}} waiting</a></td>
+        <td><a href="{{$.Base}}/tools?proxy={{.Name}}">{{.Blocked}} refused</a></td>
+        <td>{{if .Problem}}<span class="problem">{{.Problem}}</span>{{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}<p>No proxy is under drift review in the active set.</p>{{end}}
+</section>
+<section>
+  <h2>Active policy set</h2>
+  <dl>
+    <dt>Label</dt><dd>{{if .Label}}{{.Label}}{{else}}(none){{end}}</dd>
+    <dt>Fingerprint</dt><dd><code>{{.Set}}</code></dd>
+    <dt>Active since</dt><dd>{{if .Promoted}}{{.Promoted}}{{else}}unknown{{end}}</dd>
+  </dl>
+</section>
+<section>
+  <h2>Gateways sharing what they see</h2>
+  {{if .Gateways}}
+  <table>
+    <thead><tr><th scope="col">Gateway</th><th scope="col">Last declaration received</th></tr></thead>
+    <tbody>{{range .Gateways}}<tr><td>{{.Name}}</td><td>{{when .Seen}}</td></tr>{{end}}</tbody>
+  </table>
+  {{else}}<p>No gateway has shared a declaration yet.</p>{{end}}
+</section>
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "queue"}}{{template "head" .}}{{with .Content}}
+<p class="crumbs"><a href="{{$.Base}}/">Overview</a> › {{.ProxyShown}}</p>
+<h1>Waiting for review on {{.ProxyShown}}</h1>
+{{if .Done}}<p class="notice" role="status">{{.Done}}</p>{{end}}
+{{if .Items}}
+<table>
+  <thead><tr><th scope="col">Change</th><th scope="col">Kind</th><th scope="col">Upstream</th><th scope="col">First seen</th><th scope="col">Fingerprint</th></tr></thead>
+  <tbody>
+  {{range .Items}}
+    <tr>
+      <td>{{if .Instructions}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&instructions=1&fp={{.Fingerprint}}">Instructions</a>{{else}}<a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&tool={{.Tool}}&fp={{.Fingerprint}}">{{.Shown}}</a>{{end}}</td>
+      <td>{{.Kind}}</td>
+      <td>{{.State}}</td>
+      <td>{{when .FirstSeen}} on {{.Gateway}}</td>
+      <td><code>{{short .Fingerprint}}</code></td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p>Nothing is waiting for review.</p>{{end}}
+{{if .Problems}}
+<h2>Entries that cannot be read</h2>
+<ul>{{range .Problems}}<li class="problem">{{.}}</li>{{end}}</ul>
+{{end}}
+<p><a href="{{$.Base}}/tools?proxy={{.Proxy}}">Why each tool is allowed or refused</a></p>
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "change"}}{{template "head" .}}{{with .Content}}
+<p class="crumbs"><a href="{{$.Base}}/">Overview</a> › <a href="{{$.Base}}/queue?proxy={{.Proxy}}">{{.ProxyShown}}</a></p>
+<h1>{{.Kind}}{{if not .Instructions}} {{.ToolShown}}{{end}}</h1>
+<dl>
+  <dt>Fingerprint</dt><dd><code>{{.Fingerprint}}</code></dd>
+  <dt>First seen</dt><dd>{{when .FirstSeen}} on {{.Gateway}}</dd>
+</dl>
+{{if .Approved}}<p class="notice">The active set already approves this.</p>{{end}}
+{{if .Rejected}}<p class="notice">The active set already rejects this.</p>{{end}}
+{{if .Superseded}}<p class="warning">Gateways have since seen the upstream declare a different definition. Approving this one would not release calls.</p>{{end}}
+{{if .Invisible}}<p class="warning">Contains {{.Invisible}} invisible character(s), written as ⟨U+XXXX⟩.</p>{{end}}
+{{if .LookAlike}}<p class="warning">Contains {{.LookAlike}} look-alike character(s), each followed by ⟨U+XXXX⟩.</p>{{end}}
+{{range .Hints}}<p class="notice">This may be a rename of {{.}}, which is approved but no longer declared.</p>{{end}}
+{{if .Diff}}
+<h2>What changed</h2>
+<div class="diff" role="table" aria-label="Differences from the approved version">
+{{range .Diff}}<div class="row op{{.Op}}" role="row"><span class="mark" aria-hidden="true">{{if eq .Op "-"}}−{{else if eq .Op "+"}}+{{end}}</span><span class="text" role="cell">{{if eq .Op "-"}}<span class="sr">removed: </span>{{else if eq .Op "+"}}<span class="sr">added: </span>{{end}}{{range .Parts}}{{if .Changed}}<mark>{{.Text}}</mark>{{else}}{{.Text}}{{end}}{{end}}</span></div>
+{{end}}
+</div>
+{{end}}
+{{if or .Full (not .Long)}}
+<h2>{{if .Instructions}}Full text{{else}}Full definition{{end}}</h2>
+<pre class="definition">{{.Definition}}</pre>
+{{else}}
+<p><a href="{{$.Base}}/change?proxy={{.Proxy}}{{if .Instructions}}&instructions=1{{else}}&tool={{.Tool}}{{end}}&fp={{.Fingerprint}}&full=1">Open the full {{if .Instructions}}text{{else}}definition{{end}}</a>. It is long, so it must be opened before it can be approved.</p>
+{{end}}
+{{if $.Reviewer}}
+<h2>Decision</h2>
+<p>Your decision applies to exactly this fingerprint, against the policy set active when this page loaded. If either has moved on, nothing changes.</p>
+<form method="post" action="{{$.Base}}/decide" class="decide">
+  <input type="hidden" name="csrf" value="{{$.CSRF}}">
+  <input type="hidden" name="proxy" value="{{.Proxy}}">
+  {{if .Instructions}}<input type="hidden" name="instructions" value="1">{{else}}<input type="hidden" name="tool" value="{{.Tool}}">{{end}}
+  <input type="hidden" name="fingerprint" value="{{.Fingerprint}}">
+  <input type="hidden" name="base" value="{{.Base}}">
+  {{if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
+  <button type="submit" name="action" value="reject" class="secondary">Reject</button>
+</form>
+{{end}}
+{{end}}{{template "foot" .}}{{end}}
+
+{{define "tools"}}{{template "head" .}}{{with .Content}}
+<p class="crumbs"><a href="{{$.Base}}/">Overview</a> › <a href="{{$.Base}}/queue?proxy={{.Proxy}}">{{.ProxyShown}}</a></p>
+<h1>Tools on {{.ProxyShown}}</h1>
+<p>As gateways see them at their last refresh of the shared declarations.</p>
+{{if .Rows}}
+<table>
+  <thead><tr><th scope="col">Tool</th><th scope="col">Calls</th><th scope="col">Why</th><th scope="col">Last declared</th></tr></thead>
+  <tbody>
+  {{range .Rows}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td>{{if .Callable}}<span class="ok">Allowed by drift review</span>{{else}}<span class="refused">Refused</span>{{end}}</td>
+      <td>{{.Reason}}{{if .Waiting}} <a href="{{$.Base}}/change?proxy={{$.Content.Proxy}}&tool={{.Tool}}&fp={{.Waiting}}">Review it</a>{{end}}</td>
+      <td>{{if .Found}}{{when .Seen}}{{else}}never{{end}}</td>
+    </tr>
+  {{end}}
+  </tbody>
+</table>
+{{else}}<p>The active set reviews no tools for this proxy.</p>{{end}}
+<p>A tool allowed here still needs Cedar's rules to permit each call.</p>
+{{end}}{{template "foot" .}}{{end}}

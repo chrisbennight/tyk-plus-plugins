@@ -176,7 +176,9 @@ The `drift` object also accepts `rejectedTools` (tool names mapped to lists of r
 
 ### Reviewing changes
 
-`cedar-policy drift` reviews what gateways queued, with the policy store in `-store` and the shared directory in `-pending`:
+Review what gateways queued in the [review dashboard](../../admin/README.md), in a browser, signed in through your identity provider, or on the command line; both use the same code and the same store.
+
+On the command line, `cedar-policy drift` reviews what gateways queued, with the policy store in `-store` and the shared directory in `-pending`:
 
 ```sh
 cedar-policy drift list -store /path/to/store -pending /path/to/pending

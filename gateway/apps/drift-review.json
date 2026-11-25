@@ -1,0 +1,20 @@
+{
+  "name": "Drift review dashboard",
+  "api_id": "drift-review",
+  "org_id": "default",
+  "use_keyless": true,
+  "active": true,
+  "version_data": {
+    "not_versioned": true,
+    "versions": {
+      "Default": {
+        "name": "Default"
+      }
+    }
+  },
+  "proxy": {
+    "listen_path": "/extensions/admin/",
+    "target_url": "env://ADMIN_UPSTREAM_URL",
+    "strip_listen_path": true
+  }
+}

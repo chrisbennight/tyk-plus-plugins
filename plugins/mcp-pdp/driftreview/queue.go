@@ -195,6 +195,9 @@ func Describe(d Decision) string {
 	return ShownName(d.Proxy) + "/" + ShownName(d.Tool)
 }
 
+// ErrStale reports a decision made against a set that is no longer active.
+var ErrStale = errors.New("stale decision")
+
 // holds reports whether a decision's content has its fingerprint.
 func holds(d Decision) bool {
 	if d.Instructions {
@@ -211,7 +214,7 @@ func holds(d Decision) bool {
 func Apply(store, base, label string, actor policy.Actor, now func() time.Time, decisions []Decision) (string, error) {
 	return policy.Revise(store, label, actor, now, func(set string, active *policy.Snapshot, files map[string][]byte) ([]policy.LogEntry, error) {
 		if set != base {
-			return nil, fmt.Errorf("the active set changed to %s while you reviewed; nothing was changed, so review again", set)
+			return nil, fmt.Errorf("%w: the active set changed to %s while you reviewed; nothing was changed, so review again", ErrStale, set)
 		}
 		var inventory map[string]map[string]jsontext.Value
 		if err := jsonv2.Unmarshal(files["approved_tools.json"], &inventory); err != nil {
@@ -225,7 +228,15 @@ func Apply(store, base, label string, actor policy.Actor, now func() time.Time, 
 			instructions = map[string]string{}
 		}
 		entries := make([]policy.LogEntry, 0, len(decisions))
+		decided := map[string]bool{}
 		for _, d := range decisions {
+			// One batch decides each tool, or each proxy's instructions, at
+			// most once, so its result does not depend on the order given.
+			key := fmt.Sprintf("%s\x00%t\x00%s", d.Proxy, d.Instructions, d.Tool)
+			if decided[key] {
+				return nil, fmt.Errorf("%s is decided more than once", Describe(d))
+			}
+			decided[key] = true
 			// An approval must carry exactly the content its fingerprint
 			// names, so the log never records one fingerprint for another.
 			if d.Approve && !holds(d) {

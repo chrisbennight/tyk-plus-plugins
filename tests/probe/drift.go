@@ -155,13 +155,24 @@ func reviewDrift(c *conn, cred credential, version, fingerprint string) {
 	check(strings.Contains(shown, "Changed tool change on governed") && strings.Contains(shown, "Fingerprint: "+fingerprint) &&
 		strings.Contains(shown, "Description changed:\n- An approved description the upstream no longer declares\n+ "), "%s: drift show:\n%s", version, shown)
 
+	checkDashboardReads(version, fingerprint)
+
 	rejected := activeAfter(reviewCommand("reject", "-proxy", "governed", "-tool", "change", "-label", "probe reject", fingerprint))
 	listed = reviewCommand("list")
 	check(!strings.Contains(listed, fingerprint), "%s: a rejected change was listed:\n%s", version, listed)
 	call(c, cred, "change", args("count", 2))
 	call(connectAt(peerGateway, cred, version), cred, "change", args("count", 2))
 
-	approved := activeAfter(reviewCommand("approve", "-proxy", "governed", "-tool", "change", "-label", "probe approve", fingerprint))
+	// One protocol version approves through the dashboard, the other with
+	// the command; both write the same store the same way.
+	var approved string
+	if version == newerProtocol {
+		approved = approveInDashboard(version, fingerprint)
+		awaitReport(approved, "activated")
+		awaitPeerSet(approved)
+	} else {
+		approved = activeAfter(reviewCommand("approve", "-proxy", "governed", "-tool", "change", "-label", "probe approve", fingerprint))
+	}
 	check(approved != rejected, "%s: approval did not publish a new set", version)
 	// Approving lifts the rejection, so the definition is reviewed again if
 	// the upstream returns to it after another is approved.

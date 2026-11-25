@@ -97,6 +97,17 @@ func (v DriftView) ApprovedTools() []string {
 	return names
 }
 
+// Tools returns, sorted, every tool the set reviews for the proxy, approved
+// or not.
+func (v DriftView) Tools() []string {
+	names := make([]string, 0, len(v.tools))
+	for name := range v.tools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
 // Approved returns a tool's approved definition and its fingerprint. A tool
 // without an approved definition is not approved, even if listed.
 func (v DriftView) Approved(name string) (fingerprint string, definition json.RawMessage, ok bool) {

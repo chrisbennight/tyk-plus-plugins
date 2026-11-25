@@ -1,7 +1,6 @@
 package policy
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -104,15 +103,15 @@ func ReadLog(root string) ([]LogEntry, error) {
 	}
 	var entries []LogEntry
 	var problems []error
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	scanner.Buffer(nil, 1<<20)
-	for line := 1; scanner.Scan(); line++ {
+	// Lines are split without a length limit, so no single long entry can
+	// hide the ones after it.
+	for line, text := range bytes.Split(bytes.TrimSuffix(data, []byte("\n")), []byte("\n")) {
 		var e LogEntry
-		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			problems = append(problems, fmt.Errorf("decision log line %d is not a valid entry", line))
+		if err := json.Unmarshal(text, &e); err != nil {
+			problems = append(problems, fmt.Errorf("decision log line %d is not a valid entry", line+1))
 			continue
 		}
 		entries = append(entries, e)
 	}
-	return entries, errors.Join(append(problems, scanner.Err())...)
+	return entries, errors.Join(problems...)
 }

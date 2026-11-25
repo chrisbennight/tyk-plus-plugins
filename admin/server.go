@@ -589,10 +589,10 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			s.fail(w, sess, http.StatusNotFound, driftreview.ShownName(err.Error()))
 			return
 		}
-		// Any reviewed text may be approved. Gateways send the approved
-		// text in place of the upstream's, so clients see only reviewed
-		// text; if the upstream sends something else, that is queued and
-		// reviewed in turn.
+		// Any reviewed text may be approved. When the upstream sends
+		// something else, gateways send the approved text or none, so
+		// clients see only reviewed text, and the upstream's text is
+		// queued and reviewed in turn.
 		d.Tool, d.Text = "", entry.Instructions
 	} else {
 		entry, err := review.Tool(proxy, tool, fingerprint)

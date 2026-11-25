@@ -16,11 +16,12 @@ const signInDeck = `{
   "audience": "governed-mcp",
   "lifetimeSeconds": 600,
   "people": {
-    "reviewer": {"groups": ["drift-reviewers"]},
+    "reviewer": {"groups": ["drift-reviewers"], "nonce": "from-the-deck"},
     "scoped": {"sub": "svc-7", "scope": "read write"}
   },
   "clients": {
-    "dashboard": {"secret": "s3cret", "redirectURIs": ["https://admin.example/callback"]}
+    "dashboard": {"secret": "s3cret", "redirectURIs": ["https://admin.example/callback"]},
+    "special": {"secret": "a b+c/d", "redirectURIs": ["https://admin.example/callback"]}
   }
 }`
 
@@ -240,11 +241,58 @@ func TestDeckClientsAreChecked(t *testing.T) {
 		"relative":        `{"c":{"secret":"s","redirectURIs":["/cb"]}}`,
 		"unknown field":   `{"c":{"secret":"s","redirectURIs":["https://a.example/cb"],"extra":1}}`,
 		"with a fragment": `{"c":{"secret":"s","redirectURIs":["https://a.example/cb#x"]}}`,
+		"own state":       `{"c":{"secret":"s","redirectURIs":["https://a.example/cb?state=x"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadDeck(writeDeck(t, "{"+people+`,"clients":`+clients+"}")); err == nil {
 				t.Fatal("deck accepted")
 			}
 		})
+	}
+}
+
+func TestBasicCredentialsAreFormDecoded(t *testing.T) {
+	s, _ := newSignInServer(t)
+	rec := get(t, s, http.MethodGet, authorizeURL(url.Values{"client_id": {"special"}, "login_hint": {"reviewer"}}), "")
+	back, _ := url.Parse(rec.Header().Get("Location"))
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {back.Query().Get("code")}, "redirect_uri": {redirect}}
+	if rec := exchange(t, s, form, "special", url.QueryEscape("a b+c/d")); rec.Code != http.StatusOK {
+		t.Fatalf("token: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestPKCEMustBeComplete(t *testing.T) {
+	s, _ := newSignInServer(t)
+	for _, extra := range []url.Values{
+		{"code_challenge_method": {"S256"}, "login_hint": {"reviewer"}},
+		{"code_challenge": {"abc"}, "login_hint": {"reviewer"}},
+		{"nonce": {strings.Repeat("n", maxParameter+1)}, "login_hint": {"reviewer"}},
+	} {
+		if rec := get(t, s, http.MethodGet, authorizeURL(extra), ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("%v: %d", extra, rec.Code)
+		}
+	}
+	// A verifier sent for a sign-in without a challenge is refused.
+	code := signInCode(t, s, url.Values{})
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "code_verifier": {"v"}}
+	if rec := exchange(t, s, form, "dashboard", "s3cret"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("verifier without challenge: %d", rec.Code)
+	}
+}
+
+func TestTheIDTokenCarriesOnlyTheSignInNonce(t *testing.T) {
+	s, _ := newSignInServer(t)
+	extra := url.Values{"login_hint": {"reviewer"}}
+	rec := get(t, s, http.MethodGet, "/oauth/authorize?"+url.Values{"response_type": {"code"}, "client_id": {"dashboard"},
+		"redirect_uri": {redirect}, "state": {"st-1"}, "login_hint": extra["login_hint"]}.Encode(), "")
+	back, _ := url.Parse(rec.Header().Get("Location"))
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {back.Query().Get("code")}, "redirect_uri": {redirect}}
+	res := exchange(t, s, form, "dashboard", "s3cret")
+	var tokens struct {
+		IDToken string `json:"id_token"`
+	}
+	json.Unmarshal(res.Body.Bytes(), &tokens)
+	if _, claims, ok := verify(t, s, tokens.IDToken); !ok || claims["nonce"] != nil {
+		t.Fatalf("a sign-in without a nonce gave %v", claims["nonce"])
 	}
 }

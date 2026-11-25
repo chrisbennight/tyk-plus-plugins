@@ -54,7 +54,7 @@ Applications such as the drift review dashboard sign people in with OpenID Conne
 
 **There are no passwords.** Whoever opens the sign-in page chooses who to be, so this is no more an identity provider than the rest of the issuer. Keep it on a local or test network.
 
-List each application in the deck under `clients`, with a secret and the exact redirect URIs it may return to:
+List each application in the deck under `clients`, with a secret and the exact redirect URIs it may return to. A redirect URI may not carry its own `code` or `state`, since the issuer adds those:
 
 ```json
 "clients": {
@@ -62,12 +62,13 @@ List each application in the deck under `clients`, with a secret and the exact r
 }
 ```
 
-- `GET /.well-known/openid-configuration` describes the endpoints. Its `issuer` is the deck's `issuer`, which may differ from `ISSUER_PUBLIC_URL`; an application then has to accept that difference when it reads the document.
+- `GET /.well-known/openid-configuration` describes the endpoints. Its `issuer` is the deck's `issuer`. Standard OpenID Connect clients expect it to equal the URL they read the document from, so set the deck's `issuer` to `ISSUER_PUBLIC_URL` for them; an application that keeps a different issuer, such as one shared with the gateway's tokens, has to accept the difference.
 - `GET /oauth/authorize` takes `response_type=code`, `client_id`, `redirect_uri`, `state`, `nonce`, and optionally `code_challenge` with `code_challenge_method=S256`.
   - With `login_hint` naming a person in the deck, it returns at once to the redirect URI with a code.
   - Without it, it shows a page listing the deck's people to choose from.
   - An unknown client, or a redirect URI the client does not list exactly, is refused without redirecting.
 - `POST /oauth/token` exchanges the code. The client authenticates with its secret, by HTTP Basic or in the form, and sends the same redirect URI and, if it gave a challenge, the code verifier.
-  - A code works once, and only within a minute of being issued.
+  - A code works once, and only within a minute of being issued. A sign-in that gave a challenge needs its verifier, and one that gave none must send none.
+  - Client IDs and secrets sent by HTTP Basic are form-encoded first, as OAuth requires.
   - It returns an ID token whose audience is the client and which carries the sign-in's `nonce`, and an access token for the deck's `audience`.
   - Both carry the person's claims from the deck and are signed with the published key.

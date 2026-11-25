@@ -223,8 +223,9 @@ func loadDeck(path string) (*deck, error) {
 			return nil, fmt.Errorf("client %q: a secret and at least one redirect URI are required", id)
 		}
 		for _, uri := range c.RedirectURIs {
-			if u, err := url.Parse(uri); err != nil || !u.IsAbs() || u.Fragment != "" {
-				return nil, fmt.Errorf("client %q: redirect URI %q must be an absolute URL without a fragment", id, uri)
+			u, err := url.Parse(uri)
+			if err != nil || !u.IsAbs() || u.Fragment != "" || u.Query().Has("code") || u.Query().Has("state") {
+				return nil, fmt.Errorf("client %q: redirect URI %q must be an absolute URL without a fragment or its own code or state", id, uri)
 			}
 		}
 	}
@@ -309,7 +310,8 @@ func (s *server) signPerson(w http.ResponseWriter, r *http.Request) {
 }
 
 // personClaims are the claims of a token for a person in the deck, for an
-// audience, with any extra claims such as a sign-in's nonce.
+// audience, with any extra claims such as a sign-in's nonce. An extra claim
+// set to nil removes that claim.
 func (s *server) personClaims(name, audience string, extra map[string]any) ([]byte, error) {
 	now := s.now()
 	claims := map[string]any{"sub": name}
@@ -317,7 +319,11 @@ func (s *server) personClaims(name, audience string, extra map[string]any) ([]by
 		claims[k] = v
 	}
 	for k, v := range extra {
-		claims[k] = v
+		if v == nil {
+			delete(claims, k)
+		} else {
+			claims[k] = v
+		}
 	}
 	claims["iss"] = s.deck.Issuer
 	claims["aud"] = audience

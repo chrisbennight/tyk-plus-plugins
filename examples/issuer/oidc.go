@@ -21,8 +21,12 @@ import (
 // codeLifetime is how long a sign-in code may wait to be exchanged.
 const codeLifetime = 60 * time.Second
 
-// maxCodes bounds the sign-in codes waiting to be exchanged.
-const maxCodes = 1024
+// maxCodes bounds the sign-in codes waiting to be exchanged, and
+// maxParameter the length of each value a sign-in keeps.
+const (
+	maxCodes     = 1024
+	maxParameter = 512
+)
 
 // signIn is what a sign-in code stands for until it is exchanged.
 type signIn struct {
@@ -88,8 +92,12 @@ func (s *server) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	challenge := q.Get("code_challenge")
-	if challenge != "" && q.Get("code_challenge_method") != "S256" {
-		http.Error(w, "only code_challenge_method=S256 is supported", http.StatusBadRequest)
+	if (challenge != "" || q.Has("code_challenge_method")) && (challenge == "" || q.Get("code_challenge_method") != "S256") {
+		http.Error(w, "a code challenge needs code_challenge_method=S256, and that method needs a challenge", http.StatusBadRequest)
+		return
+	}
+	if len(challenge) > maxParameter || len(q.Get("nonce")) > maxParameter || len(q.Get("state")) > maxParameter {
+		http.Error(w, "state, nonce and code_challenge are limited to 512 bytes each", http.StatusBadRequest)
 		return
 	}
 	person := q.Get("login_hint")
@@ -174,7 +182,16 @@ func (s *server) exchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID, secret, basic := r.BasicAuth()
-	if !basic {
+	if basic {
+		// HTTP Basic carries the client ID and secret form-encoded.
+		var idErr, secretErr error
+		clientID, idErr = url.QueryUnescape(clientID)
+		secret, secretErr = url.QueryUnescape(secret)
+		if idErr != nil || secretErr != nil {
+			tokenError(w, http.StatusUnauthorized, "invalid_client")
+			return
+		}
+	} else {
 		clientID, secret = r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
 	}
 	c, ok := s.deck.Clients[clientID]
@@ -198,9 +215,10 @@ func (s *server) exchange(w http.ResponseWriter, r *http.Request) {
 		tokenError(w, http.StatusBadRequest, "invalid_grant")
 		return
 	}
-	extra := map[string]any{}
-	if in.nonce != "" {
-		extra["nonce"] = in.nonce
+	// The ID token carries the sign-in's nonce, or none; never one from the deck.
+	extra := map[string]any{"nonce": in.nonce}
+	if in.nonce == "" {
+		extra["nonce"] = nil
 	}
 	idClaims, err := s.personClaims(in.person, clientID, extra)
 	if err != nil {
@@ -232,7 +250,7 @@ func (s *server) exchange(w http.ResponseWriter, r *http.Request) {
 // challenge. A sign-in without a challenge needs no verifier.
 func verifierMatches(challenge, verifier string) bool {
 	if challenge == "" {
-		return true
+		return verifier == ""
 	}
 	sum := sha256.Sum256([]byte(verifier))
 	return verifier != "" && subtle.ConstantTimeCompare([]byte(b64(sum[:])), []byte(challenge)) == 1

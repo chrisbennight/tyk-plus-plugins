@@ -133,6 +133,10 @@ func (a *auth) connect(ctx context.Context) (*oauth2.Config, *oidc.IDTokenVerifi
 		return nil, nil, fmt.Errorf("identity provider: %w", err)
 	}
 	a.provider = provider
+	if token := provider.Endpoint().TokenURL; !strings.HasPrefix(token, "https://") {
+		// The client secret is sent to the token endpoint.
+		slog.Warn("The identity provider's token endpoint is not https: the client secret is sent in the clear. Use this only on a local or test network.", "url", token)
+	}
 	a.verifier = provider.Verifier(&oidc.Config{ClientID: a.cfg.clientID})
 	a.oauth = &oauth2.Config{
 		ClientID:     a.cfg.clientID,
@@ -340,8 +344,21 @@ var errForbidden = errors.New("forbidden")
 // checkForm accepts a form only from the dashboard itself, in the session
 // that rendered it: the CSRF token must match, and a browser's Origin
 // header, when sent, must be the dashboard's.
+// origin is the dashboard's origin as browsers send it: the host in lower
+// case, and the port only when it is not the scheme's default.
+func (a *auth) origin() string {
+	host := strings.ToLower(a.public.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if port := a.public.Port(); port != "" && !(a.public.Scheme == "https" && port == "443") && !(a.public.Scheme == "http" && port == "80") {
+		host += ":" + port
+	}
+	return a.public.Scheme + "://" + host
+}
+
 func (a *auth) checkForm(r *http.Request, s *session) error {
-	if origin := r.Header.Get("Origin"); origin != "" && origin != a.public.Scheme+"://"+a.public.Host {
+	if origin := r.Header.Get("Origin"); origin != "" && origin != a.origin() {
 		return errForbidden
 	}
 	if subtle.ConstantTimeCompare([]byte(r.PostFormValue("csrf")), []byte(s.csrf)) != 1 {

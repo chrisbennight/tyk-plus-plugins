@@ -281,10 +281,11 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 // decision; the page never echoes text from its URL.
 func doneMessage(code string) string {
 	return map[string]string{
-		"approved":   "Approved. Gateways enforce the new set within their refresh interval.",
-		"rejected":   "Rejected. The definition will not be queued again.",
-		"stale":      "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
-		"superseded": "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
+		"approved":             "Approved. Gateways enforce the new set within their refresh interval.",
+		"rejected":             "Rejected. The definition will not be queued again.",
+		"stale":                "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
+		"several-instructions": "Nothing was approved: several changed instructions are waiting, and gateways do not record which one the upstream sends now. Reject the ones you do not want, then approve the one you do.",
+		"superseded":           "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
 	}[code]
 }
 
@@ -517,6 +518,17 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 	}
 	defer review.Close()
 	d := driftreview.Decision{Proxy: proxy, Tool: tool, Instructions: instructions, Fingerprint: fingerprint, Approve: action == "approve"}
+	back := s.auth.link("/queue?proxy=" + url.QueryEscape(proxy))
+	var snapshot *policy.Snapshot
+	var view policy.DriftView
+	if d.Approve {
+		// Approvals are checked against the set the page was made from.
+		if snapshot, _, err = policy.LoadSet(s.cfg.store, base); err != nil {
+			http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
+			return
+		}
+		view, _ = snapshot.Drift(proxy)
+	}
 	if instructions {
 		entry, err := review.InstructionsEntry(proxy, fingerprint)
 		if err != nil {
@@ -524,6 +536,20 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			return
 		}
 		d.Tool, d.Text = "", entry.Instructions
+		if d.Approve {
+			// Gateways record changed instructions but not which text an
+			// upstream sends now, so with several waiting, approving one
+			// could bring back text the upstream has withdrawn.
+			waiting, _, err := driftreview.PendingInstructions(review, snapshot, view, proxy)
+			if err != nil {
+				s.fail(w, sess, http.StatusServiceUnavailable, driftreview.ShownName(err.Error()))
+				return
+			}
+			if len(waiting) > 1 {
+				http.Redirect(w, r, back+"&done=several-instructions", http.StatusSeeOther)
+				return
+			}
+		}
 	} else {
 		entry, err := review.Tool(proxy, tool, fingerprint)
 		if err != nil {
@@ -535,15 +561,9 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			// Gateways compare the approved definition with what the
 			// upstream declares now, so approving one it has since replaced
 			// could only refuse calls, even ones that work today.
-			snapshot, _, err := policy.LoadSet(s.cfg.store, base)
-			if err != nil {
-				http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=stale", http.StatusSeeOther)
-				return
-			}
-			view, _ := snapshot.Drift(proxy)
 			switch err := driftreview.Current(review, view, proxy, tool, fingerprint); {
 			case errors.Is(err, driftreview.ErrSuperseded):
-				http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=superseded", http.StatusSeeOther)
+				http.Redirect(w, r, back+"&done=superseded", http.StatusSeeOther)
 				return
 			case err != nil:
 				s.fail(w, sess, http.StatusServiceUnavailable, "The shared declarations of this tool cannot be read, so it cannot be told whether this definition is still current.")
@@ -561,8 +581,9 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 		s.fail(w, sess, http.StatusBadRequest, "This text is long: open it in full before approving it.")
 		return
 	}
-	label := fmt.Sprintf("dashboard %s %s %s by %s", action, driftreview.Describe(d), short(fingerprint), sess.actor.Name)
-	back := s.auth.link("/queue?proxy=" + url.QueryEscape(proxy))
+	// The label travels into gateways' status and logs, so it names the
+	// decision, not the reviewer; the decision log records who made it.
+	label := fmt.Sprintf("dashboard %s %s %s", action, driftreview.Describe(d), short(fingerprint))
 	set, err := driftreview.Apply(s.cfg.store, base, label, sess.actor, s.now, []driftreview.Decision{d})
 	switch {
 	case errors.Is(err, driftreview.ErrStale):

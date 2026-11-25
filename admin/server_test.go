@@ -78,6 +78,15 @@ func (d *dashboard) queue(tool, definition string) string {
 	return fp
 }
 
+// queueInstructions writes a changed-instructions entry as a gateway does.
+func (d *dashboard) queueInstructions(text string) string {
+	d.t.Helper()
+	fp := policy.InstructionsFingerprint(text)
+	d.write(filepath.Join(encode("governed"), "instructions", fp+".json"), map[string]any{
+		"proxy": "governed", "fingerprint": fp, "instructions": text, "firstSeen": time.Now(), "gateway": "one"})
+	return fp
+}
+
 func (d *dashboard) write(name string, v any) {
 	d.t.Helper()
 	path := filepath.Join(d.cfg.pending, name)
@@ -313,6 +322,38 @@ func TestBrowsersSendTheOriginWithForms(t *testing.T) {
 	cookie, _ := d.signIn(viewer)
 	if policy := d.get("/", cookie).Header.Get("Referrer-Policy"); policy != "same-origin" {
 		t.Fatalf("Referrer-Policy %q", policy)
+	}
+}
+
+func TestTheOriginMatchesAsBrowsersSendIt(t *testing.T) {
+	for public, want := range map[string]string{
+		"https://Gateway.Example:443/extensions/admin": "https://gateway.example",
+		"http://gateway:8080/extensions/admin":         "http://gateway:8080",
+		"https://[::1]:8443/admin":                     "https://[::1]:8443",
+	} {
+		u, _ := url.Parse(public)
+		if got := newAuth(config{}, u).origin(); got != want {
+			t.Errorf("origin of %s = %s, want %s", public, got, want)
+		}
+	}
+}
+
+func TestSeveralWaitingInstructionsAreNotApprovedHere(t *testing.T) {
+	d := newDashboard(t)
+	first := d.queueInstructions("Use the change tool carefully.")
+	second := d.queueInstructions("Use the change tool with care.")
+	cookie, csrf := d.signIn(reviewer)
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {first}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
+	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=several-instructions") {
+		t.Fatalf("approving one of several instructions: %s", res.Header.Get("Location"))
+	}
+	form.Set("action", "reject")
+	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=rejected") {
+		t.Fatalf("rejecting instructions: %s", res.Header.Get("Location"))
+	}
+	form = url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {second}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
+	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=approved") {
+		t.Fatalf("approving the one left: %s", res.Header.Get("Location"))
 	}
 }
 

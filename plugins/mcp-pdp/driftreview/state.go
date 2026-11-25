@@ -100,6 +100,8 @@ func ToolStates(review *drift.Review, snapshot *policy.Snapshot, proxy string) (
 		switch {
 		case err != nil:
 			s.Reason = "Refused: the shared declarations of this tool cannot be read."
+		case !drift.Shareable(tool, view.Upstream()):
+			s.Reason = "Refused: the tool's name or upstream is too long for its declarations to be shared, so gateways refuse its calls."
 		case s.Approved == "" && s.Waiting != "":
 			s.Reason = "Refused: a new tool waiting for review."
 		case s.Approved == "":

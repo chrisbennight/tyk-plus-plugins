@@ -1,4 +1,4 @@
-package main
+package driftreview
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 )
 
-// visible returns text with every character a reviewer could miss written
+// Visible returns text with every character a reviewer could miss written
 // out by code point: invisible characters replace themselves, and
 // look-alike characters keep their glyph followed by their code point. It
 // also counts both, so a summary can say what was found. Line breaks are
@@ -24,12 +24,12 @@ import (
 // come from more than one script, as in a name spelled with one Cyrillic
 // letter. Words written in a single script, such as café or привет, are
 // left alone.
-func visible(text string) (out string, invisible, lookAlike int) {
+func Visible(text string) (out string, invisible, lookAlike int) {
 	return written(text, true)
 }
 
-// visibleLine is visible for text shown on one line, such as a name.
-func visibleLine(text string) string {
+// VisibleLine is visible for text shown on one line, such as a name.
+func VisibleLine(text string) string {
 	out, _, _ := written(text, false)
 	return out
 }
@@ -138,9 +138,9 @@ func hasASCIILetter(word string) bool {
 // whole instead.
 const maxDiffLines = 2000
 
-// lineDiff writes a line diff of two texts, made visible: unchanged lines
+// LineDiff writes a line diff of two texts, made visible: unchanged lines
 // with two spaces, removed lines with "- " and added lines with "+ ".
-func lineDiff(b *strings.Builder, before, after string) {
+func LineDiff(b *strings.Builder, before, after string) {
 	old, new := strings.Split(before, "\n"), strings.Split(after, "\n")
 	if len(old) > maxDiffLines || len(new) > maxDiffLines {
 		writeLines(b, "- ", old)
@@ -180,7 +180,7 @@ func lineDiff(b *strings.Builder, before, after string) {
 
 func writeLines(b *strings.Builder, prefix string, lines []string) {
 	for _, line := range lines {
-		shown, _, _ := visible(line)
+		shown, _, _ := Visible(line)
 		b.WriteString(prefix + shown + "\n")
 	}
 }
@@ -199,10 +199,10 @@ func text(value jsontext.Value) (string, bool) {
 	return s, len(value) > 0 && jsonv2.Unmarshal(value, &s) == nil
 }
 
-// canonical returns a value in the canonical form fingerprints use: keys
+// Canonical returns a value in the canonical form fingerprints use: keys
 // sorted, strings by their text, and numbers exactly as written, so values
 // compare equal exactly when they would fingerprint alike.
-func canonical(value jsontext.Value) string {
+func Canonical(value jsontext.Value) string {
 	if len(value) == 0 {
 		return ""
 	}
@@ -213,10 +213,10 @@ func canonical(value jsontext.Value) string {
 	return out
 }
 
-// indented returns a value as indented JSON, made visible. Strings are
+// Indented returns a value as indented JSON, made visible. Strings are
 // written out decoded, so a character the upstream escaped is marked like one
 // it did not.
-func indented(value jsontext.Value) string {
+func Indented(value jsontext.Value) string {
 	var out bytes.Buffer
 	dec := jsontext.NewDecoder(bytes.NewReader(value))
 	enc := jsontext.NewEncoder(&out, jsontext.WithIndent("  "), jsontext.EscapeForHTML(false), jsontext.EscapeForJS(false))
@@ -231,13 +231,13 @@ func indented(value jsontext.Value) string {
 			break
 		}
 	}
-	shown, _, _ := visible(out.String())
+	shown, _, _ := Visible(out.String())
 	return shown
 }
 
-// hidden counts the invisible and look-alike characters in every string and
+// Hidden counts the invisible and look-alike characters in every string and
 // member name of a JSON value.
-func hidden(value jsontext.Value) (invisible, lookAlike int) {
+func Hidden(value jsontext.Value) (invisible, lookAlike int) {
 	dec := jsontext.NewDecoder(bytes.NewReader(value))
 	for {
 		token, err := dec.ReadToken()
@@ -245,23 +245,23 @@ func hidden(value jsontext.Value) (invisible, lookAlike int) {
 			return invisible, lookAlike
 		}
 		if token.Kind() == '"' {
-			_, i, l := visible(token.String())
+			_, i, l := Visible(token.String())
 			invisible, lookAlike = invisible+i, lookAlike+l
 		}
 	}
 }
 
-// definitionDiff describes, in labelled lines, how a proposed tool
+// DefinitionDiff describes, in labelled lines, how a proposed tool
 // definition differs from the approved one: its description, parameters
 // added or removed, changed parameter types and descriptions, required
 // parameters, annotations, and any other field. _meta is not reviewed, as it
 // is not part of a definition's fingerprint.
-func definitionDiff(approved, proposed jsontext.Value) string {
+func DefinitionDiff(approved, proposed jsontext.Value) string {
 	var b strings.Builder
 	before, after := object(approved), object(proposed)
 	keys := unionKeys(before, after)
 	for _, key := range keys {
-		if key == "_meta" || key == "name" || canonical(before[key]) == canonical(after[key]) {
+		if key == "_meta" || key == "name" || Canonical(before[key]) == Canonical(after[key]) {
 			continue
 		}
 		switch key {
@@ -269,18 +269,18 @@ func definitionDiff(approved, proposed jsontext.Value) string {
 			old, _ := text(before[key])
 			new, _ := text(after[key])
 			b.WriteString("Description changed:\n")
-			lineDiff(&b, old, new)
+			LineDiff(&b, old, new)
 		case "inputSchema":
 			schemaDiff(&b, before[key], after[key])
 		case "annotations":
 			old, new := object(before[key]), object(after[key])
 			for _, name := range unionKeys(old, new) {
-				if canonical(old[name]) != canonical(new[name]) {
-					fmt.Fprintf(&b, "Annotation %s changed: %s → %s (revisit the tool's facts)\n", shownName(name), shownValue(old[name]), shownValue(new[name]))
+				if Canonical(old[name]) != Canonical(new[name]) {
+					fmt.Fprintf(&b, "Annotation %s changed: %s → %s (revisit the tool's facts)\n", ShownName(name), ShownValue(old[name]), ShownValue(new[name]))
 				}
 			}
 		default:
-			fmt.Fprintf(&b, "Field %s changed: %s → %s\n", shownName(key), shownValue(before[key]), shownValue(after[key]))
+			fmt.Fprintf(&b, "Field %s changed: %s → %s\n", ShownName(key), ShownValue(before[key]), ShownValue(after[key]))
 		}
 	}
 	return b.String()
@@ -289,7 +289,7 @@ func definitionDiff(approved, proposed jsontext.Value) string {
 func schemaDiff(b *strings.Builder, approved, proposed jsontext.Value) {
 	before, after := object(approved), object(proposed)
 	if before == nil || after == nil {
-		fmt.Fprintf(b, "Input schema changed: %s → %s\n", shownValue(approved), shownValue(proposed))
+		fmt.Fprintf(b, "Input schema changed: %s → %s\n", ShownValue(approved), ShownValue(proposed))
 		return
 	}
 	oldParams, newParams := object(before["properties"]), object(after["properties"])
@@ -297,30 +297,30 @@ func schemaDiff(b *strings.Builder, approved, proposed jsontext.Value) {
 		old, new := oldParams[name], newParams[name]
 		switch {
 		case old == nil:
-			fmt.Fprintf(b, "Parameter added: %s %s\n", shownName(name), shownValue(new))
+			fmt.Fprintf(b, "Parameter added: %s %s\n", ShownName(name), ShownValue(new))
 		case new == nil:
-			fmt.Fprintf(b, "Parameter removed: %s\n", shownName(name))
-		case canonical(old) != canonical(new):
+			fmt.Fprintf(b, "Parameter removed: %s\n", ShownName(name))
+		case Canonical(old) != Canonical(new):
 			oldFields, newFields := object(old), object(new)
 			if oldFields == nil || newFields == nil {
 				// A schema can be true or false rather than an object.
-				fmt.Fprintf(b, "Schema of parameter %s changed: %s → %s\n", shownName(name), shownValue(old), shownValue(new))
+				fmt.Fprintf(b, "Schema of parameter %s changed: %s → %s\n", ShownName(name), ShownValue(old), ShownValue(new))
 				continue
 			}
 			for _, field := range unionKeys(oldFields, newFields) {
-				if canonical(oldFields[field]) == canonical(newFields[field]) {
+				if Canonical(oldFields[field]) == Canonical(newFields[field]) {
 					continue
 				}
 				switch field {
 				case "type":
-					fmt.Fprintf(b, "Type of parameter %s changed: %s → %s\n", shownName(name), shownValue(oldFields[field]), shownValue(newFields[field]))
+					fmt.Fprintf(b, "Type of parameter %s changed: %s → %s\n", ShownName(name), ShownValue(oldFields[field]), ShownValue(newFields[field]))
 				case "description":
 					oldText, _ := text(oldFields[field])
 					newText, _ := text(newFields[field])
-					fmt.Fprintf(b, "Description of parameter %s changed:\n", shownName(name))
-					lineDiff(b, oldText, newText)
+					fmt.Fprintf(b, "Description of parameter %s changed:\n", ShownName(name))
+					LineDiff(b, oldText, newText)
 				default:
-					fmt.Fprintf(b, "Parameter %s field %s changed: %s → %s\n", shownName(name), shownName(field), shownValue(oldFields[field]), shownValue(newFields[field]))
+					fmt.Fprintf(b, "Parameter %s field %s changed: %s → %s\n", ShownName(name), ShownName(field), ShownValue(oldFields[field]), ShownValue(newFields[field]))
 				}
 			}
 		}
@@ -330,17 +330,17 @@ func schemaDiff(b *strings.Builder, approved, proposed jsontext.Value) {
 	_ = jsonv2.Unmarshal(after["required"], &newRequired)
 	for _, name := range newRequired {
 		if !slices.Contains(oldRequired, name) {
-			fmt.Fprintf(b, "Parameter %s is now required\n", shownName(name))
+			fmt.Fprintf(b, "Parameter %s is now required\n", ShownName(name))
 		}
 	}
 	for _, name := range oldRequired {
 		if !slices.Contains(newRequired, name) {
-			fmt.Fprintf(b, "Parameter %s is no longer required\n", shownName(name))
+			fmt.Fprintf(b, "Parameter %s is no longer required\n", ShownName(name))
 		}
 	}
 	for _, key := range unionKeys(before, after) {
-		if key != "properties" && key != "required" && canonical(before[key]) != canonical(after[key]) {
-			fmt.Fprintf(b, "Input schema field %s changed: %s → %s\n", shownName(key), shownValue(before[key]), shownValue(after[key]))
+		if key != "properties" && key != "required" && Canonical(before[key]) != Canonical(after[key]) {
+			fmt.Fprintf(b, "Input schema field %s changed: %s → %s\n", ShownName(key), ShownValue(before[key]), ShownValue(after[key]))
 		}
 	}
 }
@@ -359,11 +359,11 @@ func unionKeys(a, b map[string]jsontext.Value) []string {
 	return keys
 }
 
-func shownName(name string) string { return visibleLine(name) }
+func ShownName(name string) string { return VisibleLine(name) }
 
-func shownValue(value jsontext.Value) string {
+func ShownValue(value jsontext.Value) string {
 	if len(value) == 0 {
 		return "(none)"
 	}
-	return visibleLine(canonical(value))
+	return VisibleLine(Canonical(value))
 }

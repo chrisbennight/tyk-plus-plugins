@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/driftreview"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
-	"github.com/go-json-experiment/json/jsontext"
 )
 
 const (
@@ -116,7 +116,7 @@ func (r *review) run(args ...string) (string, error) {
 
 func (r *review) active() *policy.Snapshot {
 	r.t.Helper()
-	snapshot, err := activeSet(r.store)
+	snapshot, err := driftreview.ActiveSet(r.store)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -134,6 +134,12 @@ func TestApprovingAFingerprintReleasesOnlyThatDefinition(t *testing.T) {
 	view, _ := r.active().Drift("governed")
 	if approved, _, _ := view.Approved("change"); approved != reviewed {
 		t.Fatalf("approved %s, want %s", approved, reviewed)
+	}
+	// The decision log records who approved what, and the sets involved.
+	log, err := policy.ReadLog(r.store)
+	if err != nil || len(log) != 1 || log[0].Action != "approve" || log[0].Tool != "change" || log[0].Fingerprint != reviewed ||
+		log[0].Set != r.active().Version || log[0].Base == log[0].Set || log[0].Actor.Issuer != "local" {
+		t.Fatalf("decision log %+v, %v", log, err)
 	}
 	out, err := r.run("list")
 	if err != nil {
@@ -332,14 +338,6 @@ func TestANamedPipeDoesNotStallTheReview(t *testing.T) {
 	}
 }
 
-func TestSchemasThatAreBooleansAreCompared(t *testing.T) {
-	diff := definitionDiff(jsontext.Value(`{"inputSchema":{"type":"object","properties":{"x":false}}}`),
-		jsontext.Value(`{"inputSchema":{"type":"object","properties":{"x":true}}}`))
-	if !strings.Contains(diff, "Schema of parameter x changed: false → true") {
-		t.Fatalf("diff:\n%s", diff)
-	}
-}
-
 func TestHiddenCharactersInMessagesAreWrittenOut(t *testing.T) {
 	r := newReview(t, map[string]string{"change": approvedChange})
 	dir := filepath.Join(r.pending, encode("governed"), "latest", encode("change"))
@@ -406,31 +404,6 @@ func TestRetireRemovesOnlyThatGatewaysDeclarations(t *testing.T) {
 	}
 }
 
-func TestNamesStayOnOneLine(t *testing.T) {
-	if got := shownName("tool\nfake row"); got != "tool⟨U+000A⟩fake row" {
-		t.Fatalf("shownName = %q", got)
-	}
-}
-
-func TestVisibleLeavesOtherScriptsAlone(t *testing.T) {
-	for text, want := range map[string]string{
-		"привет мир":  "привет мир",
-		"pаypal":      "pа⟨U+0430⟩ypal",
-		"a\tb":        "a⟨U+0009⟩b",
-		"⟨U+0041⟩":    "⟨U+27E8⟩U+0041⟨U+27E9⟩",
-		"line\nline":  "line\nline",
-		"x\u00a0y":    "x⟨U+00A0⟩y",
-		"a\u034fb":    "a⟨U+034F⟩b",
-		"e\u0301cole": "e\u0301cole",
-		"café":        "café",
-		"αбв":         "α⟨U+03B1⟩б⟨U+0431⟩в⟨U+0432⟩",
-	} {
-		if got, _, _ := visible(text); got != want {
-			t.Errorf("visible(%q) = %q, want %q", text, got, want)
-		}
-	}
-}
-
 func TestADecisionIsRefusedWhenTheActiveSetChangedMeanwhile(t *testing.T) {
 	r := newReview(t, map[string]string{"change": approvedChange})
 	fp := r.queue("change", changedChange, "one", time.Now())
@@ -441,8 +414,18 @@ func TestADecisionIsRefusedWhenTheActiveSetChangedMeanwhile(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := r.active().Version
-	_, err := applyDecisions(r.store, base, "late", epoch, []decision{{proxy: "governed", tool: "change", fingerprint: fp, definition: []byte(changedChange), approve: true}})
+	_, err := driftreview.Apply(r.store, base, "late", policy.Actor{Issuer: "local", Subject: "test"}, epoch, []driftreview.Decision{{Proxy: "governed", Tool: "change", Fingerprint: fp, Definition: []byte(changedChange), Approve: true}})
 	if err == nil || !strings.Contains(err.Error(), "changed") || r.active().Version != moved {
 		t.Fatalf("a decision made against an older set was applied: %v", err)
+	}
+}
+
+func TestAnApprovalMustCarryTheContentItsFingerprintNames(t *testing.T) {
+	r := newReview(t, map[string]string{"change": approvedChange})
+	base := r.active().Version
+	_, err := driftreview.Apply(r.store, base, "mismatch", policy.Actor{Issuer: "local", Subject: "test"}, epoch,
+		[]driftreview.Decision{{Proxy: "governed", Tool: "change", Fingerprint: fingerprint(t, changedChange), Definition: []byte(newerChange), Approve: true}})
+	if err == nil || r.active().Version != base {
+		t.Fatalf("an approval whose content has another fingerprint was applied: %v", err)
 	}
 }

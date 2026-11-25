@@ -235,9 +235,11 @@ func Locked(root string, fn func(set string, active *Snapshot) error) error {
 // Revise changes the active set and makes the result active, all under the
 // store's lock, so a publish made meanwhile is never overwritten unseen.
 // change receives the active set's name, its compiled form, and its files
-// laid out as format 2, which it edits in place; an error from change leaves
-// the store unchanged. The result is validated like any promoted set.
-func Revise(root, label string, now func() time.Time, change func(set string, active *Snapshot, files map[string][]byte) error) (string, error) {
+// laid out as format 2, which it edits in place, and returns the decisions it
+// made; an error from change leaves the store unchanged. The result is
+// validated like any promoted set. Once it is active, the decisions are
+// appended to the decision log with the actor, the time, and both sets.
+func Revise(root, label string, actor Actor, now func() time.Time, change func(set string, active *Snapshot, files map[string][]byte) ([]LogEntry, error)) (string, error) {
 	store, err := openStore(root)
 	if err != nil {
 		return "", err
@@ -260,7 +262,8 @@ func Revise(root, label string, now func() time.Time, change func(set string, ac
 		files = map[string][]byte{"rules.cedar": contents["rules.cedar"], "approved_tools.json": contents["tools.json"],
 			"approved_instructions.json": []byte("{}\n"), "checks.json": contents["checks.json"]}
 	}
-	if err := change(pointer.Set, active, files); err != nil {
+	entries, err := change(pointer.Set, active, files)
+	if err != nil {
 		return "", err
 	}
 	hashes := hashFiles(Files, files)
@@ -271,7 +274,17 @@ func Revise(root, label string, now func() time.Time, change func(set string, ac
 	if err := store.writeSet(set, Manifest{Format: FormatVersion, Label: label, Files: hashes}, files); err != nil {
 		return "", err
 	}
-	return set, store.activate(set, now)
+	if err := store.activate(set, now); err != nil {
+		return "", err
+	}
+	at := now().UTC().Format(time.RFC3339Nano)
+	for i := range entries {
+		entries[i].Time, entries[i].Actor, entries[i].Base, entries[i].Set, entries[i].Label = at, actor, pointer.Set, set, label
+	}
+	if err := store.appendLog(entries); err != nil {
+		return set, fmt.Errorf("set %s is active, but the decision log could not be written: %w", set, err)
+	}
+	return set, nil
 }
 
 // readSource reads policy files laid out as either format and returns them

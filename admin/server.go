@@ -298,14 +298,13 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 // decision; the page never echoes text from its URL.
 func doneMessage(code string) string {
 	return map[string]string{
-		"approved":             "Approved. Gateways enforce the new set within their refresh interval.",
-		"rejected":             "Rejected. The definition will not be queued again.",
-		"stale":                "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
-		"several-instructions": "Nothing was approved: several changed instructions are waiting, and gateways do not record which one the upstream sends now. Reject the ones you do not want, then approve the one you do.",
-		"not-declared":         "Nothing was approved: no gateway has seen the upstream declare this tool, so it cannot be told that this is its definition. Approve it once a gateway lists the tool.",
-		"superseded":           "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
-		"revoked":              "Revoked. Gateways refuse the tool's calls once they load the new set, until a definition is approved again.",
-		"rolled-back":          "Rolled back. The previous set is active again; gateways enforce it within their refresh interval.",
+		"approved":     "Approved. Gateways enforce the new set within their refresh interval.",
+		"rejected":     "Rejected. The definition will not be queued again.",
+		"stale":        "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
+		"not-declared": "Nothing was approved: no gateway has seen the upstream declare this tool, so it cannot be told that this is its definition. Approve it once a gateway lists the tool.",
+		"superseded":   "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
+		"revoked":      "Revoked. Gateways refuse the tool's calls once they load the new set, until a definition is approved again.",
+		"rolled-back":  "Rolled back. The previous set is active again; gateways enforce it within their refresh interval.",
 	}[code]
 }
 
@@ -590,27 +589,11 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			s.fail(w, sess, http.StatusNotFound, driftreview.ShownName(err.Error()))
 			return
 		}
+		// Any reviewed text may be approved. When the upstream sends
+		// something else, gateways send the approved text or none, so
+		// clients see only reviewed text, and the upstream's text is
+		// queued and reviewed in turn.
 		d.Tool, d.Text = "", entry.Instructions
-		if d.Approve {
-			// Gateways record changed instructions but not which text an
-			// upstream sends now, so with several waiting, approving one
-			// could bring back text the upstream has withdrawn.
-			waiting, _, err := driftreview.PendingInstructions(review, snapshot, view, proxy)
-			if err != nil {
-				s.fail(w, sess, http.StatusServiceUnavailable, driftreview.ShownName(err.Error()))
-				return
-			}
-			switch {
-			case len(waiting) > 1:
-				http.Redirect(w, r, back+"&done=several-instructions", http.StatusSeeOther)
-				return
-			case len(waiting) != 1 || waiting[0].Fingerprint != fingerprint:
-				// A page left open after its text was rejected names a text
-				// that no longer waits.
-				http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
-				return
-			}
-		}
 	} else {
 		entry, err := review.Tool(proxy, tool, fingerprint)
 		if err != nil {

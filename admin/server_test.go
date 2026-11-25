@@ -374,27 +374,20 @@ func TestTheOriginMatchesAsBrowsersSendIt(t *testing.T) {
 	}
 }
 
-func TestSeveralWaitingInstructionsAreNotApprovedHere(t *testing.T) {
+func TestOneOfSeveralWaitingInstructionsCanBeApproved(t *testing.T) {
+	// Gateways send the approved text in place of the upstream's, so any
+	// reviewed text may be approved; the others stay waiting for review.
 	d := newDashboard(t)
 	first := d.queueInstructions("Use the change tool carefully.")
 	second := d.queueInstructions("Use the change tool with care.")
 	cookie, csrf := d.signIn(reviewer)
 	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {first}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
-	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=several-instructions") {
+	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=approved") {
 		t.Fatalf("approving one of several instructions: %s", res.Header.Get("Location"))
 	}
-	form.Set("action", "reject")
-	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=rejected") {
-		t.Fatalf("rejecting instructions: %s", res.Header.Get("Location"))
-	}
-	// The rejected text's page, reopened, cannot approve it while another
-	// text is the one waiting.
-	if res := d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {first}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
-		t.Fatalf("approving a rejected text: %s", res.Header.Get("Location"))
-	}
-	form = url.Values{"csrf": {csrf}, "proxy": {"governed"}, "instructions": {"1"}, "fingerprint": {second}, "base": {active(t, d.cfg.store)}, "action": {"approve"}}
-	if res := d.post("/decide", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=approved") {
-		t.Fatalf("approving the one left: %s", res.Header.Get("Location"))
+	queue := body(t, d.get("/queue?proxy=governed", cookie))
+	if strings.Contains(queue, first) || !strings.Contains(queue, second) {
+		t.Fatalf("after approving one text, the queue should hold only the other:\n%s", queue)
 	}
 }
 

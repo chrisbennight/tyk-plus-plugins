@@ -196,16 +196,6 @@ type skippedItem struct {
 func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.DriftView, proxy string, values []string, approve bool) ([]candidate, []skippedItem) {
 	approvedText, _ := snapshot.Instructions(proxy)
 	names := toolNames(review, view, proxy)
-	// As on the change page, instructions are approved only while exactly
-	// one changed text is waiting; when they cannot be counted, none is.
-	waitingTexts := 0
-	if approve {
-		texts, _, err := driftreview.PendingInstructions(review, snapshot, view, proxy)
-		waitingTexts = len(texts)
-		if err != nil {
-			waitingTexts = -1
-		}
-	}
 	var out []candidate
 	var skipped []skippedItem
 	// A batch approves each tool, and the instructions, at most once, and
@@ -239,12 +229,8 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 		d := driftreview.Decision{Proxy: proxy, Tool: it.Tool, Instructions: it.Instructions, Fingerprint: it.Fingerprint, Approve: approve}
 		if it.Instructions {
 			entry, err := review.InstructionsEntry(proxy, it.Fingerprint)
-			switch {
-			case err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint):
+			if err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint) {
 				skip("it is no longer waiting")
-				continue
-			case approve && waitingTexts != 1:
-				skip("several changed instructions are waiting, so approve one on its change page after rejecting the others")
 				continue
 			}
 			d.Text = entry.Instructions

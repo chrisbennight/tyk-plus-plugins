@@ -365,9 +365,9 @@ func driftApproveAll(out io.Writer, review *drift.Review, f driftFlags, now func
 			decisions = append(decisions, driftreview.Decision{Proxy: f.proxy, Tool: t.Entry.Tool, Fingerprint: t.Entry.Fingerprint, Definition: t.Entry.Definition, Approve: true})
 		}
 	}
-	// Gateways record no sighting of instructions that match the approved
-	// text, so a waiting text may have been withdrawn since. Only a proxy
-	// with no approved instructions yet adopts them in bulk.
+	// Instructions reach clients as text, so approving all adopts them only
+	// when there is nothing to choose: the proxy has no approved text yet and
+	// exactly one is waiting. Otherwise a person approves one by name.
 	approvedText, _ := snapshot.Instructions(f.proxy)
 	switch {
 	case len(instructions) == 0:

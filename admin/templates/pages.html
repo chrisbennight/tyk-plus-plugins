@@ -110,7 +110,7 @@
 </dl>
 {{if .Approved}}<p class="notice">The active set already approves this.</p>{{end}}
 {{if .Rejected}}<p class="notice">The active set already rejects this.</p>{{end}}
-{{if .Superseded}}<p class="warning">Gateways have since seen the upstream declare a different definition. Approving this one would not release calls.</p>{{end}}
+{{if .Superseded}}<p class="warning">Gateways have since seen the upstream declare a different definition, so this one cannot be approved: it would not release calls, and could refuse calls that work now. It can still be rejected.</p>{{end}}
 {{if .Invisible}}<p class="warning">Contains {{.Invisible}} invisible character(s), written as ⟨U+XXXX⟩.</p>{{end}}
 {{if .LookAlike}}<p class="warning">Contains {{.LookAlike}} look-alike character(s), each followed by ⟨U+XXXX⟩.</p>{{end}}
 {{range .Hints}}<p class="notice">This may be a rename of {{.}}, which is approved but no longer declared.</p>{{end}}
@@ -137,7 +137,7 @@
   <input type="hidden" name="fingerprint" value="{{.Fingerprint}}">
   <input type="hidden" name="base" value="{{.Base}}">
   {{if .Full}}<input type="hidden" name="full" value="1">{{end}}
-  {{if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
+  {{if .Superseded}}<button type="submit" name="action" value="approve" disabled>Approve (superseded)</button>{{else if or .Full (not .Long)}}<button type="submit" name="action" value="approve">Approve this {{if .Instructions}}text{{else}}definition{{end}}</button>{{else}}<button type="submit" name="action" value="approve" disabled>Approve (open the full text first)</button>{{end}}
   <button type="submit" name="action" value="reject" class="secondary">Reject</button>
 </form>
 {{end}}

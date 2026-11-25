@@ -1,6 +1,7 @@
 package driftreview
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -62,7 +63,11 @@ type ToolState struct {
 // reviews for a proxy and every new tool waiting for review. It follows the
 // rule gateways apply to calls: a tool must be approved, and the definition
 // last declared, where one has been, must be the approved one.
-func ToolStates(review *drift.Review, view policy.DriftView, proxy string) ([]ToolState, error) {
+func ToolStates(review *drift.Review, snapshot *policy.Snapshot, proxy string) ([]ToolState, error) {
+	view, ok := snapshot.Drift(proxy)
+	if !ok {
+		return nil, fmt.Errorf("proxy %q is not under drift review in the active set", proxy)
+	}
 	pending, _, err := PendingTools(review, view, proxy)
 	if err != nil {
 		return nil, err
@@ -116,20 +121,30 @@ func ToolStates(review *drift.Review, view policy.DriftView, proxy string) ([]To
 		}
 		states = append(states, s)
 	}
-	// A gateway that cannot read one reviewed tool's declarations refuses
-	// every call under drift review until it can. It reads only those of
-	// tools the active set reviews.
-	for _, problem := range states {
-		if problem.Problem == nil || !view.Has(problem.Tool) {
-			continue
-		}
+	// A gateway that cannot read the declarations of a tool the active set
+	// reviews, on any proxy, refuses every call under drift review until it
+	// can.
+	if where := unreadable(review, snapshot); where != "" {
 		for i := range states {
 			if states[i].Callable {
 				states[i].Callable = false
-				states[i].Reason = "Refused: gateways cannot read the shared declarations of " + ShownName(problem.Tool) + ", so they refuse every call under drift review until they can."
+				states[i].Reason = "Refused: gateways cannot read the shared declarations of " + where + ", so they refuse every call under drift review until they can."
 			}
 		}
-		break
 	}
 	return states, nil
+}
+
+// unreadable names the first tool the active set reviews whose shared
+// declarations cannot be read, or returns "".
+func unreadable(review *drift.Review, snapshot *policy.Snapshot) string {
+	for _, proxy := range snapshot.DriftProxies() {
+		view, _ := snapshot.Drift(proxy)
+		for _, tool := range view.Tools() {
+			if _, _, err := review.Newest(proxy, tool, view.Upstream()); err != nil {
+				return ShownName(proxy) + "/" + ShownName(tool)
+			}
+		}
+	}
+	return ""
 }

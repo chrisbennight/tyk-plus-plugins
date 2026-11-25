@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,10 +47,40 @@ type session struct {
 	expires time.Time
 }
 
-// pendingLogin is a sign-in started in this browser and not yet finished.
-type pendingLogin struct {
-	nonce, verifier, next string
-	expires               time.Time
+// loginState is a sign-in started in this browser and not yet finished. It
+// travels in the browser's login cookie, which is HttpOnly and lasts at most
+// loginTimeout, so the dashboard keeps nothing for sign-ins that never
+// finish.
+type loginState struct {
+	state, nonce, verifier, next string
+	started                      time.Time
+}
+
+func (l loginState) encode() string {
+	parts := []string{l.state, l.nonce, l.verifier, l.next, strconv.FormatInt(l.started.Unix(), 10)}
+	for i, p := range parts {
+		parts[i] = base64.RawURLEncoding.EncodeToString([]byte(p))
+	}
+	return strings.Join(parts, ".")
+}
+
+func decodeLogin(value string) (loginState, bool) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 5 {
+		return loginState{}, false
+	}
+	for i, p := range parts {
+		decoded, err := base64.RawURLEncoding.DecodeString(p)
+		if err != nil {
+			return loginState{}, false
+		}
+		parts[i] = string(decoded)
+	}
+	started, err := strconv.ParseInt(parts[4], 10, 64)
+	if err != nil {
+		return loginState{}, false
+	}
+	return loginState{state: parts[0], nonce: parts[1], verifier: parts[2], next: localPath(parts[3]), started: time.Unix(started, 0)}, true
 }
 
 const (
@@ -74,12 +105,11 @@ type auth struct {
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
 	sessions map[string]*session
-	logins   map[string]*pendingLogin
 	now      func() time.Time
 }
 
 func newAuth(cfg config, public *url.URL) *auth {
-	return &auth{cfg: cfg, public: public, sessions: map[string]*session{}, logins: map[string]*pendingLogin{}, now: time.Now}
+	return &auth{cfg: cfg, public: public, sessions: map[string]*session{}, now: time.Now}
 }
 
 // connect discovers the identity provider once and keeps the result, so the
@@ -158,33 +188,15 @@ func (a *auth) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Sign-in is unavailable: the identity provider cannot be reached.", http.StatusServiceUnavailable)
 		return
 	}
-	state, nonce, verifier := randomToken(), randomToken(), oauth2.GenerateVerifier()
-	a.mu.Lock()
-	a.expire()
-	if len(a.logins) >= maxPendingLogins {
-		a.mu.Unlock()
-		http.Error(w, "Too many sign-ins are in progress; try again in a few minutes.", http.StatusServiceUnavailable)
-		return
-	}
-	a.logins[state] = &pendingLogin{nonce: nonce, verifier: verifier, next: localPath(r.URL.Query().Get("next")), expires: a.now().Add(loginTimeout)}
-	a.mu.Unlock()
-	http.SetCookie(w, a.cookie(loginCookie, state, loginTimeout))
-	http.Redirect(w, r, oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), http.StatusFound)
+	l := loginState{state: randomToken(), nonce: randomToken(), verifier: oauth2.GenerateVerifier(),
+		next: localPath(r.URL.Query().Get("next")), started: a.now()}
+	http.SetCookie(w, a.cookie(loginCookie, l.encode(), loginTimeout))
+	http.Redirect(w, r, oauth.AuthCodeURL(l.state, oidc.Nonce(l.nonce), oauth2.S256ChallengeOption(l.verifier)), http.StatusFound)
 }
 
-// maxPendingLogins bounds the sign-ins begun but not finished, which anyone
-// can start; each lasts at most loginTimeout.
-const maxPendingLogins = 1000
-
-// expire forgets finished sign-in attempts and sessions. The caller holds
-// the lock.
+// expire forgets expired sessions. The caller holds the lock.
 func (a *auth) expire() {
 	now := a.now()
-	for state, l := range a.logins {
-		if now.After(l.expires) {
-			delete(a.logins, state)
-		}
-	}
 	for id, s := range a.sessions {
 		if now.After(s.expires) {
 			delete(a.sessions, id)
@@ -218,13 +230,13 @@ func (a *auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	state := r.URL.Query().Get("state")
-	c, cookieErr := r.Cookie(loginCookie)
-	a.mu.Lock()
-	l := a.logins[state]
-	delete(a.logins, state)
-	a.mu.Unlock()
+	var l loginState
+	ok := false
+	if c, err := r.Cookie(loginCookie); err == nil {
+		l, ok = decodeLogin(c.Value)
+	}
 	http.SetCookie(w, a.cookie(loginCookie, "", -time.Second))
-	if cookieErr != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 || l == nil || a.now().After(l.expires) {
+	if !ok || state == "" || subtle.ConstantTimeCompare([]byte(l.state), []byte(state)) != 1 || a.now().After(l.started.Add(loginTimeout)) {
 		http.Error(w, "This sign-in has expired or was not started in this browser. Sign in again.", http.StatusBadRequest)
 		return
 	}
@@ -264,6 +276,7 @@ func (a *auth) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	id := randomToken()
 	a.mu.Lock()
+	a.expire()
 	a.sessions[id] = &session{actor: actor, role: granted, csrf: randomToken(), expires: expires}
 	a.mu.Unlock()
 	slog.Info("Signed in", "issuer", actor.Issuer, "subject", actor.Subject, "role", granted.String())

@@ -195,7 +195,7 @@ func (s *server) overview(w http.ResponseWriter, r *http.Request, sess *session)
 		p := proxySummary{Name: proxy, Shown: driftreview.ShownName(proxy)}
 		tools, _, err := driftreview.PendingTools(st.review, view, proxy)
 		instructions, _, err2 := driftreview.PendingInstructions(st.review, st.snapshot, view, proxy)
-		states, err3 := driftreview.ToolStates(st.review, view, proxy)
+		states, err3 := driftreview.ToolStates(st.review, st.snapshot, proxy)
 		if err := errors.Join(err, err2, err3); err != nil {
 			p.Problem = err.Error()
 		}
@@ -255,7 +255,9 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 			Fingerprint: t.Entry.Fingerprint, State: state, Gateway: driftreview.ShownName(t.Entry.Gateway), FirstSeen: t.Entry.FirstSeen})
 	}
 	for _, e := range instructions {
-		items = append(items, queueItem{Shown: "instructions", Kind: "changed instructions", Fingerprint: e.Fingerprint,
+		// Gateways record changed instructions but not which text an
+		// upstream declares now, so whether these are current is unknown.
+		items = append(items, queueItem{Shown: "instructions", Kind: "changed instructions", Fingerprint: e.Fingerprint, State: "not tracked for instructions",
 			Gateway: driftreview.ShownName(e.Gateway), FirstSeen: e.FirstSeen, Instructions: true})
 	}
 	var shown []string
@@ -271,9 +273,10 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 // decision; the page never echoes text from its URL.
 func doneMessage(code string) string {
 	return map[string]string{
-		"approved": "Approved. Gateways enforce the new set within their refresh interval.",
-		"rejected": "Rejected. The definition will not be queued again.",
-		"stale":    "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
+		"approved":   "Approved. Gateways enforce the new set within their refresh interval.",
+		"rejected":   "Rejected. The definition will not be queued again.",
+		"stale":      "Nothing was changed: the active set or the change moved on while you reviewed. Review it again.",
+		"superseded": "Nothing was approved: the upstream now declares a different definition, so approving this one could only refuse calls. Review what it declares now.",
 	}[code]
 }
 
@@ -467,12 +470,12 @@ type toolRow struct {
 }
 
 func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
-	st, view, proxy, ok := s.proxy(w, r, sess)
+	st, _, proxy, ok := s.proxy(w, r, sess)
 	if !ok {
 		return
 	}
 	defer st.review.Close()
-	states, err := driftreview.ToolStates(st.review, view, proxy)
+	states, err := driftreview.ToolStates(st.review, st.snapshot, proxy)
 	if err != nil {
 		s.fail(w, sess, http.StatusServiceUnavailable, err.Error())
 		return
@@ -515,6 +518,26 @@ func (s *server) decide(w http.ResponseWriter, r *http.Request, sess *session) {
 			return
 		}
 		d.Definition = entry.Definition
+		if d.Approve {
+			// Gateways compare the approved definition with what the
+			// upstream declares now, so approving one it has since replaced
+			// could only refuse calls, even ones that work today.
+			snapshot, _, err := policy.LoadSet(s.cfg.store, base)
+			if err != nil {
+				http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=stale", http.StatusSeeOther)
+				return
+			}
+			view, _ := snapshot.Drift(proxy)
+			newest, found, err := review.Newest(proxy, tool, view.Upstream())
+			if err != nil {
+				s.fail(w, sess, http.StatusServiceUnavailable, "The shared declarations of this tool cannot be read, so it cannot be told whether this definition is still current.")
+				return
+			}
+			if found && newest.Fingerprint != fingerprint {
+				http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=superseded", http.StatusSeeOther)
+				return
+			}
+		}
 	}
 	// The change page offers approval of long text only once it is shown in
 	// full; the form says whether it was.

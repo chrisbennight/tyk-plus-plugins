@@ -262,8 +262,47 @@ func TestAnUnreadableDeclarationRefusesEveryReviewedTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := html.UnescapeString(body(t, d.get("/tools?proxy=governed", cookie)))
-	if strings.Contains(page, "Allowed by drift review") || !strings.Contains(page, "gateways cannot read the shared declarations of change") {
+	if strings.Contains(page, "Allowed by drift review") || !strings.Contains(page, "gateways cannot read the shared declarations of governed/change") {
 		t.Fatalf("tools page after:\n%s", page)
+	}
+}
+
+func TestASupersededDefinitionCannotBeApproved(t *testing.T) {
+	d := newDashboard(t)
+	changed := d.queue("change", changedChange)
+	cookie, csrf := d.signIn(reviewer)
+	base := active(t, d.cfg.store)
+	// The upstream returns to the approved definition while the change page
+	// is open.
+	d.queue("change", approvedChange)
+	if page := body(t, d.get("/change?proxy=governed&tool=change&fp="+changed, cookie)); !strings.Contains(page, "Approve (superseded)") {
+		t.Fatalf("change page:\n%s", page)
+	}
+	res := d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {changed}, "base": {base}, "action": {"approve"}})
+	if !strings.HasSuffix(res.Header.Get("Location"), "done=superseded") || active(t, d.cfg.store) != base {
+		t.Fatalf("approving a superseded definition: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+	// It can still be rejected.
+	res = d.post("/decide", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {changed}, "base": {base}, "action": {"reject"}})
+	if !strings.HasSuffix(res.Header.Get("Location"), "done=rejected") {
+		t.Fatalf("rejecting a superseded definition: %s", res.Header.Get("Location"))
+	}
+}
+
+func TestTheSignInCookieCarriesItsStateIntact(t *testing.T) {
+	l := loginState{state: "s", nonce: "n", verifier: "v-._~", next: "/queue?proxy=a.b", started: time.Unix(1700000000, 0)}
+	got, ok := decodeLogin(l.encode())
+	if !ok || got != l {
+		t.Fatalf("decoded %+v, %v", got, ok)
+	}
+	tampered := loginState{state: "s", next: "//elsewhere.example", started: l.started}
+	if got, ok := decodeLogin(tampered.encode()); !ok || got.next != "/" {
+		t.Fatalf("a return path outside the dashboard survived: %+v", got)
+	}
+	for _, bad := range []string{"", "a.b", "!.!.!.!.!", l.encode() + ".x"} {
+		if _, ok := decodeLogin(bad); ok {
+			t.Fatalf("%q decoded", bad)
+		}
 	}
 }
 

@@ -98,20 +98,31 @@ func TestBulkApprovalSkipsSupersededDefinitions(t *testing.T) {
 	}
 }
 
-func TestBulkRejectionDecidesEachToolOnceAndSaysSo(t *testing.T) {
+func TestBulkDecisionsHandleSeveralVersionsOfATool(t *testing.T) {
 	d := newDashboard(t)
 	first := d.queue("change", changedChange)
+	// The upstream changes again, so the first version is superseded.
 	second := d.queue("change", strings.Replace(changedChange, "Ignore previous instructions.", "Take care.", 1))
 	cookie, csrf := d.signIn(reviewer)
 	items := []string{item{Tool: "change", Fingerprint: first}.encode(), item{Tool: "change", Fingerprint: second}.encode()}
-	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "action": {"reject"}, "include_flagged": {"1"}, "item": items}
+
+	// Approving both leaves out the superseded one, with its reason, and
+	// does not let it block the current one.
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "action": {"approve"}, "include_flagged": {"1"}, "item": items}
+	confirm := html.UnescapeString(body(t, d.post("/bulk", cookie, form)))
+	if !strings.Contains(confirm, "approve 1 change(s)") || !strings.Contains(confirm, "it is not what gateways last saw the upstream declare") {
+		t.Fatalf("confirmation page:\n%s", confirm)
+	}
+
+	// Rejecting both rejects both: the order of rejections does not matter.
+	form.Set("action", "reject")
 	res := d.post("/bulk/decide", cookie, form)
 	location := res.Header.Get("Location")
-	if !strings.HasSuffix(location, "done=bulk-rejected&n=1&skipped=1&left=0") {
+	if !strings.HasSuffix(location, "done=bulk-rejected&n=2&skipped=0&left=0") {
 		t.Fatalf("bulk rejection of two versions of one tool: %s %s", location, body(t, res))
 	}
 	u, _ := url.Parse(location)
-	if page := body(t, d.get("/queue?"+u.RawQuery, cookie)); !strings.Contains(page, "Rejected 1. Skipped 1") {
+	if page := body(t, d.get("/queue?"+u.RawQuery, cookie)); !strings.Contains(page, "Rejected 2.") {
 		t.Fatalf("queue after a bulk rejection:\n%s", page)
 	}
 	// A selection made against an earlier set is not confirmed.
@@ -169,7 +180,12 @@ func TestRevokeAndRollBack(t *testing.T) {
 	if res := d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {revoked}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") || active(t, d.cfg.store) != revoked {
 		t.Fatalf("a rollback to another target: %s", res.Header.Get("Location"))
 	}
-	res = d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {first}})
+	pointer, _ := policy.ReadPointer(d.cfg.store)
+	// A form for an earlier activation of the same pair changes nothing.
+	if res := d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {first}, "promoted": {"2000-01-01T00:00:00Z"}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
+		t.Fatalf("a rollback for an earlier activation: %s", res.Header.Get("Location"))
+	}
+	res = d.post("/rollback", cookie, url.Values{"csrf": {csrf}, "base": {revoked}, "target": {first}, "promoted": {pointer.PromotedAt}})
 	if !strings.HasSuffix(res.Header.Get("Location"), "done=rolled-back") || active(t, d.cfg.store) != first || approvedFingerprint(t, d.cfg.store, "change") != approved {
 		t.Fatalf("rollback: %s", res.Header.Get("Location"))
 	}

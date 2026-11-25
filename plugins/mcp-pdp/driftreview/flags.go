@@ -62,7 +62,9 @@ func Flags(content jsontext.Value, text string, tools []string) []Flag {
 	}
 	lower := strings.ToLower(all)
 	for _, tool := range tools {
-		if len(tool) > 2 && regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(tool))+`\b`).MatchString(lower) {
+		// The plain substring test is cheap, so the pattern is built only
+		// for tools the text may mention.
+		if len(tool) > 2 && strings.Contains(lower, strings.ToLower(tool)) && regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(tool))+`\b`).MatchString(lower) {
 			flags = append(flags, Flag{"reference", "mentions another tool: " + ShownName(tool)})
 			break
 		}

@@ -257,15 +257,18 @@ func Apply(store, base, label string, actor policy.Actor, now func() time.Time, 
 			instructions = map[string]string{}
 		}
 		entries := make([]policy.LogEntry, 0, len(decisions))
-		decided := map[string]bool{}
+		approved, fingerprints := map[string]bool{}, map[string]bool{}
 		for _, d := range decisions {
-			// One batch decides each tool, or each proxy's instructions, at
-			// most once, so its result does not depend on the order given.
+			// One batch approves each tool, or each proxy's instructions, at
+			// most once and decides each fingerprint at most once, so its
+			// result does not depend on the order given. Rejecting several
+			// fingerprints of one tool is order-independent.
 			key := fmt.Sprintf("%s\x00%t\x00%s", d.Proxy, d.Instructions, d.Tool)
-			if decided[key] {
+			if (d.Approve && approved[key]) || fingerprints[key+"\x00"+d.Fingerprint] {
 				return nil, fmt.Errorf("%s is decided more than once", Describe(d))
 			}
-			decided[key] = true
+			approved[key] = approved[key] || d.Approve
+			fingerprints[key+"\x00"+d.Fingerprint] = true
 			// An approval must carry exactly the content its fingerprint
 			// names, so the log never records one fingerprint for another.
 			if d.Approve && !holds(d) {
@@ -366,7 +369,7 @@ func Revoke(store, base, label string, actor policy.Actor, now func() time.Time,
 		if !ok {
 			return nil, fmt.Errorf("proxy %q is not under drift review in the active set", proxy)
 		}
-		if approved, _, _ := view.Approved(tool); approved != fingerprint {
+		if approved, _, ok := view.Approved(tool); !ok || approved != fingerprint {
 			return nil, fmt.Errorf("%w: %s/%s does not have the approved definition %s", ErrStale, ShownName(proxy), ShownName(tool), fingerprint)
 		}
 		var inventory map[string]map[string]jsontext.Value

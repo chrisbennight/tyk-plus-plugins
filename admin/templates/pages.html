@@ -194,7 +194,7 @@
 {{define "bulk"}}{{template "head" .}}{{with .Content}}
 <p class="crumbs"><a href="{{$.Base}}/">Overview</a> › <a href="{{$.Base}}/queue?proxy={{.Proxy}}">{{.ProxyShown}}</a></p>
 <h1>Confirm: {{if eq .Action "approve"}}approve{{else}}reject{{end}} {{.Count}} change(s) on {{.ProxyShown}}</h1>
-{{if .Skipped}}<p class="notice">{{.Skipped}} selected change(s) are no longer waiting, or are definitions the upstream has since replaced, and are left out.</p>{{end}}
+{{if .SkippedItems}}<div class="notice"><p>{{.Skipped}} selected change(s) are left out:</p><ul>{{range .SkippedItems}}<li>{{.Shown}}{{if .Fingerprint}} <code>{{short .Fingerprint}}</code>{{end}}: {{.Reason}}.</li>{{end}}</ul></div>{{end}}
 {{if .Items}}
 <form method="post" action="{{$.Base}}/bulk/decide">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
@@ -232,6 +232,7 @@
   <input type="hidden" name="csrf" value="{{$.CSRF}}">
   <input type="hidden" name="base" value="{{.Set}}">
   <input type="hidden" name="target" value="{{.Previous}}">
+  <input type="hidden" name="promoted" value="{{.Promoted}}">
   <p>Rolling back makes the set the active one replaced active again, undoing the last change to the store, whoever made it. It applies only if <code>{{short .Set}}</code> is still active.</p>
   <button type="submit" class="secondary">Roll back to <code>{{short .Previous}}</code></button>
 </form>

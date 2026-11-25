@@ -44,7 +44,7 @@ func (s *server) history(w http.ResponseWriter, r *http.Request, sess *session) 
 			Issuer: driftreview.VisibleLine(e.Actor.Issuer), Action: e.Action, Subject: subject, Fingerprint: e.Fingerprint,
 			Set: e.Set, Base: e.Base, Label: driftreview.VisibleLine(e.Label)})
 	}
-	data := map[string]any{"Rows": rows, "Set": pointer.Set, "Previous": pointer.Previous,
+	data := map[string]any{"Rows": rows, "Set": pointer.Set, "Previous": pointer.Previous, "Promoted": pointer.PromotedAt,
 		"Done": doneMessage(r.URL.Query().Get("done"))}
 	if logErr != nil {
 		data["Problem"] = driftreview.ShownName(logErr.Error())
@@ -60,7 +60,7 @@ func (s *server) history(w http.ResponseWriter, r *http.Request, sess *session) 
 // rollback makes the previous set active again, provided the set the page
 // showed is still the active one.
 func (s *server) rollback(w http.ResponseWriter, r *http.Request, sess *session) {
-	set, err := policy.Rollback(s.cfg.store, r.PostFormValue("base"), r.PostFormValue("target"), sess.actor, s.now)
+	set, err := policy.Rollback(s.cfg.store, r.PostFormValue("base"), r.PostFormValue("target"), r.PostFormValue("promoted"), sess.actor, s.now)
 	switch {
 	case errors.Is(err, policy.ErrMoved):
 		http.Redirect(w, r, s.auth.link("/history?done=stale"), http.StatusSeeOther)
@@ -132,15 +132,18 @@ type candidate struct {
 	decision     driftreview.Decision
 }
 
-// candidates reads the selected changes that are still waiting for review.
-// A selection that no longer names a waiting change, because it was decided
-// or its entry is gone or altered, is counted as skipped, as is a tool
-// definition to approve that the upstream has since replaced.
-func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.DriftView, proxy string, values []string, approve bool) ([]candidate, int) {
+// skippedItem is a selected change a bulk decision leaves out, and why.
+type skippedItem struct {
+	Shown, Fingerprint, Reason string
+}
+
+// candidates reads the selected changes a bulk decision can apply to, and
+// says why each other selection is left out: it is no longer waiting, or
+// the change page's rules refuse to approve it here.
+func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.DriftView, proxy string, values []string, approve bool) ([]candidate, []skippedItem) {
 	approvedText, _ := snapshot.Instructions(proxy)
-	// As on the change page, instructions are approved only while one
-	// changed text is waiting.
-	// When they cannot be counted, none is approved.
+	// As on the change page, instructions are approved only while exactly
+	// one changed text is waiting; when they cannot be counted, none is.
 	waitingTexts := 0
 	if approve {
 		texts, _, err := driftreview.PendingInstructions(review, snapshot, view, proxy)
@@ -150,55 +153,72 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 		}
 	}
 	var out []candidate
-	skipped := 0
-	// A batch decides each tool, and the instructions, at most once.
+	var skipped []skippedItem
+	// A batch approves each tool, and the instructions, at most once, and
+	// decides each fingerprint at most once.
 	decided := map[string]bool{}
 	for _, value := range values {
 		it, ok := decodeItem(value)
+		if !ok {
+			skipped = append(skipped, skippedItem{Shown: "(unreadable selection)", Reason: "it does not name a change"})
+			continue
+		}
+		shown := driftreview.ShownName(it.Tool)
+		if it.Instructions {
+			shown = "instructions"
+		}
+		skip := func(reason string) {
+			skipped = append(skipped, skippedItem{Shown: shown, Fingerprint: it.Fingerprint, Reason: reason})
+		}
 		key := "tool:" + it.Tool
 		if it.Instructions {
 			key = "instructions"
 		}
-		if !ok || decided[key] {
-			skipped++
+		if !approve {
+			key += ":" + it.Fingerprint
+		}
+		if decided[key] || decided["fingerprint:"+key+":"+it.Fingerprint] {
+			skip("another selected version is already decided in this batch")
 			continue
 		}
-		decided[key] = true
-		c := candidate{item: it, Value: value}
+		c := candidate{item: it, Value: value, Shown: shown}
 		d := driftreview.Decision{Proxy: proxy, Tool: it.Tool, Instructions: it.Instructions, Fingerprint: it.Fingerprint, Approve: approve}
 		if it.Instructions {
 			entry, err := review.InstructionsEntry(proxy, it.Fingerprint)
-			if err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint) || (approve && waitingTexts != 1) {
-				skipped++
+			switch {
+			case err != nil || policy.InstructionsFingerprint(approvedText) == it.Fingerprint || view.RejectedInstructions(it.Fingerprint):
+				skip("it is no longer waiting")
+				continue
+			case approve && waitingTexts != 1:
+				skip("several changed instructions are waiting, so approve one on its change page after rejecting the others")
 				continue
 			}
 			d.Text = entry.Instructions
-			c.Shown, c.Flags = "instructions", driftreview.Flags(nil, entry.Instructions, view.Tools())
+			c.Flags = driftreview.Flags(nil, entry.Instructions, view.Tools())
 		} else {
 			entry, err := review.Tool(proxy, it.Tool, it.Fingerprint)
 			approvedFP, _, _ := view.Approved(it.Tool)
 			if err != nil || approvedFP == it.Fingerprint || view.Rejected(it.Tool, it.Fingerprint) {
-				skipped++
+				skip("it is no longer waiting")
 				continue
 			}
-			if approve {
+			if approve && driftreview.Current(review, view, proxy, it.Tool, it.Fingerprint) != nil {
 				// Only what gateways last saw the upstream declare, as on
 				// the change page.
-				if driftreview.Current(review, view, proxy, it.Tool, it.Fingerprint) != nil {
-					skipped++
-					continue
-				}
+				skip("it is not what gateways last saw the upstream declare")
+				continue
 			}
 			d.Definition = entry.Definition
-			c.Shown = driftreview.ShownName(it.Tool)
 			c.Flags = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(view.Tools(), it.Tool))
 		}
 		if approve && max(len(d.Definition), len(d.Text)) > longDefinition {
 			// Long text must be opened in full on its change page before
 			// it is approved, so it is not approved in bulk.
-			skipped++
+			skip("it is long, so open it in full and approve it on its change page")
 			continue
 		}
+		decided[key] = true
+		decided["fingerprint:"+key+":"+it.Fingerprint] = true
 		c.decision = d
 		out = append(out, c)
 	}
@@ -232,7 +252,7 @@ func (s *server) bulkReview(w http.ResponseWriter, r *http.Request, sess *sessio
 	}
 	s.render(w, "bulk", s.page(sess, "Confirm", map[string]any{
 		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Action": action, "Items": cands,
-		"Count": len(cands), "Flagged": flagged, "Unflagged": len(cands) - flagged, "Skipped": skipped, "Base": st.set,
+		"Count": len(cands), "Flagged": flagged, "Unflagged": len(cands) - flagged, "Skipped": len(skipped), "SkippedItems": skipped, "Base": st.set,
 	}))
 }
 
@@ -278,7 +298,7 @@ func (s *server) bulkDecide(w http.ResponseWriter, r *http.Request, sess *sessio
 			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject)
 	}
 	done := map[string]string{"approve": "bulk-approved", "reject": "bulk-rejected"}[action]
-	http.Redirect(w, r, fmt.Sprintf("%s&done=%s&n=%d&skipped=%d&left=%d", back, done, len(decisions), skipped, left), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("%s&done=%s&n=%d&skipped=%d&left=%d", back, done, len(decisions), len(skipped), left), http.StatusSeeOther)
 }
 
 // bulkMessage builds the message after a bulk decision from counts only, so
@@ -291,7 +311,7 @@ func bulkMessage(q url.Values) string {
 	count := func(name string) int { n, _ := strconv.Atoi(q.Get(name)); return max(n, 0) }
 	msg := fmt.Sprintf("%s %d.", verb, count("n"))
 	if n := count("skipped"); n > 0 {
-		msg += fmt.Sprintf(" Skipped %d that were no longer waiting or had been superseded.", n)
+		msg += fmt.Sprintf(" Skipped %d that were no longer waiting or that the approval rules leave to their change pages.", n)
 	}
 	if n := count("left"); n > 0 {
 		msg += fmt.Sprintf(" Left %d flagged change(s) waiting, as they were not confirmed.", n)
@@ -360,7 +380,8 @@ func (s *server) prune(w http.ResponseWriter, r *http.Request, sess *session) {
 		return err
 	})
 	if err != nil {
-		slog.Error("Pruning failed", "error", err)
+		// Entries are removed one at a time, so some may be gone already.
+		slog.Error("Pruning failed", "removed", removed, "issuer", sess.actor.Issuer, "subject", sess.actor.Subject, "error", err)
 		s.fail(w, sess, http.StatusInternalServerError, driftreview.ShownName(err.Error()))
 		return
 	}
@@ -385,7 +406,7 @@ func (s *server) retire(w http.ResponseWriter, r *http.Request, sess *session) {
 	gateway := r.PostFormValue("gateway")
 	removed, err := review.Retire(gateway)
 	if err != nil {
-		slog.Error("Retiring a gateway failed", "error", err)
+		slog.Error("Retiring a gateway failed", "gateway", gateway, "removed", removed, "issuer", sess.actor.Issuer, "subject", sess.actor.Subject, "error", err)
 		s.fail(w, sess, http.StatusInternalServerError, driftreview.ShownName(err.Error()))
 		return
 	}

@@ -129,7 +129,7 @@ var ErrMoved = errors.New("the active set has changed")
 // records it in the decision log. It is how a
 // reviewer undoes the last change; a rollback is itself undone by rolling
 // back again.
-func Rollback(root, base, target string, actor Actor, now func() time.Time) (string, error) {
+func Rollback(root, base, target, promoted string, actor Actor, now func() time.Time) (string, error) {
 	store, err := openStore(root)
 	if err != nil {
 		return "", err
@@ -139,22 +139,21 @@ func Rollback(root, base, target string, actor Actor, now func() time.Time) (str
 	if err != nil {
 		return "", err
 	}
-	if pointer.Set != base || pointer.Previous != target {
+	// The page's activation is named by its time too, since rolling back
+	// and forward again repeats the same pair of sets.
+	if pointer.Set != base || pointer.Previous != target || pointer.PromotedAt != promoted {
 		return "", fmt.Errorf("%w: it is now %s, replacing %s; nothing was changed", ErrMoved, pointer.Set, pointer.Previous)
 	}
 	if pointer.Previous == "" {
 		return "", errors.New("the active pointer records no previous set to roll back to")
 	}
-	if err := store.activate(pointer.Previous, now); err != nil {
-		return "", err
-	}
+	// As in Revise, the roll back is logged before it takes effect.
 	entry := LogEntry{Time: now().UTC().Format(time.RFC3339Nano), Actor: actor, Action: "rollback", Base: base, Set: pointer.Previous}
 	if err := store.appendLog([]LogEntry{entry}); err != nil {
-		// As in Revise: in force and logged, or neither.
-		if restoreErr := store.writePointer(pointer); restoreErr != nil {
-			return pointer.Previous, fmt.Errorf("set %s is active, but the decision log could not be written (%w), and the previous pointer could not be restored: %w", pointer.Previous, err, restoreErr)
-		}
 		return "", fmt.Errorf("the decision log could not be written, so nothing was rolled back: %w", err)
+	}
+	if err := store.activate(pointer.Previous, now); err != nil {
+		return "", fmt.Errorf("the roll back is logged, but set %s could not be made active: %w", pointer.Previous, err)
 	}
 	return pointer.Previous, nil
 }

@@ -249,6 +249,7 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 		return
 	}
 	defer st.review.Close()
+	names := toolNames(st.review, view, proxy)
 	tools, problems, err := driftreview.PendingTools(st.review, view, proxy)
 	if err != nil {
 		s.fail(w, sess, http.StatusServiceUnavailable, err.Error())
@@ -271,14 +272,14 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 		items = append(items, queueItem{Tool: t.Entry.Tool, Shown: driftreview.ShownName(t.Entry.Tool), Kind: t.Kind + " tool",
 			Fingerprint: t.Entry.Fingerprint, State: state, Gateway: driftreview.ShownName(t.Entry.Gateway), FirstSeen: t.Entry.FirstSeen,
 			Value: item{Tool: t.Entry.Tool, Fingerprint: t.Entry.Fingerprint}.encode(),
-			Flags: driftreview.Flags(t.Entry.Definition, "", driftreview.OtherTools(view.Tools(), t.Entry.Tool))})
+			Flags: driftreview.Flags(t.Entry.Definition, "", driftreview.OtherTools(names, t.Entry.Tool))})
 	}
 	for _, e := range instructions {
 		// Gateways record changed instructions but not which text an
 		// upstream declares now, so whether these are current is unknown.
 		items = append(items, queueItem{Shown: "instructions", Kind: "changed instructions", Fingerprint: e.Fingerprint, State: "not tracked for instructions",
 			Gateway: driftreview.ShownName(e.Gateway), FirstSeen: e.FirstSeen, Instructions: true,
-			Value: item{Instructions: true, Fingerprint: e.Fingerprint}.encode(), Flags: driftreview.Flags(nil, e.Instructions, view.Tools())})
+			Value: item{Instructions: true, Fingerprint: e.Fingerprint}.encode(), Flags: driftreview.Flags(nil, e.Instructions, names)})
 	}
 	var shown []string
 	for _, p := range append(problems, more...) {
@@ -289,7 +290,7 @@ func (s *server) queue(w http.ResponseWriter, r *http.Request, sess *session) {
 		done = bulkMessage(r.URL.Query())
 	}
 	s.render(w, "queue", s.page(sess, "Review queue", map[string]any{
-		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Items": items, "Problems": shown, "Done": done, "Base": st.set,
+		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Items": items, "Problems": shown, "Done": done, "Base": st.set, "Promoted": st.promoted,
 	}))
 }
 
@@ -344,6 +345,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 		return
 	}
 	defer st.review.Close()
+	names := toolNames(st.review, view, proxy)
 	q := r.URL.Query()
 	fingerprint, tool, instructions := q.Get("fp"), q.Get("tool"), q.Get("instructions") == "1"
 	data := map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Tool": tool, "Instructions": instructions, "Fingerprint": fingerprint, "Base": st.set, "Full": q.Get("full") == "1"}
@@ -368,7 +370,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			}
 		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = "Changed instructions", entry.FirstSeen, driftreview.ShownName(entry.Gateway)
-		data["Flags"] = driftreview.Flags(nil, entry.Instructions, view.Tools())
+		data["Flags"] = driftreview.Flags(nil, entry.Instructions, names)
 		data["Approved"] = policy.InstructionsFingerprint(approved) == fingerprint
 		data["Rejected"] = view.RejectedInstructions(fingerprint)
 	} else {
@@ -404,7 +406,7 @@ func (s *server) change(w http.ResponseWriter, r *http.Request, sess *session) {
 			data["NotDeclared"] = true
 		}
 		data["Kind"], data["FirstSeen"], data["Gateway"] = kind, entry.FirstSeen, driftreview.ShownName(entry.Gateway)
-		data["Flags"] = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(view.Tools(), tool))
+		data["Flags"] = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(names, tool))
 		data["Approved"] = approvedFingerprint == fingerprint
 		data["Rejected"] = view.Rejected(tool, fingerprint)
 		data["ToolShown"] = driftreview.ShownName(tool)
@@ -537,7 +539,7 @@ func (s *server) tools(w http.ResponseWriter, r *http.Request, sess *session) {
 			Callable: t.Callable, Seen: t.Seen, Found: t.Found, Approved: t.Approved})
 	}
 	s.render(w, "tools", s.page(sess, "Tools", map[string]any{"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Rows": rows,
-		"Base": st.set, "Done": doneMessage(r.URL.Query().Get("done"))}))
+		"Base": st.set, "Promoted": st.promoted, "Done": doneMessage(r.URL.Query().Get("done"))}))
 }
 
 // decide approves or rejects exactly the fingerprint the page showed,

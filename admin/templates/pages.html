@@ -83,7 +83,8 @@
 {{if $.Reviewer}}<form method="post" action="{{$.Base}}/bulk">
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="proxy" value="{{.Proxy}}">
-<input type="hidden" name="base" value="{{.Base}}">{{end}}
+<input type="hidden" name="base" value="{{.Base}}">
+<input type="hidden" name="promoted" value="{{.Promoted}}">{{end}}
 <table>
   <thead><tr>{{if $.Reviewer}}<th scope="col"><span class="sr">Select</span></th>{{end}}<th scope="col">Change</th><th scope="col">Kind</th><th scope="col">Upstream</th><th scope="col">Flags</th><th scope="col">First seen</th><th scope="col">Fingerprint</th></tr></thead>
   <tbody>
@@ -180,6 +181,7 @@
         <input type="hidden" name="tool" value="{{.Tool}}">
         <input type="hidden" name="fingerprint" value="{{.Approved}}">
         <input type="hidden" name="base" value="{{$.Content.Base}}">
+        <input type="hidden" name="promoted" value="{{$.Content.Promoted}}">
         <button type="submit" class="secondary" aria-label="Revoke the approval of {{.Name}}">Revoke</button>
       </form>{{end}}</td>{{end}}
     </tr>
@@ -200,6 +202,8 @@
 <input type="hidden" name="csrf" value="{{$.CSRF}}">
 <input type="hidden" name="proxy" value="{{.Proxy}}">
 <input type="hidden" name="base" value="{{.Base}}">
+<input type="hidden" name="promoted" value="{{.Promoted}}">
+<input type="hidden" name="skipped" value="{{.Skipped}}">
 <input type="hidden" name="action" value="{{.Action}}">
 <table>
   <thead><tr><th scope="col">Change</th><th scope="col">Fingerprint</th><th scope="col">Flags</th></tr></thead>

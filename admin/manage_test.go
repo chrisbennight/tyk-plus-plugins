@@ -27,6 +27,16 @@ func approvedFingerprint(t *testing.T, store, tool string) string {
 	return fp
 }
 
+// promotedAt reads when the active set became active, as forms carry it.
+func promotedAt(t *testing.T, store string) string {
+	t.Helper()
+	pointer, err := policy.ReadPointer(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pointer.PromotedAt
+}
+
 func TestBulkDecisionsLeaveFlaggedChangesUnlessConfirmed(t *testing.T) {
 	d := newDashboard(t)
 	flagged := d.queue("change", changedChange)
@@ -42,7 +52,7 @@ func TestBulkDecisionsLeaveFlaggedChangesUnlessConfirmed(t *testing.T) {
 		t.Fatal("the queue selected changes for the reviewer")
 	}
 	items := []string{item{Tool: "change", Fingerprint: flagged}.encode(), item{Tool: "lookup", Fingerprint: plain}.encode()}
-	confirm := html.UnescapeString(body(t, d.post("/bulk", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "action": {"approve"}, "item": items})))
+	confirm := html.UnescapeString(body(t, d.post("/bulk", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "promoted": {promotedAt(t, d.cfg.store)}, "action": {"approve"}, "item": items})))
 	if !strings.Contains(confirm, "approve 2 change(s)") || !strings.Contains(confirm, "instruction-like text") || !strings.Contains(confirm, `name="include_flagged"`) {
 		t.Fatalf("confirmation page:\n%s", confirm)
 	}
@@ -51,7 +61,7 @@ func TestBulkDecisionsLeaveFlaggedChangesUnlessConfirmed(t *testing.T) {
 	}
 
 	// Without the second confirmation, only the unflagged change is approved.
-	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "action": {"approve"}, "item": items}
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "promoted": {promotedAt(t, d.cfg.store)}, "action": {"approve"}, "item": items}
 	res := d.post("/bulk/decide", cookie, form)
 	if res.StatusCode != http.StatusSeeOther || !strings.HasSuffix(res.Header.Get("Location"), "done=bulk-approved&n=1&skipped=0&left=1") {
 		t.Fatalf("bulk approval: %d %s %s", res.StatusCode, res.Header.Get("Location"), body(t, res))
@@ -73,6 +83,7 @@ func TestBulkDecisionsLeaveFlaggedChangesUnlessConfirmed(t *testing.T) {
 	// With it, the flagged change is approved, and the one already decided is
 	// skipped.
 	form.Set("base", active(t, d.cfg.store))
+	form.Set("promoted", promotedAt(t, d.cfg.store))
 	res = d.post("/bulk/decide", cookie, form)
 	if !strings.HasSuffix(res.Header.Get("Location"), "done=bulk-approved&n=1&skipped=1&left=0") || approvedFingerprint(t, d.cfg.store, "change") != flagged {
 		t.Fatalf("confirmed bulk approval: %s", res.Header.Get("Location"))
@@ -90,7 +101,7 @@ func TestBulkApprovalSkipsSupersededDefinitions(t *testing.T) {
 	d.queue("change", approvedChange)
 	cookie, csrf := d.signIn(reviewer)
 	base := active(t, d.cfg.store)
-	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "action": {"approve"}, "include_flagged": {"1"},
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {base}, "promoted": {promotedAt(t, d.cfg.store)}, "action": {"approve"}, "include_flagged": {"1"},
 		"item": {item{Tool: "change", Fingerprint: changed}.encode()}}
 	res := d.post("/bulk/decide", cookie, form)
 	if !strings.HasSuffix(res.Header.Get("Location"), "done=bulk-approved&n=0&skipped=1&left=0") || active(t, d.cfg.store) != base {
@@ -108,27 +119,49 @@ func TestBulkDecisionsHandleSeveralVersionsOfATool(t *testing.T) {
 
 	// Approving both leaves out the superseded one, with its reason, and
 	// does not let it block the current one.
-	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "action": {"approve"}, "include_flagged": {"1"}, "item": items}
+	form := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "promoted": {promotedAt(t, d.cfg.store)}, "action": {"approve"}, "include_flagged": {"1"}, "item": items}
 	confirm := html.UnescapeString(body(t, d.post("/bulk", cookie, form)))
 	if !strings.Contains(confirm, "approve 1 change(s)") || !strings.Contains(confirm, "it is not what gateways last saw the upstream declare") {
 		t.Fatalf("confirmation page:\n%s", confirm)
 	}
 
-	// Rejecting both rejects both: the order of rejections does not matter.
+	// The confirmed decision counts the selection the confirmation page
+	// already left out.
+	confirmed := url.Values{"csrf": {csrf}, "proxy": {"governed"}, "base": {active(t, d.cfg.store)}, "promoted": {promotedAt(t, d.cfg.store)},
+		"action": {"reject"}, "include_flagged": {"1"}, "skipped": {"1"}, "item": {item{Tool: "change", Fingerprint: second}.encode()}}
+	if res := d.post("/bulk/decide", cookie, confirmed); !strings.HasSuffix(res.Header.Get("Location"), "done=bulk-rejected&n=1&skipped=1&left=0") {
+		t.Fatalf("a decision after the confirmation page left one out: %s", res.Header.Get("Location"))
+	}
+	form.Set("base", active(t, d.cfg.store))
+	form.Set("promoted", promotedAt(t, d.cfg.store))
+	form["item"] = []string{item{Tool: "change", Fingerprint: first}.encode()}
+
+	// Rejecting several versions works: the order of rejections does not
+	// matter.
 	form.Set("action", "reject")
 	res := d.post("/bulk/decide", cookie, form)
 	location := res.Header.Get("Location")
-	if !strings.HasSuffix(location, "done=bulk-rejected&n=2&skipped=0&left=0") {
+	if !strings.HasSuffix(location, "done=bulk-rejected&n=1&skipped=0&left=0") {
 		t.Fatalf("bulk rejection of two versions of one tool: %s %s", location, body(t, res))
 	}
 	u, _ := url.Parse(location)
-	if page := body(t, d.get("/queue?"+u.RawQuery, cookie)); !strings.Contains(page, "Rejected 2.") {
+	if page := body(t, d.get("/queue?"+u.RawQuery, cookie)); !strings.Contains(page, "Rejected 1.") {
 		t.Fatalf("queue after a bulk rejection:\n%s", page)
 	}
 	// A selection made against an earlier set is not confirmed.
 	form.Set("base", "0000")
 	if res := d.post("/bulk", cookie, form); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
 		t.Fatalf("confirming a stale selection: %d %s", res.StatusCode, res.Header.Get("Location"))
+	}
+}
+
+func TestNewToolsThatMentionEachOtherAreFlagged(t *testing.T) {
+	d := newDashboard(t)
+	d.queue("audit", `{"name":"audit","description":"Record an event","inputSchema":{"type":"object"}}`)
+	d.queue("lookup", `{"name":"lookup","description":"Look a record up, then call audit","inputSchema":{"type":"object"}}`)
+	cookie, _ := d.signIn(viewer)
+	if page := html.UnescapeString(body(t, d.get("/queue?proxy=governed", cookie))); !strings.Contains(page, "mentions another tool: audit") {
+		t.Fatalf("queue page:\n%s", page)
 	}
 }
 
@@ -156,7 +189,11 @@ func TestRevokeAndRollBack(t *testing.T) {
 	if !strings.Contains(tools, `action="/extensions/admin/revoke"`) || !strings.Contains(tools, `value="`+approved+`"`) {
 		t.Fatalf("tools page:\n%s", tools)
 	}
-	res := d.post("/revoke", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {approved}, "base": {first}})
+	// A form for an earlier activation of the same set changes nothing.
+	if res := d.post("/revoke", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {approved}, "base": {first}, "promoted": {"2000-01-01T00:00:00Z"}}); !strings.HasSuffix(res.Header.Get("Location"), "done=stale") {
+		t.Fatalf("a revocation for an earlier activation: %s", res.Header.Get("Location"))
+	}
+	res := d.post("/revoke", cookie, url.Values{"csrf": {csrf}, "proxy": {"governed"}, "tool": {"change"}, "fingerprint": {approved}, "base": {first}, "promoted": {promotedAt(t, d.cfg.store)}})
 	if res.StatusCode != http.StatusSeeOther || !strings.HasSuffix(res.Header.Get("Location"), "done=revoked") {
 		t.Fatalf("revoke: %d %s %s", res.StatusCode, res.Header.Get("Location"), body(t, res))
 	}

@@ -74,11 +74,37 @@ func (s *server) rollback(w http.ResponseWriter, r *http.Request, sess *session)
 	http.Redirect(w, r, s.auth.link("/history?done=rolled-back"), http.StatusSeeOther)
 }
 
+// toolNames lists the proxy's tools for the cross-tool reference flag: the
+// ones the active set reviews and the new ones waiting for review, so a new
+// tool that mentions another new tool is flagged too.
+func toolNames(review *drift.Review, view policy.DriftView, proxy string) []string {
+	names := slices.Clone(view.Tools())
+	pending, _, _ := driftreview.PendingTools(review, view, proxy)
+	for _, t := range pending {
+		if !slices.Contains(names, t.Entry.Tool) {
+			names = append(names, t.Entry.Tool)
+		}
+	}
+	return names
+}
+
+// sameActivation reports whether the activation a form was made against,
+// its set and the time it became active, is still in force. A roll back can
+// make the same set active again, so the set alone does not identify it.
+func (s *server) sameActivation(r *http.Request) bool {
+	pointer, err := policy.ReadPointer(s.cfg.store)
+	return err == nil && pointer.Set == r.PostFormValue("base") && pointer.PromotedAt == r.PostFormValue("promoted")
+}
+
 // revoke withdraws a tool's approved definition, the one the page showed.
 func (s *server) revoke(w http.ResponseWriter, r *http.Request, sess *session) {
 	proxy, tool, fingerprint := r.PostFormValue("proxy"), r.PostFormValue("tool"), r.PostFormValue("fingerprint")
 	label := fmt.Sprintf("dashboard revoke %s %s", driftreview.Describe(driftreview.Decision{Proxy: proxy, Tool: tool}), short(fingerprint))
 	back := s.auth.link("/tools?proxy=" + url.QueryEscape(proxy))
+	if !s.sameActivation(r) {
+		http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
+		return
+	}
 	set, err := driftreview.Revoke(s.cfg.store, r.PostFormValue("base"), label, sess.actor, s.now, proxy, tool, fingerprint)
 	switch {
 	case errors.Is(err, driftreview.ErrStale):
@@ -142,6 +168,7 @@ type skippedItem struct {
 // the change page's rules refuse to approve it here.
 func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.DriftView, proxy string, values []string, approve bool) ([]candidate, []skippedItem) {
 	approvedText, _ := snapshot.Instructions(proxy)
+	names := toolNames(review, view, proxy)
 	// As on the change page, instructions are approved only while exactly
 	// one changed text is waiting; when they cannot be counted, none is.
 	waitingTexts := 0
@@ -194,7 +221,7 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 				continue
 			}
 			d.Text = entry.Instructions
-			c.Flags = driftreview.Flags(nil, entry.Instructions, view.Tools())
+			c.Flags = driftreview.Flags(nil, entry.Instructions, names)
 		} else {
 			entry, err := review.Tool(proxy, it.Tool, it.Fingerprint)
 			approvedFP, _, _ := view.Approved(it.Tool)
@@ -209,7 +236,7 @@ func candidates(review *drift.Review, snapshot *policy.Snapshot, view policy.Dri
 				continue
 			}
 			d.Definition = entry.Definition
-			c.Flags = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(view.Tools(), it.Tool))
+			c.Flags = driftreview.Flags(entry.Definition, "", driftreview.OtherTools(names, it.Tool))
 		}
 		if approve && max(len(d.Definition), len(d.Text)) > longDefinition {
 			// Long text must be opened in full on its change page before
@@ -238,8 +265,8 @@ func (s *server) bulkReview(w http.ResponseWriter, r *http.Request, sess *sessio
 		s.fail(w, sess, http.StatusBadRequest, "Unknown decision.")
 		return
 	}
-	if r.PostFormValue("base") != st.set {
-		// The selection was made against a set that is no longer active.
+	if !s.sameActivation(r) {
+		// The selection was made against an activation no longer in force.
 		http.Redirect(w, r, s.auth.link("/queue?proxy="+url.QueryEscape(proxy))+"&done=stale", http.StatusSeeOther)
 		return
 	}
@@ -252,7 +279,7 @@ func (s *server) bulkReview(w http.ResponseWriter, r *http.Request, sess *sessio
 	}
 	s.render(w, "bulk", s.page(sess, "Confirm", map[string]any{
 		"Proxy": proxy, "ProxyShown": driftreview.ShownName(proxy), "Action": action, "Items": cands,
-		"Count": len(cands), "Flagged": flagged, "Unflagged": len(cands) - flagged, "Skipped": len(skipped), "SkippedItems": skipped, "Base": st.set,
+		"Count": len(cands), "Flagged": flagged, "Unflagged": len(cands) - flagged, "Skipped": len(skipped), "SkippedItems": skipped, "Base": st.set, "Promoted": st.promoted,
 	}))
 }
 
@@ -272,6 +299,10 @@ func (s *server) bulkDecide(w http.ResponseWriter, r *http.Request, sess *sessio
 	}
 	cands, skipped := candidates(st.review, st.snapshot, view, proxy, r.PostForm["item"], action == "approve")
 	includeFlagged := r.PostFormValue("include_flagged") == "1"
+	// Selections the confirmation page already left out are counted too, so
+	// the result accounts for every selection.
+	earlier, _ := strconv.Atoi(r.PostFormValue("skipped"))
+	earlier = max(earlier, 0)
 	var decisions []driftreview.Decision
 	left := 0
 	for _, c := range cands {
@@ -284,6 +315,10 @@ func (s *server) bulkDecide(w http.ResponseWriter, r *http.Request, sess *sessio
 	back := s.auth.link("/queue?proxy=" + url.QueryEscape(proxy))
 	if len(decisions) > 0 {
 		label := fmt.Sprintf("dashboard bulk %s on %s (%d)", action, driftreview.ShownName(proxy), len(decisions))
+		if !s.sameActivation(r) {
+			http.Redirect(w, r, back+"&done=stale", http.StatusSeeOther)
+			return
+		}
 		set, err := driftreview.Apply(s.cfg.store, r.PostFormValue("base"), label, sess.actor, s.now, decisions)
 		switch {
 		case errors.Is(err, driftreview.ErrStale):
@@ -298,7 +333,7 @@ func (s *server) bulkDecide(w http.ResponseWriter, r *http.Request, sess *sessio
 			"issuer", sess.actor.Issuer, "subject", sess.actor.Subject)
 	}
 	done := map[string]string{"approve": "bulk-approved", "reject": "bulk-rejected"}[action]
-	http.Redirect(w, r, fmt.Sprintf("%s&done=%s&n=%d&skipped=%d&left=%d", back, done, len(decisions), len(skipped), left), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("%s&done=%s&n=%d&skipped=%d&left=%d", back, done, len(decisions), len(skipped)+earlier, left), http.StatusSeeOther)
 }
 
 // bulkMessage builds the message after a bulk decision from counts only, so

@@ -27,7 +27,8 @@ defaults:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Building the gateway compiles Tyk as well as the plug-in.
+    timeout-minutes: 30
     # Both supported client versions run against each kind of upstream: one
     # that speaks both protocol versions, with plain or streamed replies; the
     # same server keeping sessions, which limits it to the older protocol; and a

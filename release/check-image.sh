@@ -3,6 +3,9 @@
 # shell, a package manager, runc, or a sandbox launcher built with the
 # development runc backend. It checks both the image's files and its SBOM.
 #
+# IMAGE_PLATFORM names the platform to read from the image, linux/amd64
+# unless set.
+#
 # Usage: release/check-image.sh IMAGE@DIGEST SBOM.spdx.json
 set -euo pipefail
 
@@ -21,7 +24,7 @@ failed=0
 
 # Release images have no command of their own to start, so give one that is
 # never run.
-container=$(docker create "$image" /none)
+container=$(docker create --platform "${IMAGE_PLATFORM:-linux/amd64}" "$image" /none)
 docker export "$container" > "$work/image.tar"
 tar -tf "$work/image.tar" > "$work/files"
 

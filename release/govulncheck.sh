@@ -3,6 +3,9 @@
 # reports only vulnerable code the binaries can call, and fails on any. The
 # gateway plug-in is not an executable, so the SBOM scan covers it instead.
 #
+# IMAGE_PLATFORM names the platform to read from the image, linux/amd64
+# unless set.
+#
 # Usage: release/govulncheck.sh IMAGE@DIGEST
 set -euo pipefail
 
@@ -22,7 +25,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-container=$(docker create "$image" /none)
+container=$(docker create --platform "${IMAGE_PLATFORM:-linux/amd64}" "$image" /none)
 docker export "$container" | tar -t > "$work/files"
 mkdir "$work/bin"
 found=0

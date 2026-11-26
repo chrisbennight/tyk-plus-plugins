@@ -1,6 +1,6 @@
 # Design and visual identity
 
-The visual identity for **Tyk Plus Plugins** uses clear geometry, rounded strokes, open circular boundaries, and high-contrast light and dark surfaces. It makes the gateway's documentation and the [drift review dashboard](../admin/README.md) recognizable while keeping operational controls and security diffs easy to read.
+The visual identity for Tyk Plus Plugins uses rounded strokes, open circular boundaries, and high-contrast light and dark surfaces across the documentation and the [drift review dashboard](../admin/README.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="branding/assets/wordmark-on-dark.svg">
@@ -9,22 +9,17 @@ The visual identity for **Tyk Plus Plugins** uses clear geometry, rounded stroke
 
 ## Identity
 
-The brand symbol ("The Checkpointed Gate") is a routed path entering an open ring from a hollow caller node, passing through a T-shaped gate and checkpoint junction, and emerging at an accented endpoint.
+The symbol is a routed path entering an open ring from a hollow caller node, passing through a T-shaped gate and checkpoint junction, and ending at an accented node. It uses a 5-unit rounded stroke on a `128 × 128` canvas; connecting routes in the header diagram use a 2.2-unit stroke. Keep at least one endpoint diameter of clear space around the mark.
 
-- **Canvas and stroke:** `128 × 128` grid with a 5-unit rounded stroke (`stroke-linecap="round"`, `stroke-linejoin="round"`). Connecting routes in relationship artwork use a finer 2.2-unit stroke.
-- **Clear space:** Keep at least one endpoint diameter of clear space around the symbol. Use the symbol alone for browser tab icons and compact headers, and the wordmark or relationship header at the top of top-level documentation.
-- **Portable vector lettering:** All SVG wordmark and header labels (`TYK PLUS`, `CLIENTS`, `CEDAR`, `DRIFT`, `SANDBOX`) are drawn as vector paths with `aria-label` attributes so rendering never depends on installed host fonts or external font services.
-- **Relationship artwork:** The header illustration (`CLIENTS → TYK PLUS → CEDAR, DRIFT, SANDBOX`) introduces the gateway's role at a glance. Architectural and protocol diagrams in documentation remain separately editable Markdown or Mermaid diagrams.
+Use the symbol alone for browser tab icons and compact headers, and the wordmark or relationship header at the top of top-level documentation. All lettering in the SVG files (`TYK PLUS`, `CLIENTS`, `CEDAR`, `DRIFT`, `SANDBOX`) is drawn as vector path outlines with `aria-label` attributes so rendering does not depend on installed host fonts. The header diagram (`CLIENTS → TYK PLUS → CEDAR, DRIFT, SANDBOX`) is an introduction to the project; technical diagrams in the documentation stay in editable Markdown or Mermaid.
 
 ## Typography
 
-- **Body and controls:** `system-ui, sans-serif` at `16px` (`1.5` line height) for comfortable reading across operating systems with zero external network requests.
-- **Code, fingerprints, and diffs:** `ui-monospace, monospace` at `0.9rem` for tool definitions, SHA-256 fingerprints, Cedar rules, and word-level diffs.
-- **Headings:** Sentence case with standard spacing. Reserve wide uppercase lettering for the vector wordmark and diagram node labels.
+Body text and controls use `system-ui, sans-serif` at `16px` with a `1.5` line height. Tool definitions, SHA-256 fingerprints, Cedar rules, and diffs use `ui-monospace, monospace` at `0.9rem`. Headings use sentence case and normal spacing; wide uppercase lettering is reserved for the SVG wordmark and diagram node labels.
 
 ## Color and surfaces
 
-The artwork and the drift review dashboard ([`admin/static/style.css`](../admin/static/style.css)) share one theme-aware palette across light and `prefers-color-scheme: dark` modes:
+The SVG artwork and the drift review dashboard ([`admin/static/style.css`](../admin/static/style.css)) share one light and dark (`prefers-color-scheme: dark`) palette:
 
 | Role | CSS token | Light | Dark | Use |
 | --- | --- | --- | --- | --- |
@@ -37,17 +32,13 @@ The artwork and the drift review dashboard ([`admin/static/style.css`](../admin/
 | Diff removed | `--removed`, `--removed-mark` | `#ffebe9` / `#ffc1bc` | `#3d1f22` / `#7a2f35` | Removed lines and changed words in drift diffs |
 | Diff added | `--added`, `--added-mark` | `#e6ffec` / `#abf2bc` | `#1b3524` / `#2f6b41` | Added lines and changed words in drift diffs |
 
-**Brand accents are never status meanings.** Whether a tool is allowed by drift review, refused, or flagged for closer inspection must always be stated in words (and with `−` / `+` markers and screen-reader labels in diffs), never by color or brand decoration alone.
+Brand accents never carry status meanings. Whether a tool is allowed by drift review, refused, or flagged for inspection is always stated in words (and with `−` / `+` markers and screen-reader labels in diffs), never by color or brand decoration alone.
 
 ## Layout and accessibility
 
-- **Strict self-containment:** The dashboard sends `Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`. Every stylesheet and icon must be embedded in the binary and served from the dashboard's own origin.
-- **Keyboard and screen-reader navigation:** Interactive controls keep a visible `3px solid var(--accent)` focus outline. Diff rows include visible `−` and `+` markers paired with screen-reader text (`removed:` and `added:`), and changed words use `<mark>`.
-- **Contrast and motion:** Text and interactive controls meet WCAG 2.2 AA contrast thresholds in both light and dark themes. Avoid animated GIFs or decorative motion in documentation and operational views.
+The dashboard sets `Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`, so every stylesheet and icon is embedded in the binary and served from the dashboard's own origin. Interactive controls keep a `3px solid var(--accent)` focus outline, diff rows include visible `−` and `+` markers with screen-reader text (`removed:` and `added:`), and text and controls meet WCAG 2.2 AA contrast thresholds in both themes. Avoid animated images in documentation and operational views.
 
 ## Brand assets
-
-Editable vector sources live in [`docs/branding/`](branding/), with ready-to-use exports in [`docs/branding/assets/`](branding/assets/) and the embedded dashboard tab icon in [`admin/static/favicon.svg`](../admin/static/favicon.svg):
 
 | Path | Purpose |
 | --- | --- |

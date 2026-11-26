@@ -30,7 +30,10 @@
 * { box-sizing: border-box; }
 body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
 header { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; padding: 0.75rem 1rem; border-bottom: 1px solid var(--line); }
-header .brand { font-weight: 600; color: var(--fg); text-decoration: none; }
+header .brand { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 600; color: var(--fg); text-decoration: none; }
+header .brand svg { flex: none; }
+header .brand .dot { fill: var(--accent); stroke: var(--warn); }
+header .brand .hole { fill: var(--bg); }
 header .who { margin-left: auto; color: var(--muted); }
 header nav { display: flex; gap: 1rem; }
 main { max-width: 72rem; margin: 0 auto; padding: 1rem; }

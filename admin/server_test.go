@@ -342,8 +342,16 @@ func TestBrowsersSendTheOriginWithForms(t *testing.T) {
 	// which the form check refuses.
 	d := newDashboard(t)
 	cookie, _ := d.signIn(viewer)
-	if policy := d.get("/", cookie).Header.Get("Referrer-Policy"); policy != "same-origin" {
+	res := d.get("/", cookie)
+	if policy := res.Header.Get("Referrer-Policy"); policy != "same-origin" {
 		t.Fatalf("Referrer-Policy %q", policy)
+	}
+	if page := body(t, res); !strings.Contains(page, `/extensions/admin/favicon.svg`) || !strings.Contains(page, "Tyk Plus · Drift review") {
+		t.Fatalf("brand header:\n%s", page)
+	}
+	icon := d.get("/favicon.svg", nil)
+	if icon.StatusCode != http.StatusOK || icon.Header.Get("Content-Type") != "image/svg+xml" || !strings.Contains(body(t, icon), "<svg") {
+		t.Fatalf("favicon: %d %s", icon.StatusCode, icon.Header.Get("Content-Type"))
 	}
 }
 

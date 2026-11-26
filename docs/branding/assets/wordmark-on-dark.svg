@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="104" viewBox="0 0 480 104" role="img" aria-labelledby="title">
+  <title id="title">Tyk Plus</title>
+  <g transform="translate(4 4) scale(0.75)" fill="none" stroke="#e6e9ec" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 42 A48 48 0 0 1 103 31 M111 62 A48 48 0 0 1 68 112 M54 112 A48 48 0 0 1 17 70"/>
+    <path d="M22 56 H48 M48 38 V76 M48 56 L66 74 L84 52 L106 42"/>
+    <circle cx="16" cy="56" r="6" stroke-width="3.5" fill="#15181b"/>
+    <circle cx="66" cy="74" r="5" stroke-width="3.5" fill="#15181b"/>
+    <circle cx="108" cy="40" r="7" fill="#1b4b8a" stroke="#ffd27a" stroke-width="2.8"/>
+  </g>
+  <g fill="none" stroke="#e6e9ec" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-label="TYK PLUS">
+    <!-- T -->
+    <path d="M126 36 H152 M139 36 V68"/>
+    <!-- Y -->
+    <path d="M166 36 L179 52 L192 36 M179 52 V68"/>
+    <!-- K -->
+    <path d="M208 36 V68 M230 36 L208 53 M215 48 L231 68"/>
+    <!-- P -->
+    <path d="M266 68 V36 H281 A8 8 0 0 1 281 52 H266"/>
+    <!-- L -->
+    <path d="M306 36 V68 H326"/>
+    <!-- U -->
+    <path d="M342 36 V57 A11 11 0 0 0 364 57 V36"/>
+    <!-- S -->
+    <path d="M402 41 C400 36 382 35 382 43 C382 51 403 51 403 60 C403 69 383 69 380 63"/>
+  </g>
+</svg>

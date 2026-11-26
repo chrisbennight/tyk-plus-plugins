@@ -2,7 +2,8 @@
 # Scans an SPDX SBOM with Grype against a fresh vulnerability database, and
 # fails on any critical vulnerability, or any high one that has a fix, that
 # release/vex.json does not cover. It writes Grype's full JSON report and
-# prints a summary table.
+# prints a summary table. It exits with status 3 when the gate fails, and
+# with another nonzero status when the scan itself fails.
 #
 # Usage: release/scan.sh SBOM.spdx.json REPORT.json
 set -euo pipefail
@@ -33,6 +34,6 @@ blocking=$(jq '[.matches[] | select(.vulnerability.severity == "Critical"
   or (.vulnerability.severity == "High" and .vulnerability.fix.state == "fixed"))] | length' "$report")
 if [ "$blocking" -ne 0 ]; then
   echo "$sbom: $blocking critical, or high with a fix, not covered by release/vex.json" >&2
-  exit 1
+  exit 3
 fi
 echo "$sbom: no critical vulnerabilities, and no high ones with a fix"

@@ -10,6 +10,11 @@ permissions: {}
 concurrency:
   group: rescan
   cancel-in-progress: false
+# GitHub runs an explicit bash shell with pipefail, so a failing command
+# piped into another still fails its step.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   rescan:
@@ -26,7 +31,8 @@ jobs:
           persist-credentials: false
       - name: Scan the latest release
         run: |
-          if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null); then
+          tag=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -z "$tag" ]; then
             echo "No release to scan yet."
             exit 0
           fi
@@ -41,8 +47,17 @@ jobs:
               echo "### $name"
               echo
               echo '```'
-              if ! release/scan.sh "$sbom" "$name.vulnerabilities.json" 2>&1; then failed+=("$name"); fi
+              # Status 3 means the scan found vulnerabilities; any other
+              # failure is an error, which fails the job without an issue.
+              status=0
+              release/scan.sh "$sbom" "$name.vulnerabilities.json" 2>&1 || status=$?
               echo '```'
+              if [ "$status" -eq 3 ]; then
+                failed+=("$name")
+              elif [ "$status" -ne 0 ]; then
+                echo "Scanning $name failed with status $status" >&2
+                exit "$status"
+              fi
             done
           } > report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"

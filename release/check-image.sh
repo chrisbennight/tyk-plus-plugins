@@ -22,18 +22,24 @@ failed=0
 # Release images have no command of their own to start, so give one that is
 # never run.
 container=$(docker create "$image" /none)
-docker export "$container" | tar -t > "$work/files"
-while IFS= read -r path; do
-  case "$path" in
-    */) continue ;;
-    bin/* | sbin/* | */bin/* | */sbin/* | */libexec/*) ;;
-    *) continue ;;
-  esac
-  if [[ "${path##*/}" =~ $forbidden ]]; then
-    echo "$image contains /$path" >&2
-    failed=1
-  fi
-done < "$work/files"
+docker export "$container" > "$work/image.tar"
+tar -tf "$work/image.tar" > "$work/files"
+
+# Any executable file or symbolic link with a forbidden name, wherever it is.
+# Files that are not executable, such as /usr/share/menu/bash, do not count.
+python3 -I - "$work/image.tar" "$forbidden" > "$work/executables" <<'PY'
+import re, sys, tarfile
+forbidden = re.compile(sys.argv[2])
+with tarfile.open(sys.argv[1]) as image:
+    for member in image:
+        if member.issym() or (member.isfile() and member.mode & 0o111):
+            if forbidden.match(member.name.rsplit("/", 1)[-1]):
+                print("/" + member.name.removeprefix("./"))
+PY
+if [ -s "$work/executables" ]; then
+  sed "s|^|$image contains |" "$work/executables" >&2
+  failed=1
+fi
 
 # Debian packages and Go modules for the same tools, as the SBOM lists them.
 jq -r --arg re "$forbidden" '

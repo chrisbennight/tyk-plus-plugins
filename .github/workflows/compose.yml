@@ -19,6 +19,11 @@ permissions:
   contents: read
   # To pull release candidates before they are published.
   packages: read
+# GitHub runs an explicit bash shell with pipefail, so a failing command
+# piped into another still fails its step.
+defaults:
+  run:
+    shell: bash
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -80,8 +85,6 @@ jobs:
           fi
           docker compose run --rm --no-deps --entrypoint /opt/tyk-gateway/bin/cedar-policy gateway bench -synthetic -rules 1000 -proxies 10 -tools 1000
   shared-store:
-    # It tests the policy store's source, not an image.
-    if: inputs.gateway-image == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

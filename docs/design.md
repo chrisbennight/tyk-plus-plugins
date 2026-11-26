@@ -32,8 +32,8 @@ The artwork and the drift review dashboard ([`admin/static/style.css`](../admin/
 | Ink | `--fg` | `#1d2125` | `#e6e9ec` | Primary text and symbol strokes |
 | Muted text | `--muted` | `#5b636b` | `#a3abb3` | Metadata labels, breadcrumbs, operator identity |
 | Hairline | `--line` | `#d5d9dd` | `#353b41` | Table borders, header rules, diff boxes |
-| Brand & interactive accent | `--accent` | `#0b5cad` | `#7ab8ff` (`#1b4b8a` node fill) | Links, primary buttons, focus rings, routed connection lines |
-| Warning & refused | `--warn`, `--warn-bg` | `#7a4b00` on `#fff4d6` | `#ffd27a` on `#3a2e12` | Drift warning banners, advisory flags, refused status, endpoint ring |
+| Brand & interactive accent | `--accent` | `#0b5cad` | `#7ab8ff` (`#1b4b8a` node fill) | Links, primary buttons, focus rings, brand endpoint nodes, routed connection lines |
+| Warning & refused | `--warn`, `--warn-bg` | `#7a4b00` on `#fff4d6` | `#ffd27a` on `#3a2e12` | Drift warning banners, advisory flags, refused status |
 | Diff removed | `--removed`, `--removed-mark` | `#ffebe9` / `#ffc1bc` | `#3d1f22` / `#7a2f35` | Removed lines and changed words in drift diffs |
 | Diff added | `--added`, `--added-mark` | `#e6ffec` / `#abf2bc` | `#1b3524` / `#2f6b41` | Added lines and changed words in drift diffs |
 

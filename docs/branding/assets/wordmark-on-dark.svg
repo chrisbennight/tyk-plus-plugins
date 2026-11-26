@@ -5,7 +5,7 @@
     <path d="M22 56 H48 M48 38 V76 M48 56 L66 74 L84 52 L106 42"/>
     <circle cx="16" cy="56" r="6" stroke-width="3.5" fill="#15181b"/>
     <circle cx="66" cy="74" r="5" stroke-width="3.5" fill="#15181b"/>
-    <circle cx="108" cy="40" r="7" fill="#1b4b8a" stroke="#ffd27a" stroke-width="2.8"/>
+    <circle cx="108" cy="40" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2.8"/>
   </g>
   <g fill="none" stroke="#e6e9ec" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-label="TYK PLUS">
     <!-- T -->

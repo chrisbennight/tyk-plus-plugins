@@ -10,12 +10,12 @@
     <path d="M22 56 H48 M48 38 V76 M48 56 L66 74 L84 52 L106 42"/>
     <circle cx="16" cy="56" r="6" stroke-width="3.5" fill="#f8f9fa"/>
     <circle cx="66" cy="74" r="5" stroke-width="3.5" fill="#f8f9fa"/>
-    <circle cx="108" cy="40" r="7" fill="#0b5cad" stroke="#7a4b00" stroke-width="2.8"/>
+    <circle cx="108" cy="40" r="7" fill="#0b5cad" stroke="#1d2125" stroke-width="2.8"/>
   </g>
-  <circle cx="124" cy="114" r="7" fill="#0b5cad" stroke="#7a4b00" stroke-width="2"/>
-  <circle cx="606" cy="52" r="7" fill="#0b5cad" stroke="#7a4b00" stroke-width="2"/>
-  <circle cx="626" cy="114" r="7" fill="#0b5cad" stroke="#7a4b00" stroke-width="2"/>
-  <circle cx="606" cy="176" r="7" fill="#0b5cad" stroke="#7a4b00" stroke-width="2"/>
+  <circle cx="124" cy="114" r="7" fill="#0b5cad" stroke="#1d2125" stroke-width="2"/>
+  <circle cx="606" cy="52" r="7" fill="#0b5cad" stroke="#1d2125" stroke-width="2"/>
+  <circle cx="626" cy="114" r="7" fill="#0b5cad" stroke="#1d2125" stroke-width="2"/>
+  <circle cx="606" cy="176" r="7" fill="#0b5cad" stroke="#1d2125" stroke-width="2"/>
   <!-- CLIENTS -->
   <g fill="none" stroke="#1d2125" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="CLIENTS">
     <path d="M40 109 C36 107 31 110 31 114 C31 118 36 121 40 119"/>

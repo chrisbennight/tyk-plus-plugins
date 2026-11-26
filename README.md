@@ -32,20 +32,20 @@ Connecting AI agents directly to MCP servers creates three operational hazards:
 
 * **Default-deny with no built-in roles:** The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call until you approve a tool and write a rule in [`rules.cedar`](gateway/policy/README.md#rules).
 * **Reviewed facts vs. upstream claims:** Operators attach reviewed facts and tags to tools in [`approved_tools.json`](gateway/policy/README.md#tools-and-reviewed-facts). Upstream annotations (such as `readOnlyHint`) can only **narrow** an otherwise permitted call—a false read-only claim from an upstream never grants access.
-* **Argument-level rules and automatic `tools/list` pruning:** Cedar rules evaluate the caller's identity (OpenID Connect token claims for people, Tyk key metadata for service accounts), reviewed tool facts, and typed top-level call arguments (for example, allowing refunds only when `environment` is `test`). When a client calls `tools/list`, the gateway leaves out any tool that Cedar shows no arguments could ever let that caller invoke, keeping the model's context window focused.
+* **Argument-level rules:** Cedar rules evaluate the caller's identity (OpenID Connect token claims for people, Tyk key metadata for service accounts), reviewed tool facts, and typed top-level call arguments (for example, allowing refunds only when `environment` is `test`). On proxies under [drift review](gateway/policy/README.md#drift-review), `tools/list` also leaves out any upstream tool that Cedar shows no arguments could ever let that caller invoke, keeping the model's context window focused.
 * **Uniform refusals:** A call to a tool that is forbidden by policy, held by drift review, never approved, or nonexistent returns the exact same JSON-RPC error (`-32002: Tool call denied`), so callers cannot probe the unapproved inventory.
 
 ### 2. Upstream drift quarantine and adversarial diff review
 
 * **Cryptographic definition pinning:** Under [drift review](gateway/policy/README.md#drift-review), the gateway fingerprints every approved tool definition (ignoring top-level `_meta`) and server instructions (`initialize` and `server/discover`) by canonical SHA-256.
-* **Cluster-wide hold on change:** Gateways sharing a drift directory exchange the latest tool definitions they see each upstream declare. When any gateway sees an upstream add a tool or alter an approved definition, every gateway sharing the directory refuses calls to that tool within its refresh interval, hides (or serves the approved version of) its definition, and notifies connected clients that the tool list changed.
-* **Adversarial diffing in the CLI and OIDC dashboard:** Reviewers inspect queued changes with [`cedar-policy drift`](gateway/policy/README.md#reviewing-changes) or in the browser-based [drift review dashboard](admin/README.md) (`/extensions/admin/`). Word-level diffs mark changed words, flag instruction-like phrases and cross-tool references, write out invisible characters (`⟨U+XXXX⟩`) and look-alike Unicode letters by code point, and hint when a new tool looks like a rename of a missing approved tool. Every decision binds to the exact fingerprint and active policy set and is recorded in `decisions.log` with the reviewer's verified identity.
+* **Cluster-wide hold on change:** Gateways sharing a drift directory write the latest tool definitions they see each upstream declare from the background and read shared declarations on each refresh interval. Once a gateway sees an upstream add a tool or alter an approved definition, it immediately refuses calls to that tool and hides (or serves the approved version of) its definition; peer gateways sharing the directory refuse calls within their refresh interval as sightings reach disk.
+* **Adversarial diffing in the CLI and OIDC dashboard:** Reviewers inspect queued changes with [`cedar-policy drift`](gateway/policy/README.md#reviewing-changes) or in the browser-based [drift review dashboard](admin/README.md) (`/extensions/admin/`). Both show a labelled diff against the approved version, write out invisible characters (`⟨U+XXXX⟩`) and look-alike Unicode letters by code point, and hint when a new tool looks like a rename of a missing approved tool. The dashboard adds word-level change highlighting and advisory flags for instruction-like phrases, cross-tool references, file paths, URLs, and long text. Every decision binds to the exact fingerprint and active policy set and is recorded in `decisions.log` (with the local user on the CLI, or the operator's OIDC-verified identity in the dashboard).
 
 ### 3. Sandboxed Code Mode with zero credential exposure
 
-* **Discover and compose:** On proxies where [Code Mode](gateway/code-mode.md) is enabled, callers find permitted tools across servers with `codemode.search` and `codemode.describe`, inspect runtime budgets with `codemode.limits`, and execute a short async JavaScript program with `codemode.execute` that combines multiple tool calls and returns one bounded result outside the model's context window.
+* **Discover and compose:** On proxies where [Code Mode](gateway/code-mode.md) is enabled, callers find permitted tools across servers with `codemode.search` and `codemode.describe`, inspect runtime budgets with `codemode.limits`, and execute a short async JavaScript program with `codemode.execute` that combines multiple tool calls so intermediate tool responses never enter the model's context window.
 * **One ephemeral gVisor + WebAssembly sandbox per run:** Programs run on a separate [sandbox host](sandbox/README.md) reached over mutual TLS. Each run starts a fresh gVisor sandbox (`runsc`, systrap platform) running QuickJS-NG compiled to WebAssembly, with a read-only root filesystem and no filesystem, environment, process, or non-loopback network access. When the launcher starts, it runs a self-test sandbox and refuses all runs unless every isolation boundary holds.
-* **Caller authority preserved end to end:** The sandbox tier never receives caller credentials or identity. Every tool call a program makes comes back through the gateway as the caller who started the run, subject to the same Tyk authentication, rate limits, drift review, and Cedar rules as a direct call, and correlated in audit logs by a shared `code_mode_run` ID.
+* **Caller authority preserved end to end:** The sandbox tier never receives caller credentials or identity. When a program calls a tool, the sandbox service relays the call over the mutual-TLS connection to the gateway plug-in, which sends an authenticated request to the gateway's own listener as the caller who started the run—applying the same Tyk authentication, rate limits, drift review, and Cedar rules as a direct call, and correlating every call in audit logs with a shared `code_mode_run` ID.
 
 ### 4. Atomic policy sets, lock-free reload, and verifiable releases
 
@@ -74,9 +74,9 @@ flowchart LR
 
   Client -->|"MCP (Bearer token or X-API-Key)"| Tyk
   Tyk -->|"Strips credentials;<br/>forwards permitted call"| Upstream
-  Tyk <-->|"mTLS: program & tool results"| Service
-  Service --> Worker
-  Worker -.->|"Nested tool calls loop back<br/>through Tyk as original caller"| Tyk
+  Tyk <-->|"mTLS: program, relayed tool<br/>calls & results"| Service
+  Service <-->|"Pipes: program & tool calls"| Worker
+  Tyk -.->|"Re-enters local gateway listener<br/>for nested calls as original caller"| Tyk
   Store --> Tyk
   Tyk <--> Pending
   Admin <-->|"Approve, reject, revoke,<br/>roll back (decisions.log)"| Store
@@ -95,6 +95,12 @@ export TYK_GW_SECRET="$(openssl rand -hex 32)"
 export TYK_GW_NODESECRET="$(openssl rand -hex 32)"
 docker compose up --build -d
 docker compose run --build --rm runner
+```
+
+Code Mode in the lab uses the production gVisor sandbox backend by default. On a development machine where gVisor cannot run, select the development `runc` backend before starting Compose (it runs the launcher privileged, so use it only on your own machine):
+
+```sh
+export SANDBOX_BACKEND=runc COMPOSE_FILE=compose.yaml:../sandbox/compose.runc.yaml
 ```
 
 This starts the gateway, Redis, a local OIDC token issuer, the Code Mode sandbox host, and five FastMCP mock servers (`directory`, `payments`, `notes`, `older`, and `changing`), publishes an example policy set, and runs the automated verification suite against [`examples/expected.json`](examples/expected.json) across both supported MCP protocol versions.

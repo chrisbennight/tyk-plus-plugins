@@ -32,9 +32,11 @@ keeps the images already built; re-running all jobs would rebuild them, and
 the workflow refuses to give a version tag to a different image. A release
 that needs a code change gets the next version.
 
-The release workflow creates the three packages in GitHub Container
-Registry and links them to this repository, so they are public like the
-repository and anyone can pull and verify the images without signing in.
+The release workflow publishes three packages to GitHub Container Registry
+and links them to this repository. The packages take the repository's access
+permissions but not its visibility. All three are public, so anyone can pull
+and verify the images without signing in. If a release creates a new package
+and it is private, make it public in the package's settings.
 
 The [release workflow](.github/workflows/release.yml) then:
 

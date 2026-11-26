@@ -20,7 +20,7 @@
 # Reports are written to DIR, a new temporary directory unless given.
 #
 # Needs Docker with the containerd image store, which can push images with
-# SBOMs attached, plus jq and python3.
+# SBOMs attached, plus curl, column, jq and python3.
 set -euo pipefail
 
 platform=
@@ -53,12 +53,16 @@ fi
 registry=registry:3@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c
 container=
 pushed=()
+work=$(mktemp -d)
 cleanup() {
   # Checking an image pulls it into Docker; remove what this run added.
   for ref in ${pushed[@]+"${pushed[@]}"}; do
     docker image rm "$ref" >/dev/null 2>&1 || true
   done
-  if [ -n "$container" ]; then docker rm -f "$container" >/dev/null; fi
+  # -v also removes the registry's anonymous volume, which holds the pushed
+  # images.
+  if [ -n "$container" ]; then docker rm -f -v "$container" >/dev/null; fi
+  rm -rf "$work"
 }
 trap cleanup EXIT
 
@@ -76,7 +80,7 @@ curl -fsS -o /dev/null "http://$host/v2/"
 # pushes through Docker itself and so reaches the registry on localhost.
 bake_args=(--builder "$(docker context show)" -f "$root/docker-bake.hcl"
   --set "*.platform=$platform" --set "*.attest=type=sbom"
-  --metadata-file "$out/build.json")
+  --metadata-file "$work/build.json")
 for name in "${images[@]}"; do
   bake_args+=(--set "$name.tags=$host/$name:check" --set "$name.output=type=registry")
   # Listed before the build, so an image stored before another fails to
@@ -84,14 +88,13 @@ for name in "${images[@]}"; do
   pushed+=("$host/$name:check")
   rm -f "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" "$out/$name.vulnerabilities.txt"
 done
-rm -f "$out/build.json"
 echo "Building ${images[*]} for $platform"
 (cd "$root" && docker buildx bake "${bake_args[@]}" "${images[@]}")
 
 export IMAGE_PLATFORM=$platform
 failures=()
 for name in "${images[@]}"; do
-  digest=$(jq -r --arg name "$name" '.[$name]["containerimage.digest"]' "$out/build.json")
+  digest=$(jq -r --arg name "$name" '.[$name]["containerimage.digest"]' "$work/build.json")
   image=$host/$name@$digest
   pushed+=("$image")
   echo

@@ -27,8 +27,8 @@ registry on your machine, and runs the same checks a release runs on each
 image (step 3 below). It keeps going after a check fails, prints what
 failed, and keeps the SBOMs and vulnerability reports in the directory it
 names. The content check and the vulnerability scan read the SBOM, so if an
-image's SBOM cannot be written they are reported as not run. Pass image names to check only some, and `--out DIR` to choose where
-the reports go.
+image's SBOM cannot be written they are reported as not run. Pass image
+names to check only some, and `--out DIR` to choose where the reports go.
 
 The images are built for the platform Docker runs natively. Releases are
 `linux/amd64`; on an arm64 machine the images contain the same packages apart
@@ -36,8 +36,8 @@ from a few that Go compiles in only for one architecture. `--platform`
 chooses another platform, but that build runs under emulation, where the
 admin image's race-detector tests crash. The script needs Docker with the
 [containerd image store](https://docs.docker.com/engine/storage/containerd/),
-`jq` and `python3`. It does not run the Compose tests, which run on every
-push.
+`curl`, `column`, `jq` and `python3`. It does not run the Compose tests,
+which run on every push.
 
 ## Cut a release
 

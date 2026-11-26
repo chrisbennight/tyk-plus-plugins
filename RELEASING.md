@@ -5,7 +5,7 @@ with the same version, and a GitHub release that describes them:
 
 | Image | Contents |
 |---|---|
-| `ghcr.io/chrisbennight/tyk-plus-plugins/gateway` | Tyk Gateway with the MCP policy plug-in and the shipped policy store |
+| `ghcr.io/chrisbennight/tyk-plus-plugins/gateway` | Tyk Gateway, built from Tyk's source with the same Go release as the MCP policy plug-in, with the plug-in and the shipped policy store |
 | `ghcr.io/chrisbennight/tyk-plus-plugins/admin` | The drift review dashboard |
 | `ghcr.io/chrisbennight/tyk-plus-plugins/sandbox` | The Code Mode sandbox host, with the gVisor backend only |
 

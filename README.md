@@ -1,8 +1,6 @@
 # Tyk Plus Plugins
 
 <picture>
-  <source media="(max-width: 600px) and (prefers-color-scheme: dark)" srcset="docs/branding/assets/wordmark-on-dark.svg">
-  <source media="(max-width: 600px)" srcset="docs/branding/assets/wordmark-on-light.svg">
   <source media="(prefers-color-scheme: dark)" srcset="docs/branding/assets/header-dark.svg">
   <img src="docs/branding/assets/header-light.svg" width="760" alt="MCP clients connect through Tyk Plus to Cedar policy, drift review, and sandboxed Code Mode.">
 </picture>
@@ -97,11 +95,7 @@ docker compose up --build -d
 docker compose run --build --rm runner
 ```
 
-Code Mode in the lab uses the production gVisor sandbox backend by default. On a development machine where gVisor cannot run, select the development `runc` backend before starting Compose (it runs the launcher privileged, so use it only on your own machine):
-
-```sh
-export SANDBOX_BACKEND=runc COMPOSE_FILE=compose.yaml:../sandbox/compose.runc.yaml
-```
+Code Mode in the lab uses the production gVisor sandbox backend by default; on a development machine where gVisor cannot run, see [`examples/README.md`](examples/README.md#run) for the development `runc` override.
 
 This starts the gateway, Redis, a local OIDC token issuer, the Code Mode sandbox host, and five FastMCP mock servers (`directory`, `payments`, `notes`, `older`, and `changing`), publishes an example policy set, and runs the automated verification suite against [`examples/expected.json`](examples/expected.json) across both supported MCP protocol versions.
 

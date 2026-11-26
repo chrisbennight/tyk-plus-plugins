@@ -1,0 +1,9 @@
+# Runs the sandbox host from a released image instead of a fresh build. Set
+# SANDBOX_IMAGE to a digest reference.
+services:
+  sandbox-launcher:
+    build: !reset null
+    image: ${SANDBOX_IMAGE:?set SANDBOX_IMAGE}
+  sandbox:
+    build: !reset null
+    image: ${SANDBOX_IMAGE:?set SANDBOX_IMAGE}

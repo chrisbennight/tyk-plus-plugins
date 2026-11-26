@@ -1,7 +1,7 @@
 # The sandbox host image: the network-facing sandbox service, the root launcher
 # helper, the gVisor runtime, and the read-only worker image every sandbox
 # runs. The "dev" target adds runc for machines without gVisor.
-FROM golang:1.26.10-trixie AS build
+FROM golang:1.26.11-trixie@sha256:f9e99477a80ccd7adfb69780510b22c7249ce9169885f18aa762cd886e75e018 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY protocol/go.mod protocol/
@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     cp /out/sandbox-worker /rootfs/worker && \
     /out/sandbox-worker precompile /rootfs/cache
 
-FROM debian:trixie-slim AS gvisor
+FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 AS gvisor
 # gVisor release 20261116.0, verified against checksums recorded when it was
 # chosen rather than ones fetched alongside the download.
 ARG TARGETARCH
@@ -33,7 +33,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-cert
 # Development only: adds runc and a launcher built with the runc backend, for
 # machines without gVisor. Never released; select it with the target "dev", as
 # compose.runc.yaml does.
-FROM debian:trixie-slim AS dev
+FROM debian:trixie-slim@sha256:8aa5a7bf5a1955bddbe7d74fcdd0b91ab30e74362a8b73af672b0481b35b44a0 AS dev
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends runc >/dev/null && rm -rf /var/lib/apt/lists/*
 COPY --from=gvisor /gvisor/runsc /usr/local/bin/runsc
 COPY --from=gvisor /gvisor/gvisor-bin/gvisor_sentry /gvisor/gvisor-bin/gvisor-sentry-prewarmer /gvisor/gvisor-bin/gvisor-proc-umounter /gvisor/gvisor-bin/runsc-fd-parking /usr/local/bin/gvisor-bin/
@@ -45,7 +45,7 @@ RUN runsc --version && runc --version
 
 # The released image: only what the gVisor backend needs, on a distroless
 # base with no shell or package manager. It is the default target.
-FROM gcr.io/distroless/static-debian13 AS release
+FROM gcr.io/distroless/static-debian13@sha256:4c2cd1dee442c9a99924a378c7c126fac8fef14771579ef567c3f2bdd7a5122a AS release
 COPY --from=gvisor /gvisor/runsc /usr/local/bin/runsc
 COPY --from=gvisor /gvisor/gvisor-bin/gvisor_sentry /gvisor/gvisor-bin/gvisor-sentry-prewarmer /gvisor/gvisor-bin/gvisor-proc-umounter /gvisor/gvisor-bin/runsc-fd-parking /usr/local/bin/gvisor-bin/
 COPY --from=build /out/sandbox-launcher /out/sandbox-service /usr/local/bin/

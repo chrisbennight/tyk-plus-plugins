@@ -1,0 +1,315 @@
+name: Release
+# Pushing a vX.Y.Z or vX.Y.Z-rc.N tag on main builds the gateway, admin and
+# sandbox images once, tests and scans those exact images, attests them, and
+# only then gives them version tags and publishes the GitHub release.
+on:
+  push:
+    tags: ["v*"]
+permissions: {}
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      minor: ${{ steps.tag.outputs.minor }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.[0-9]+)?$ ]]; then
+            echo "::error::$TAG is not vX.Y.Z or vX.Y.Z-rc.N"
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor "$(git rev-parse "$TAG^{commit}")" origin/main; then
+            echo "::error::$TAG is not on main"
+            exit 1
+          fi
+          {
+            echo "version=${TAG#v}"
+            echo "minor=${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+            if [ -n "${BASH_REMATCH[4]}" ]; then echo prerelease=true; else echo prerelease=false; fi
+          } >> "$GITHUB_OUTPUT"
+
+  # Docker's reusable Bake workflow builds each image from the Git source of
+  # the tagged commit in its own isolated job, with an SBOM and signed SLSA
+  # provenance, and pushes it under a candidate tag only.
+  build-gateway:
+    needs: check
+    uses: docker/github-builder/.github/workflows/bake.yml@bb1eb9fb69408ac52395fb21f49c6b52d564529a # v1.20.0
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      target: gateway
+      output: image
+      push: true
+      sbom: true
+      set-meta-labels: true
+      set-meta-annotations: true
+      meta-images: ghcr.io/chrisbennight/tyk-plus-plugins/gateway
+      meta-tags: type=sha,prefix=sha-,format=long
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  build-admin:
+    needs: check
+    uses: docker/github-builder/.github/workflows/bake.yml@bb1eb9fb69408ac52395fb21f49c6b52d564529a # v1.20.0
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      target: admin
+      output: image
+      push: true
+      sbom: true
+      set-meta-labels: true
+      set-meta-annotations: true
+      meta-images: ghcr.io/chrisbennight/tyk-plus-plugins/admin
+      meta-tags: type=sha,prefix=sha-,format=long
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  build-sandbox:
+    needs: check
+    uses: docker/github-builder/.github/workflows/bake.yml@bb1eb9fb69408ac52395fb21f49c6b52d564529a # v1.20.0
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      target: sandbox
+      output: image
+      push: true
+      sbom: true
+      set-meta-labels: true
+      set-meta-annotations: true
+      meta-images: ghcr.io/chrisbennight/tyk-plus-plugins/sandbox
+      meta-tags: type=sha,prefix=sha-,format=long
+    secrets:
+      registry-auths: |
+        - registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  # The same suites that run on every push, on the candidate images.
+  test:
+    needs: [build-gateway, build-admin, build-sandbox]
+    uses: ./.github/workflows/compose.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      gateway-image: ghcr.io/chrisbennight/tyk-plus-plugins/gateway@${{ needs.build-gateway.outputs.digest }}
+      admin-image: ghcr.io/chrisbennight/tyk-plus-plugins/admin@${{ needs.build-admin.outputs.digest }}
+      sandbox-image: ghcr.io/chrisbennight/tyk-plus-plugins/sandbox@${{ needs.build-sandbox.outputs.digest }}
+
+  scan:
+    name: Scan (${{ matrix.image }})
+    needs: [check, build-gateway, build-admin, build-sandbox]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gateway, admin, sandbox]
+    env:
+      IMAGE: ghcr.io/chrisbennight/tyk-plus-plugins/${{ matrix.image }}@${{ needs[format('build-{0}', matrix.image)].outputs.digest }}
+      NAME: ${{ matrix.image }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sign in to the registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Write the SBOM
+        run: mkdir out && release/sbom.sh "$IMAGE" "$TAG" > "out/$NAME.spdx.json"
+      - name: Check for a shell, a package manager or runc
+        run: release/check-image.sh "$IMAGE" "out/$NAME.spdx.json"
+      - name: Scan the SBOM for vulnerabilities
+        run: release/scan.sh "out/$NAME.spdx.json" "out/$NAME.vulnerabilities.json" | tee "out/$NAME.vulnerabilities.txt"
+      - name: Check this repository's binaries for vulnerable code they call
+        run: release/govulncheck.sh "$IMAGE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scan-${{ matrix.image }}
+          path: out/
+          if-no-files-found: error
+
+  attest:
+    name: Attest (${{ matrix.image }})
+    needs: [build-gateway, build-admin, build-sandbox, test, scan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    strategy:
+      fail-fast: true
+      matrix:
+        image: [gateway, admin, sandbox]
+    env:
+      NAME: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: scan-${{ matrix.image }}
+          path: out
+      - name: Sign in to the registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/chrisbennight/tyk-plus-plugins/${{ matrix.image }}
+          subject-digest: ${{ needs[format('build-{0}', matrix.image)].outputs.digest }}
+          push-to-registry: true
+      - name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ghcr.io/chrisbennight/tyk-plus-plugins/${{ matrix.image }}
+          subject-digest: ${{ needs[format('build-{0}', matrix.image)].outputs.digest }}
+          sbom-path: out/${{ matrix.image }}.spdx.json
+          push-to-registry: true
+
+  publish:
+    needs: [check, build-gateway, build-admin, build-sandbox, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      REPOSITORY: ghcr.io/chrisbennight/tyk-plus-plugins
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.check.outputs.version }}
+      MINOR: ${{ needs.check.outputs.minor }}
+      PRERELEASE: ${{ needs.check.outputs.prerelease }}
+      GATEWAY_DIGEST: ${{ needs.build-gateway.outputs.digest }}
+      ADMIN_DIGEST: ${{ needs.build-admin.outputs.digest }}
+      SANDBOX_DIGEST: ${{ needs.build-sandbox.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: scan-*
+          path: assets
+          merge-multiple: true
+      - name: Sign in to the registry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Copy the cedar-policy command out of the gateway image
+        run: |
+          container=$(docker create "$REPOSITORY/gateway@$GATEWAY_DIGEST" /none)
+          docker cp "$container:/opt/tyk-gateway/bin/cedar-policy" assets/cedar-policy-linux-amd64
+          docker rm "$container"
+      - name: Attest the cedar-policy command
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: assets/cedar-policy-linux-amd64
+      - name: Tag the tested images with the version
+        run: |
+          for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
+            read -r name digest <<< "$pair"
+            tags=(-t "$REPOSITORY/$name:$VERSION")
+            if [ "$PRERELEASE" = false ]; then
+              tags+=(-t "$REPOSITORY/$name:$MINOR" -t "$REPOSITORY/$name:latest")
+            fi
+            docker buildx imagetools create "${tags[@]}" "$REPOSITORY/$name@$digest"
+            # A version tag must name exactly the image that was tested.
+            tagged=$(docker buildx imagetools inspect "$REPOSITORY/$name:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+            if [ "$tagged" != "$digest" ]; then
+              echo "::error::$name:$VERSION is $tagged, not the tested $digest"
+              exit 1
+            fi
+          done
+      - name: Write the release notes
+        run: |
+          (cd assets && sha256sum -- * > SHA256SUMS)
+          {
+            echo "## Images"
+            echo
+            echo "| Image | Digest |"
+            echo "|---|---|"
+            echo "| \`$REPOSITORY/gateway:$VERSION\` | \`$GATEWAY_DIGEST\` |"
+            echo "| \`$REPOSITORY/admin:$VERSION\` | \`$ADMIN_DIGEST\` |"
+            echo "| \`$REPOSITORY/sandbox:$VERSION\` | \`$SANDBOX_DIGEST\` |"
+            echo
+            echo "Each image was built once from \`$TAG\` (linux/amd64), tested and scanned, and then tagged; the digests above are the tested images."
+            echo
+            echo "## Verify"
+            echo
+            echo "Check that an image was built by this repository's release workflow, and read its SBOM:"
+            echo
+            echo '```sh'
+            echo "gh attestation verify oci://$REPOSITORY/gateway@$GATEWAY_DIGEST \\"
+            echo "  --repo chrisbennight/tyk-plus-plugins \\"
+            echo "  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml"
+            echo "gh attestation verify oci://$REPOSITORY/gateway@$GATEWAY_DIGEST \\"
+            echo "  --repo chrisbennight/tyk-plus-plugins \\"
+            echo "  --predicate-type https://spdx.dev/Document/v2.3"
+            echo "gh attestation verify cedar-policy-linux-amd64 --repo chrisbennight/tyk-plus-plugins"
+            echo '```'
+            echo
+            echo "Use the same commands for \`admin\` and \`sandbox\` with their digests. See [RELEASING.md](https://github.com/chrisbennight/tyk-plus-plugins/blob/$TAG/RELEASING.md) for what each check proves."
+            echo
+            echo "## Vulnerability scan"
+            echo
+            echo "No image has a critical vulnerability, or a high one with a fix, that \`release/vex.json\` does not cover. Every finding is listed below and in the \`*.vulnerabilities.json\` assets."
+            for name in gateway admin sandbox; do
+              echo
+              echo "### $name"
+              echo
+              echo '```'
+              cat "assets/$name.vulnerabilities.txt"
+              echo '```'
+            done
+          } > notes.md
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          # Assets can be added only while the release is a draft; publishing
+          # makes the release and its assets immutable.
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}" \
+            assets/*.spdx.json assets/*.vulnerabilities.json assets/cedar-policy-linux-amd64 assets/SHA256SUMS
+          gh release edit "$TAG" --draft=false

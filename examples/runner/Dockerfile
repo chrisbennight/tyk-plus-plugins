@@ -2,7 +2,7 @@
 # The check that policy/checks.json matches expected.json is left to "runner
 # run", which refuses to start while they differ; failing the build instead
 # would also block the runner that regenerates them.
-FROM golang:1.26.10-trixie AS build
+FROM golang:1.26.11-trixie AS build
 WORKDIR /src
 COPY . .
 WORKDIR /src/runner

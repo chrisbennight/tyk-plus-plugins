@@ -1,0 +1,63 @@
+name: Rescan release
+# Vulnerabilities are found after a release ships. Each week, scan the latest
+# release's SBOMs against a fresh vulnerability database with the release gate,
+# and open an issue if they no longer pass.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: rescan
+  cancel-in-progress: false
+
+jobs:
+  rescan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan the latest release
+        run: |
+          if ! tag=$(gh release view --json tagName --jq .tagName 2>/dev/null); then
+            echo "No release to scan yet."
+            exit 0
+          fi
+          mkdir sboms
+          gh release download "$tag" --pattern '*.spdx.json' --dir sboms
+          failed=()
+          {
+            echo "Scanned the SBOMs of $tag against today's vulnerability database."
+            for sbom in sboms/*.spdx.json; do
+              name=$(basename "$sbom" .spdx.json)
+              echo
+              echo "### $name"
+              echo
+              echo '```'
+              if ! release/scan.sh "$sbom" "$name.vulnerabilities.json" 2>&1; then failed+=("$name"); fi
+              echo '```'
+            done
+          } > report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ ${#failed[@]} -eq 0 ]; then exit 0; fi
+
+          title="Release $tag has new vulnerabilities"
+          if [ -n "$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[].number')" ]; then
+            echo "An open issue already tracks $tag."
+          else
+            {
+              echo "The weekly rescan found a critical vulnerability, or a high one with a fix, in: ${failed[*]}."
+              echo "Release a fix, or record why the release is not affected in \`release/vex.json\`."
+              echo
+              cat report.md
+            } > issue.md
+            gh issue create --title "$title" --body-file issue.md
+          fi
+          exit 1

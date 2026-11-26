@@ -1,7 +1,24 @@
 name: Compose
-on: [push, pull_request]
+on:
+  push:
+  pull_request:
+  # The release workflow runs the same suites on the images it is about to
+  # publish, given as digest references, instead of fresh builds.
+  workflow_call:
+    inputs:
+      gateway-image:
+        type: string
+        required: true
+      admin-image:
+        type: string
+        required: true
+      sandbox-image:
+        type: string
+        required: true
 permissions:
   contents: read
+  # To pull release candidates before they are published.
+  packages: read
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -25,13 +42,26 @@ jobs:
       UPSTREAM_STREAM: ${{ matrix.stream }}
       UPSTREAM_SESSIONS: ${{ matrix.sessions }}
       UPSTREAM_DISCOVERY: ${{ matrix.discovery }}
+      GATEWAY_IMAGE: ${{ inputs.gateway-image }}
+      ADMIN_IMAGE: ${{ inputs.admin-image }}
+      SANDBOX_IMAGE: ${{ inputs.sandbox-image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sign in to the registry
+        if: inputs.gateway-image != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Verify Cedar authorization through Tyk
         run: |
           export TYK_GW_SECRET="$(openssl rand -hex 32)"
           export TYK_GW_NODESECRET="$(openssl rand -hex 32)"
           export COMPOSE_FILE=compose.yaml:tests/compose.yaml
+          if [ -n "$GATEWAY_IMAGE" ]; then
+            COMPOSE_FILE="$COMPOSE_FILE:tests/release.compose.yaml:tests/release-sandbox.compose.yaml"
+          fi
           trap 'docker compose down -v' EXIT
           docker compose build
           docker compose up -d gateway upstream issuer
@@ -45,31 +75,48 @@ jobs:
         run: |
           # The benchmark starts no gateway; Compose still requires its secrets to be set.
           export TYK_GW_SECRET=unused TYK_GW_NODESECRET=unused
+          if [ -n "$GATEWAY_IMAGE" ]; then
+            export COMPOSE_FILE=compose.yaml:tests/release.compose.yaml
+          fi
           docker compose run --rm --no-deps --entrypoint /opt/tyk-gateway/bin/cedar-policy gateway bench -synthetic -rules 1000 -proxies 10 -tools 1000
   shared-store:
+    # It tests the policy store's source, not an image.
+    if: inputs.gateway-image == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Publish into a shared policy store as several users
-        run: docker run --rm -v "$PWD":/w -w /w golang:1.26.10-trixie bash tests/shared-store.sh
+        run: docker run --rm -v "$PWD":/w -w /w golang:1.26.11-trixie bash tests/shared-store.sh
   sandbox:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # The Code Mode sandbox host with its production gVisor backend, launched
-    # without --privileged, and with the runc development backend.
+    # without --privileged, and with the runc development backend. Release
+    # images have only the gVisor backend.
     strategy:
       fail-fast: false
       matrix:
-        backend: [gvisor, runc]
+        backend: ${{ fromJSON(inputs.sandbox-image != '' && '["gvisor"]' || '["gvisor", "runc"]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Sign in to the registry
+        if: inputs.sandbox-image != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Verify the sandbox host
         env:
           SANDBOX_BACKEND: ${{ matrix.backend }}
+          SANDBOX_IMAGE: ${{ inputs.sandbox-image }}
         run: |
           export COMPOSE_FILE=sandbox/compose.yaml:tests/sandbox.compose.yaml
           if [ "$SANDBOX_BACKEND" = runc ]; then COMPOSE_FILE="$COMPOSE_FILE:sandbox/compose.runc.yaml"; fi
+          if [ -n "$SANDBOX_IMAGE" ]; then COMPOSE_FILE="$COMPOSE_FILE:tests/release-sandbox.compose.yaml"; fi
           trap 'docker compose logs sandbox-launcher sandbox; docker compose down -v' EXIT
           docker compose build sandbox-launcher sandbox sandbox-certs sandbox-probe
           docker compose up -d sandbox-launcher sandbox

@@ -1,5 +1,7 @@
-FROM --platform=linux/amd64 tykio/tyk-plugin-compiler:v5.16.0 AS tyk
-FROM golang:1.26.10-trixie AS compiler
+FROM --platform=linux/amd64 tykio/tyk-plugin-compiler:v5.16.0@sha256:ae914c7906034fe7bbaa4175bcffea18cd055be2777990a4b06431041bd54cfa AS tyk
+# A Go plug-in loads only into a binary built with the same Go release, so this
+# must be the Go version of the Tyk release above (`tyk version` reports it).
+FROM golang:1.26.10-trixie@sha256:fd9a91f0ece5664556f4851d06dce5e5b505a71166dffd385a03ba9d200b6983 AS compiler
 WORKDIR /src
 COPY --from=tyk /go/src/github.com/TykTechnologies/tyk ./tyk
 COPY --from=mcp-pdp . ./plugins/mcp-pdp
@@ -15,7 +17,7 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 COPY policy/rules.cedar policy/approved_tools.json policy/approved_instructions.json policy/checks.json /default-policy/
 RUN /cedar-policy promote -store /store -label default /default-policy && mkdir /status /pending
 
-FROM tykio/tyk-gateway:v5.16.0 AS gateway
+FROM tykio/tyk-gateway:v5.16.0@sha256:7af43f37fcae9bccf050c934e51a2ba710c48b5916290da13ef36fcdee3c60c1 AS gateway
 COPY --from=compiler /mcp-pdp.so /opt/tyk-gateway/middleware/mcp-pdp.so
 COPY --from=compiler /cedar-policy /opt/tyk-gateway/bin/cedar-policy
 COPY tyk.conf /opt/tyk-gateway/tyk.conf
@@ -30,8 +32,10 @@ COPY --from=compiler --chown=65532:65532 /status /opt/tyk-gateway/cedar-status
 COPY --from=compiler --chown=65532:65532 /pending /opt/tyk-gateway/cedar-pending
 
 # Tests only: a second proxy, made from the shipped one, so Code Mode can be
-# tested calling tools across proxies. Build it with the target "test".
-FROM compiler AS second-proxy
+# tested calling tools across proxies. Build it with the target "test". It
+# needs no compiled code, so the release workflow can add it to a released
+# gateway image without rebuilding the plug-in.
+FROM golang:1.26.10-trixie@sha256:fd9a91f0ece5664556f4851d06dce5e5b505a71166dffd385a03ba9d200b6983 AS second-proxy
 COPY apps /apps
 RUN mkdir /second && for suffix in "" -mcp; do \
       sed -e 's/"governed"/"governed2"/' -e 's#"/mcp/"#"/mcp2/"#' -e 's/"Governed MCP"/"Governed MCP 2"/' \

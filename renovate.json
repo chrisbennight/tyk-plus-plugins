@@ -4,11 +4,9 @@
   "minimumReleaseAge": "7 days",
   "packageRules": [
     {
-      "description": "The gateway plug-in must be compiled with the Go release Tyk itself was built with, so its Go version changes only with Tyk; digest updates for the same version still apply.",
-      "matchFileNames": ["gateway/Dockerfile"],
-      "matchPackageNames": ["golang"],
-      "matchUpdateTypes": ["major", "minor", "patch"],
-      "enabled": false
+      "description": "Tyk's source and its release image must be the same Tyk release; the gateway build fails otherwise.",
+      "matchPackageNames": ["tykio/tyk-plugin-compiler", "tykio/tyk-gateway"],
+      "groupName": "Tyk"
     }
   ]
 }

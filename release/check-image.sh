@@ -41,16 +41,16 @@ if [ -s "$work/executables" ]; then
   failed=1
 fi
 
-# Debian packages and Go modules for the same tools, as the SBOM lists them.
+# Debian packages for the same tools, as the SBOM lists them. Go modules are
+# not checked by name: Tyk compiles in parts of the runc module as a library,
+# which is not the runc runtime, and the vulnerability scan covers it.
 jq -r --arg re "$forbidden" '
   .packages[]
   | (.externalRefs // [])[]
   | select(.referenceType == "purl")
   | .referenceLocator
-  | select(
-      (startswith("pkg:deb/") and (ltrimstr("pkg:deb/") | split("/")[1] | split("@")[0] | test($re)))
-      or startswith("pkg:golang/github.com/opencontainers/runc@")
-    )' "$sbom" | sort -u > "$work/packages"
+  | select(startswith("pkg:deb/") and (ltrimstr("pkg:deb/") | split("/")[1] | split("@")[0] | test($re)))
+  ' "$sbom" | sort -u > "$work/packages"
 if [ -s "$work/packages" ]; then
   sed "s|^|$image SBOM lists |" "$work/packages" >&2
   failed=1

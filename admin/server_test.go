@@ -346,7 +346,12 @@ func TestBrowsersSendTheOriginWithForms(t *testing.T) {
 	if policy := res.Header.Get("Referrer-Policy"); policy != "same-origin" {
 		t.Fatalf("Referrer-Policy %q", policy)
 	}
-	if page := body(t, res); !strings.Contains(page, `/extensions/admin/favicon.svg`) || !strings.Contains(page, "Tyk Plus · Drift review") {
+	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self'") {
+		t.Fatalf("Content-Security-Policy %q", csp)
+	}
+	if page := body(t, res); !strings.Contains(page, `/extensions/admin/favicon.svg`) ||
+		!strings.Contains(page, `<a class="brand" href="/extensions/admin/"><svg`) ||
+		!strings.Contains(page, "Tyk Plus · Drift review") {
 		t.Fatalf("brand header:\n%s", page)
 	}
 	icon := d.get("/favicon.svg", nil)

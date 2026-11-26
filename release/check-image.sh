@@ -25,14 +25,14 @@ container=$(docker create "$image" /none)
 docker export "$container" > "$work/image.tar"
 tar -tf "$work/image.tar" > "$work/files"
 
-# Any executable file or symbolic link with a forbidden name, wherever it is.
+# Any executable file or link with a forbidden name, wherever it is.
 # Files that are not executable, such as /usr/share/menu/bash, do not count.
 python3 -I - "$work/image.tar" "$forbidden" > "$work/executables" <<'PY'
 import re, sys, tarfile
 forbidden = re.compile(sys.argv[2])
 with tarfile.open(sys.argv[1]) as image:
     for member in image:
-        if member.issym() or (member.isfile() and member.mode & 0o111):
+        if member.issym() or member.islnk() or (member.isfile() and member.mode & 0o111):
             if forbidden.match(member.name.rsplit("/", 1)[-1]):
                 print("/" + member.name.removeprefix("./"))
 PY
@@ -60,7 +60,7 @@ fi
 # "dev" tag, which Go records in the binary.
 if grep -qx 'usr/local/bin/sandbox-launcher' "$work/files"; then
   docker cp "$container:/usr/local/bin/sandbox-launcher" "$work/sandbox-launcher"
-  docker run --rm -i --network none golang:1.26.11-trixie \
+  docker run --rm -i --network none golang:1.26.11-trixie@sha256:f9e99477a80ccd7adfb69780510b22c7249ce9169885f18aa762cd886e75e018 \
     sh -c 'cat > /tmp/sandbox-launcher && go version -m /tmp/sandbox-launcher' \
     < "$work/sandbox-launcher" > "$work/buildinfo"
   if grep -E '^[[:space:]]+build[[:space:]]+-tags=' "$work/buildinfo" | grep -qw dev; then

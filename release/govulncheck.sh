@@ -39,7 +39,7 @@ fi
 
 # The scanner reads the binaries from standard input, as a tar stream, so it
 # needs no access to the host's files.
-tar -C "$work/bin" -c . | docker run --rm -i golang:1.26.11-trixie sh -ec '
+tar -C "$work/bin" -c . | docker run --rm -i golang:1.26.11-trixie@sha256:f9e99477a80ccd7adfb69780510b22c7249ce9169885f18aa762cd886e75e018 sh -ec '
   mkdir /scan && tar -C /scan -x
   status=0
   for binary in /scan/*; do

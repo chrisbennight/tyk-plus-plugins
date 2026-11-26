@@ -79,7 +79,11 @@ bake_args=(--builder "$(docker context show)" -f "$root/docker-bake.hcl"
   --metadata-file "$out/build.json")
 for name in "${images[@]}"; do
   bake_args+=(--set "$name.tags=$host/$name:check" --set "$name.output=type=registry")
+  # Listed before the build, so an image stored before another fails to
+  # build is still removed.
+  pushed+=("$host/$name:check")
 done
+rm -f "$out/build.json"
 echo "Building ${images[*]} for $platform"
 (cd "$root" && docker buildx bake "${bake_args[@]}" "${images[@]}")
 
@@ -88,25 +92,29 @@ failures=()
 for name in "${images[@]}"; do
   digest=$(jq -r --arg name "$name" '.[$name]["containerimage.digest"]' "$out/build.json")
   image=$host/$name@$digest
-  pushed+=("$image" "$host/$name:check")
+  pushed+=("$image")
   echo
   echo "== $name ($digest)"
+  rm -f "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" "$out/$name.vulnerabilities.txt"
 
-  if ! "$release/sbom.sh" "$image" "$version" > "$out/$name.spdx.json"; then
-    failures+=("$name: could not write the SBOM")
-    continue
+  # The content check and the scan read the SBOM; govulncheck reads only
+  # the image.
+  if "$release/sbom.sh" "$image" "$version" > "$out/$name.spdx.json"; then
+    if ! "$release/check-image.sh" "$image" "$out/$name.spdx.json"; then
+      failures+=("$name: the image content check failed; see its messages above")
+    fi
+    status=0
+    "$release/scan.sh" "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" \
+      | tee "$out/$name.vulnerabilities.txt" || status=$?
+    case $status in
+      0) ;;
+      3) failures+=("$name: has a critical vulnerability, or a high one with a fix") ;;
+      *) failures+=("$name: the vulnerability scan did not complete") ;;
+    esac
+  else
+    rm -f "$out/$name.spdx.json"
+    failures+=("$name: could not write the SBOM, so the content check and vulnerability scan did not run")
   fi
-  if ! "$release/check-image.sh" "$image" "$out/$name.spdx.json"; then
-    failures+=("$name: contains a shell, a package manager or runc")
-  fi
-  status=0
-  "$release/scan.sh" "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" \
-    | tee "$out/$name.vulnerabilities.txt" || status=$?
-  case $status in
-    0) ;;
-    3) failures+=("$name: has a critical vulnerability, or a high one with a fix") ;;
-    *) failures+=("$name: the vulnerability scan did not complete") ;;
-  esac
   if ! "$release/govulncheck.sh" "$image"; then
     failures+=("$name: govulncheck found vulnerable code the binaries can call, or did not complete")
   fi

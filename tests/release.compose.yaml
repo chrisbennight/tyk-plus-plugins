@@ -1,0 +1,16 @@
+# Runs the smoke suite on released images instead of fresh builds. Set
+# GATEWAY_IMAGE and ADMIN_IMAGE to digest references, and add
+# release-sandbox.compose.yaml for the sandbox host.
+services:
+  gateway:
+    build:
+      # The test target adds a second proxy to the released gateway, which
+      # replaces the gateway stage of the build.
+      additional_contexts:
+        gateway: docker-image://${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
+  gateway-peer:
+    build: !reset null
+    image: ${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
+  admin:
+    build: !reset null
+    image: ${ADMIN_IMAGE:?set ADMIN_IMAGE}

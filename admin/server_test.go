@@ -346,7 +346,7 @@ func TestBrowsersSendTheOriginWithForms(t *testing.T) {
 	if policy := res.Header.Get("Referrer-Policy"); policy != "same-origin" {
 		t.Fatalf("Referrer-Policy %q", policy)
 	}
-	if csp := res.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "img-src 'self'") {
+	if csp := res.Header.Get("Content-Security-Policy"); csp != "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" {
 		t.Fatalf("Content-Security-Policy %q", csp)
 	}
 	if page := body(t, res); !strings.Contains(page, `/extensions/admin/favicon.svg`) ||

@@ -30,6 +30,11 @@ neither a release nor its assets can change. If the workflow fails before it
 publishes, re-run it for a passing failure such as a network error; a release
 that needs a code change gets the next version.
 
+The first release creates the three packages in GitHub Container Registry,
+which starts them as private. Once it has run, make each package public in
+its package settings so anyone can pull and verify the images. GitHub has no
+API for this on a personal account.
+
 The [release workflow](.github/workflows/release.yml) then:
 
 1. **Builds** each image once, from the tagged commit, with Docker's
@@ -43,8 +48,9 @@ The [release workflow](.github/workflows/release.yml) then:
      was built with the development `runc` backend;
    - its SBOM has a critical vulnerability, or a high one that has a fix,
      that [`release/vex.json`](release/vex.json) does not cover;
-   - `govulncheck` finds vulnerable code that one of this repository's
-     executables calls.
+   - `govulncheck` finds known-vulnerable functions compiled into one of this
+     repository's executables. The Go linker leaves out code nothing can
+     reach, so these are functions the program may call.
 4. **Attests** each image's build provenance and SBOM with GitHub, and stores
    the attestations in the registry next to the image.
 5. **Publishes**: gives the tested images the tags `X.Y.Z`, plus `X.Y` and
@@ -58,22 +64,27 @@ Use the digest from the release notes. With the
 
 ```sh
 image=ghcr.io/chrisbennight/tyk-plus-plugins/gateway@sha256:...
+tag=v0.1.0
 
-# Built by this repository's release workflow, from a tag.
+# Built by this repository's release workflow, from that tag.
 gh attestation verify "oci://$image" \
   --repo chrisbennight/tyk-plus-plugins \
-  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml
+  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag" \
+  --predicate-type https://slsa.dev/provenance/v1
 
-# The SBOM the release was scanned with.
+# The SBOM that release was scanned with.
 gh attestation verify "oci://$image" \
   --repo chrisbennight/tyk-plus-plugins \
+  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag" \
   --predicate-type https://spdx.dev/Document/v2.3
 ```
 
 The first check proves the image was built by the release workflow from this
-repository at the commit and tag it records, so it was tested and scanned
-before it was published. The second proves the attached SBOM describes that
-image. Add `--format json` to read either one.
+repository at that tag, so it was tested and scanned before it was published.
+The second proves the same workflow run attached the SBOM it scanned. Add
+`--format json` to read either one.
 
 The build also carries the provenance Docker's reusable workflow records and
 signs inside the isolated build job.
@@ -81,7 +92,10 @@ signs inside the isolated build job.
 Verify the `cedar-policy` command from the release assets with:
 
 ```sh
-gh attestation verify cedar-policy-linux-amd64 --repo chrisbennight/tyk-plus-plugins
+gh attestation verify cedar-policy-linux-amd64 \
+  --repo chrisbennight/tyk-plus-plugins \
+  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml \
+  --source-ref "refs/tags/$tag"
 ```
 
 ## Vulnerabilities

@@ -231,10 +231,10 @@ jobs:
       GATEWAY_DIGEST: ${{ needs.build-gateway.outputs.digest }}
       ADMIN_DIGEST: ${{ needs.build-admin.outputs.digest }}
       SANDBOX_DIGEST: ${{ needs.build-sandbox.outputs.digest }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -266,9 +266,11 @@ jobs:
               return 1
             fi
           }
-          # Moves latest, or the X.Y tag, only for the newest full release
-          # with tags, so an older or late run cannot move them backwards.
-          newest() { git tag -l 'v*' | grep -E "^v$1\$" | sort -V | tail -n 1; }
+          # Moves latest, or the X.Y tag, only if this is the newest of the
+          # published full releases in that range, so an older or late run
+          # cannot move them backwards and a failed tag does not hold them.
+          published=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')
+          newest() { printf '%s\n' "$published" "$TAG" | grep -E "^v$1\$" | sort -V | tail -n 1; }
           aliases=()
           if [ "$PRERELEASE" = false ]; then
             if [ "$(newest "${MINOR//./\\.}\\.[0-9]+")" = "$TAG" ]; then aliases+=("$MINOR"); fi
@@ -286,15 +288,22 @@ jobs:
               exit 1
             fi
           done
+          # Every image gets its version tag before any alias moves, so a
+          # failure leaves the aliases on the previous release; a rerun
+          # completes the rest.
           for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
             read -r name digest <<< "$pair"
-            tags=(-t "$REPOSITORY/$name:$VERSION")
-            for alias in "${aliases[@]}"; do tags+=(-t "$REPOSITORY/$name:$alias"); done
-            docker buildx imagetools create "${tags[@]}" "$REPOSITORY/$name@$digest"
+            docker buildx imagetools create -t "$REPOSITORY/$name:$VERSION" "$REPOSITORY/$name@$digest"
             if [ "$(tag_digest "$REPOSITORY/$name:$VERSION")" != "$digest" ]; then
               echo "::error::$name:$VERSION does not name the tested $digest"
               exit 1
             fi
+          done
+          for alias in "${aliases[@]}"; do
+            for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
+              read -r name digest <<< "$pair"
+              docker buildx imagetools create -t "$REPOSITORY/$name:$alias" "$REPOSITORY/$name@$digest"
+            done
           done
       - name: Write the release notes
         run: |
@@ -315,13 +324,15 @@ jobs:
             echo "Check that an image was built by this repository's release workflow, and read its SBOM:"
             echo
             echo '```sh'
-            echo "gh attestation verify oci://$REPOSITORY/gateway@$GATEWAY_DIGEST \\"
-            echo "  --repo chrisbennight/tyk-plus-plugins \\"
-            echo "  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml"
-            echo "gh attestation verify oci://$REPOSITORY/gateway@$GATEWAY_DIGEST \\"
-            echo "  --repo chrisbennight/tyk-plus-plugins \\"
-            echo "  --predicate-type https://spdx.dev/Document/v2.3"
-            echo "gh attestation verify cedar-policy-linux-amd64 --repo chrisbennight/tyk-plus-plugins"
+            for predicate in https://slsa.dev/provenance/v1 https://spdx.dev/Document/v2.3; do
+              echo "gh attestation verify oci://$REPOSITORY/gateway@$GATEWAY_DIGEST \\"
+              echo "  --repo chrisbennight/tyk-plus-plugins \\"
+              echo "  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml \\"
+              echo "  --source-ref refs/tags/$TAG --predicate-type $predicate"
+            done
+            echo "gh attestation verify cedar-policy-linux-amd64 --repo chrisbennight/tyk-plus-plugins \\"
+            echo "  --signer-workflow chrisbennight/tyk-plus-plugins/.github/workflows/release.yml \\"
+            echo "  --source-ref refs/tags/$TAG"
             echo '```'
             echo
             echo "Use the same commands for \`admin\` and \`sandbox\` with their digests. See [RELEASING.md](https://github.com/chrisbennight/tyk-plus-plugins/blob/$TAG/RELEASING.md) for what each check proves."

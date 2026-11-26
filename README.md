@@ -28,10 +28,10 @@ Connecting AI agents directly to MCP servers creates three operational hazards:
 
 ### 1. Cedar authorization that never takes an upstream's word for it
 
-* **Default-deny with no built-in roles:** The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call until you approve a tool and write a rule in [`rules.cedar`](gateway/policy/README.md#rules).
+* **Default-deny with no built-in roles:** The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call until you write a rule in [`rules.cedar`](gateway/policy/README.md#rules) and—for upstream tools—add the tool to [`approved_tools.json`](gateway/policy/README.md#tools-and-reviewed-facts) (built-in `codemode.*` tools on Code Mode proxies are answered by the plug-in itself and authorized directly by your Cedar rules).
 * **Reviewed facts vs. upstream claims:** Operators attach reviewed facts and tags to tools in [`approved_tools.json`](gateway/policy/README.md#tools-and-reviewed-facts). Upstream annotations (such as `readOnlyHint`) can only **narrow** an otherwise permitted call—a false read-only claim from an upstream never grants access.
 * **Argument-level rules:** Cedar rules evaluate the caller's identity (OpenID Connect token claims for people, Tyk key metadata for service accounts), reviewed tool facts, and typed top-level call arguments (for example, allowing refunds only when `environment` is `test`). On proxies under [drift review](gateway/policy/README.md#drift-review), `tools/list` also leaves out any upstream tool that Cedar shows no arguments could ever let that caller invoke, keeping the model's context window focused.
-* **Uniform refusals:** A call to a tool that is forbidden by Cedar rules, held by drift review, or not in `approved_tools.json` returns the exact same JSON-RPC error (`-32002: Tool call denied`), so callers cannot distinguish a policy denial from an unapproved tool.
+* **Uniform refusals:** A call to a tool that is forbidden by Cedar rules, held by drift review, or an upstream tool not in `approved_tools.json` returns the exact same JSON-RPC error (`-32002: Tool call denied`), so callers cannot distinguish a policy denial from an unapproved tool.
 
 ### 2. Upstream drift quarantine and adversarial diff review
 
@@ -97,13 +97,13 @@ docker compose run --build --rm runner
 
 Code Mode in the lab uses the production gVisor sandbox backend by default; on a development machine where gVisor cannot run, see [`examples/README.md`](examples/README.md#run) for the development `runc` override.
 
-This starts the gateway, Redis, a local OIDC token issuer, the Code Mode sandbox host, and five FastMCP mock servers (`directory`, `payments`, `notes`, `older`, and `changing`), publishes an example policy set, and runs the automated verification suite against [`examples/expected.json`](examples/expected.json) across both supported MCP protocol versions.
+This starts the gateway, Redis, a local token issuer, the Code Mode sandbox host, and five FastMCP mock servers (`directory`, `payments`, `notes`, `older`, and `changing`), publishes an example policy set, and runs the automated verification suite against [`examples/expected.json`](examples/expected.json) across both supported MCP protocol versions.
 
 From the running lab you can:
 * **Connect Claude Code or Codex** with side-by-side analyst and admin credentials (`eval "$(docker compose run --build --rm runner env)"`); see [Connect Claude Code or Codex](examples/README.md#connect-claude-code-or-codex).
 * **Walk through a live drift review** where an upstream tool description gains hidden Unicode characters and is held until reviewed with `cedar-policy drift`; see [Walk through a review](examples/README.md#walk-through-a-review).
 
-Stop the lab with `docker compose down -v`.
+Stop the lab with `docker compose down -v` (and if you exported `SANDBOX_BACKEND` or `COMPOSE_FILE` for the development backend, run `unset SANDBOX_BACKEND COMPOSE_FILE` before starting other Compose stacks in the same shell).
 
 ---
 

@@ -266,18 +266,6 @@ jobs:
               return 1
             fi
           }
-          # Moves latest, or the X.Y tag, only if this is the newest of the
-          # published full releases in that range, so an older or late run
-          # cannot move them backwards and a failed tag does not hold them.
-          published=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')
-          newest() { printf '%s\n' "$published" "$TAG" | grep -E "^v$1\$" | sort -V | tail -n 1; }
-          aliases=()
-          if [ "$PRERELEASE" = false ]; then
-            if [ "$(newest "${MINOR//./\\.}\\.[0-9]+")" = "$TAG" ]; then aliases+=("$MINOR"); fi
-            if [ "$(newest '[0-9]+\.[0-9]+\.[0-9]+')" = "$TAG" ]; then aliases+=(latest); fi
-          fi
-          echo "Version $VERSION; also tagging: ${aliases[*]:-nothing else}"
-
           # A published version tag never moves: a rerun that rebuilt the
           # images stops here instead of replacing the tested ones.
           for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
@@ -288,9 +276,6 @@ jobs:
               exit 1
             fi
           done
-          # Every image gets its version tag before any alias moves, so a
-          # failure leaves the aliases on the previous release; a rerun
-          # completes the rest.
           for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
             read -r name digest <<< "$pair"
             docker buildx imagetools create -t "$REPOSITORY/$name:$VERSION" "$REPOSITORY/$name@$digest"
@@ -299,15 +284,9 @@ jobs:
               exit 1
             fi
           done
-          for alias in "${aliases[@]}"; do
-            for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
-              read -r name digest <<< "$pair"
-              docker buildx imagetools create -t "$REPOSITORY/$name:$alias" "$REPOSITORY/$name@$digest"
-            done
-          done
       - name: Write the release notes
         run: |
-          (cd assets && sha256sum -- * > SHA256SUMS)
+          (cd assets && sha256sum -- *.spdx.json *.vulnerabilities.json cedar-policy-linux-amd64 > SHA256SUMS)
           {
             echo "## Images"
             echo
@@ -353,6 +332,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A rerun after publication leaves the immutable release alone; a
+          # draft left by a failed run is replaced.
+          if draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2> view.err); then
+            if [ "$draft" = false ]; then echo "$TAG is already published."; exit 0; fi
+            gh release delete "$TAG" --yes
+          elif ! grep -qi 'not found' view.err; then
+            cat view.err >&2
+            exit 1
+          fi
           flags=()
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
           # Assets can be added only while the release is a draft; publishing
@@ -360,3 +348,22 @@ jobs:
           gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file notes.md "${flags[@]}" \
             assets/*.spdx.json assets/*.vulnerabilities.json assets/cedar-policy-linux-amd64 assets/SHA256SUMS
           gh release edit "$TAG" --draft=false
+      - name: Move latest and X.Y to this release
+        if: needs.check.outputs.prerelease == 'false'
+        run: |
+          # They move only after the release is published, and only if it is
+          # the newest published full release in their range, so an older or
+          # late run cannot move them backwards and a failed tag does not
+          # hold them. A failure part-way is completed by a rerun.
+          published=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')
+          newest() { printf '%s\n' "$published" "$TAG" | grep -E "^v$1\$" | sort -V | tail -n 1; }
+          aliases=()
+          if [ "$(newest "${MINOR//./\\.}\\.[0-9]+")" = "$TAG" ]; then aliases+=("$MINOR"); fi
+          if [ "$(newest '[0-9]+\.[0-9]+\.[0-9]+')" = "$TAG" ]; then aliases+=(latest); fi
+          echo "Moving to $VERSION: ${aliases[*]:-nothing}"
+          for alias in "${aliases[@]}"; do
+            for pair in "gateway $GATEWAY_DIGEST" "admin $ADMIN_DIGEST" "sandbox $SANDBOX_DIGEST"; do
+              read -r name digest <<< "$pair"
+              docker buildx imagetools create -t "$REPOSITORY/$name:$alias" "$REPOSITORY/$name@$digest"
+            done
+          done

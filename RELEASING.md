@@ -26,8 +26,10 @@ git push origin v0.1.0
 
 Only the repository owner and the project's GitHub App can create `v*` tags,
 and no one can move or delete one. Releases are immutable: once published,
-neither a release nor its assets can change. If the workflow fails before it
-publishes, re-run it for a passing failure such as a network error; a release
+neither a release nor its assets can change. If the workflow fails on a
+passing problem such as a network error, use **Re-run failed jobs**, which
+keeps the images already built; re-running all jobs would rebuild them, and
+the workflow refuses to give a version tag to a different image. A release
 that needs a code change gets the next version.
 
 The first release creates the three packages in GitHub Container Registry,
@@ -53,9 +55,11 @@ The [release workflow](.github/workflows/release.yml) then:
      reach, so these are functions the program may call.
 4. **Attests** each image's build provenance and SBOM with GitHub, and stores
    the attestations in the registry next to the image.
-5. **Publishes**: gives the tested images the tags `X.Y.Z`, plus `X.Y` and
-   `latest` for a release, without rebuilding them, then publishes the GitHub
-   release. Release candidates are marked as pre-releases.
+5. **Publishes**: gives the tested images the tag `X.Y.Z` without rebuilding
+   them, and publishes the GitHub release. For a full release it then moves
+   `X.Y` and `latest` to these images, if this is the newest published
+   release in their range. Release candidates are marked as pre-releases and
+   get only their own tag.
 
 ## Verify an image
 

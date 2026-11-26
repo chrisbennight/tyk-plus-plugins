@@ -11,7 +11,7 @@ require (
 
 require (
 	github.com/cedar-policy/cedar-go v1.9.3 // indirect
-	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.6 // indirect
 	golang.org/x/exp v0.0.0-20220921023135-46d9e7742f1e // indirect
 )
 

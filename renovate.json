@@ -1,5 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "docker:pinDigests"],
-  "minimumReleaseAge": "7 days"
+  "minimumReleaseAge": "7 days",
+  "packageRules": [
+    {
+      "description": "Tyk's source and its release image must be the same Tyk release; the gateway build fails otherwise.",
+      "matchPackageNames": ["tykio/tyk-plugin-compiler", "tykio/tyk-gateway"],
+      "groupName": "Tyk"
+    }
+  ]
 }

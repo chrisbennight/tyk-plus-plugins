@@ -85,10 +85,13 @@ gh attestation verify "oci://$image" \
   --predicate-type https://spdx.dev/Document/v2.3
 ```
 
-The first check proves the image was built by the release workflow from this
-repository at that tag, so it was tested and scanned before it was published.
-The second proves the same workflow run attached the SBOM it scanned. Add
-`--format json` to read either one.
+Each check proves that this repository's release workflow, running for that
+tag, signed a statement about this exact image: the first its build
+provenance, the second its SBOM. The signatures do not record test or scan
+results. That the image was tested and scanned first follows from the
+workflow at that tag, which signs only after those jobs pass; read it to
+confirm. Add `--format json` to see each statement, including the workflow
+run that signed it.
 
 The build also carries the provenance Docker's reusable workflow records and
 signs inside the isolated build job.

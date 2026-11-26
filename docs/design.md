@@ -36,7 +36,7 @@ Brand accents never carry status meanings. Whether a tool is allowed by drift re
 
 ## Layout and accessibility
 
-The dashboard sets `Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`, so every stylesheet and icon is embedded in the binary and served from the dashboard's own origin. Interactive controls keep a `3px solid var(--accent)` focus outline, diff rows include visible `−` and `+` markers with screen-reader text (`removed:` and `added:`), and text and controls meet WCAG 2.2 AA contrast thresholds in both themes. Avoid animated images in documentation and operational views.
+The dashboard sets `Content-Security-Policy: default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`, so every stylesheet and icon is embedded in the binary and served from the dashboard's own origin. Interactive controls keep a `3px solid var(--accent)` focus outline, diff rows include visible `−` and `+` markers with screen-reader text (`removed:` and `added:`) and `<mark>` around changed words, and text and controls meet WCAG 2.2 AA contrast thresholds in both themes. Avoid animated images or decorative motion in documentation and operational views.
 
 ## Brand assets
 

@@ -164,6 +164,15 @@ Under drift review:
 - A `tools/list` reply that cannot be checked, such as a compressed or unreadable one, or any reply while the gateway has no valid set, is replaced with a JSON-RPC error. Checked replies carry `Cache-Control: private, no-cache` and no upstream `ETag`, because they depend on your approvals as well as the upstream. A streamed list that was already open when drift review started on its proxy ends at that point, and the client lists again through the check. A checked stream ends after the reply that answers the request and carries no event IDs, so a client cannot resume it on a request the gateway does not check; it lists again instead, and a reply to any other request is replaced with an error answering this one. While the proxy targets an upstream other than the one in `approved_tools.json`, its lists are replaced with an error and its instructions are removed, as its calls are refused.
 - Server instructions in `initialize` and `server/discover` replies pass on only when they are the text in `approved_instructions.json` for the proxy. `changedInstructions` decides what happens otherwise: `replace` (the default) sends the approved text instead, and `strip` removes the instructions. With no approved text, or an empty one, the instructions are removed. The rest of the reply passes unchanged, and a `server/discover` reply whose instructions were changed is marked `cacheScope: private` with a `ttlMs` of at most one minute, so clients ask again soon after you approve the new text. Replies that cannot be checked are handled as for lists, except that while the gateway has no valid set the instructions are removed, so sessions can still start.
 
+Two settings bound the work of checking lists:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CEDAR_PENDING_MAX_DEFINITION_BYTES` | `262144` | The largest upstream tool definition the gateway fingerprints. A larger one counts as a changed definition, so raise this if you approve larger definitions. |
+| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy, and how many review entries a proxy holds in the drift review directory. Once a proxy passes the limit, or declares a tool name longer than 128 bytes, a call to a tool the gateway has not seen listed is refused until a list shows it. |
+
+The `drift` object also accepts `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). Gateways do not queue a rejected definition or rejected instructions for review again, and calls to a rejected definition stay refused.
+
 ### Sharing sightings between gateways
 
 Gateways that share the directory in `CEDAR_PENDING_DIR` (the Compose file sets it to `/opt/tyk-gateway/cedar-pending`, which the image provides writable by the gateway's user; give it a volume every gateway can write) also share what they see:
@@ -173,15 +182,6 @@ Gateways that share the directory in `CEDAR_PENDING_DIR` (the Compose file sets 
 - A change one gateway sees is refused by all within their refresh interval, and seeing the approved definition again releases it. This holds while every sighting reaches the directory: a sighting dropped because the writer's queue is full, or one that could not be written, is logged, and other gateways follow the previous declaration until the next list is shared. When two replies with different definitions arrive out of order, the gateway that saw them refuses calls until a later list settles it, while other gateways follow the newer of the two.
 - If the directory cannot be opened or read, the previous declarations are kept and calls on proxies under drift review are refused until a later read succeeds, so a failed read never releases a tool another gateway saw change. A declaration file that is not valid, including one whose gateway or upstream does not match its name, also holds calls on proxies under drift review until it is removed. Calls to a tool whose name is longer than 180 bytes, or on a reviewed upstream whose URL is longer than 8 KiB, are refused while sharing is on, since a change to them could not be shared.
 - Run every gateway sharing a directory as the same user, as the image does. Gateways that run as different users need a shared group with the setgid bit on the directory, as described for the policy store below, and a umask of `002`, so each can write in directories another created. Keep the clocks of gateways sharing a directory in sync. Each gateway's files are named after `CEDAR_GATEWAY_ID`, or its host name when that is unset. Give every gateway a different, stable name so a gateway keeps one file per tool across restarts: past 256 files for one tool (one per gateway and upstream), calls under drift review are refused until the files of retired gateways are removed with `cedar-policy drift retire`.
-
-Two settings bound the work of checking lists:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `CEDAR_PENDING_MAX_DEFINITION_BYTES` | `262144` | The largest upstream tool definition the gateway fingerprints. A larger one counts as a changed definition, so raise this if you approve larger definitions. |
-| `CEDAR_PENDING_MAX_PER_PROXY` | `200` | How many tools without approval each gateway remembers per proxy, and how many review entries a proxy holds in the drift review directory. Once a proxy passes the limit, or declares a tool name longer than 128 bytes, a call to a tool the gateway has not seen listed is refused until a list shows it. |
-
-The `drift` object also accepts `rejectedTools` (tool names mapped to lists of rejected definition fingerprints) and `rejectedInstructions` (a list of fingerprints). Gateways do not queue a rejected definition or rejected instructions for review again, and calls to a rejected definition stay refused.
 
 ### Reviewing changes
 

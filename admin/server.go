@@ -18,7 +18,7 @@ import (
 	"github.com/go-json-experiment/json/jsontext"
 )
 
-//go:embed templates/*.html static/style.css
+//go:embed templates/*.html static/style.css static/favicon.svg
 var assets embed.FS
 
 var pages = template.Must(template.New("").Funcs(template.FuncMap{
@@ -61,6 +61,7 @@ func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok\n")) })
 	mux.HandleFunc("GET /style.css", s.style)
+	mux.HandleFunc("GET /favicon.svg", s.favicon)
 	mux.HandleFunc("GET /login", s.auth.login)
 	mux.HandleFunc("GET /callback", s.auth.callback)
 	mux.HandleFunc("GET /signed-out", s.signedOut)
@@ -86,7 +87,7 @@ func (s *server) routes() http.Handler {
 func headers(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+		h.Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
 		// same-origin, not no-referrer: under no-referrer browsers send
 		// "Origin: null" with form posts, which the form check refuses.
@@ -127,6 +128,12 @@ func (s *server) style(w http.ResponseWriter, _ *http.Request) {
 	css, _ := assets.ReadFile("static/style.css")
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
 	w.Write(css)
+}
+
+func (s *server) favicon(w http.ResponseWriter, _ *http.Request) {
+	icon, _ := assets.ReadFile("static/favicon.svg")
+	w.Header().Set("Content-Type", "image/svg+xml")
+	w.Write(icon)
 }
 
 func (s *server) signedOut(w http.ResponseWriter, _ *http.Request) {

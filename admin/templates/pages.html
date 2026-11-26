@@ -3,12 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Title}} · Drift review</title>
+<title>{{.Title}} · Tyk Plus Drift review</title>
+<link rel="icon" href="{{.Base}}/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="{{.Base}}/style.css">
 </head>
 <body>
 <header>
-  <a class="brand" href="{{.Base}}/">Drift review</a>
+  <a class="brand" href="{{.Base}}/"><svg aria-hidden="true" width="24" height="24" viewBox="0 0 128 128" fill="none"><g stroke="currentColor" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 42 A48 48 0 0 1 103 31 M111 62 A48 48 0 0 1 68 112 M54 112 A48 48 0 0 1 17 70"/><path d="M22 56 H48 M48 38 V76 M48 56 L66 74 L84 52 L106 42"/><circle class="hole" cx="16" cy="56" r="6" stroke-width="4"/><circle class="hole" cx="66" cy="74" r="5" stroke-width="4"/><circle class="dot" cx="108" cy="40" r="7" stroke-width="3.2"/></g></svg>Tyk Plus · Drift review</a>
   {{if .User}}<nav aria-label="Pages"><a href="{{.Base}}/">Overview</a> <a href="{{.Base}}/history">History</a> <a href="{{.Base}}/maintenance">Maintenance</a></nav>{{end}}
   {{if .User}}<span class="who">{{.User}} · {{.Role}}</span>
   <form method="post" action="{{.Base}}/logout" class="inline">

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="240" viewBox="0 0 760 240" role="img" aria-labelledby="title">
+  <title id="title">MCP clients connect through Tyk Plus to Cedar policy, drift review, and sandboxed Code Mode</title>
+  <rect width="760" height="240" rx="8" fill="#15181b"/>
+  <g stroke="#7ab8ff" stroke-width="2.2" fill="none" stroke-linecap="round">
+    <path d="M124 114 H168 C198 114 198 128 228 128 S258 114 282 114 H292"/>
+    <path d="M428 114 H442 C515 114 508 52 568 52 H606 M442 114 H626 M442 114 C515 114 508 176 568 176 H606"/>
+  </g>
+  <g transform="translate(274 36) scale(1.25)" fill="none" stroke="#e6e9ec" stroke-width="5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 42 A48 48 0 0 1 103 31 M111 62 A48 48 0 0 1 68 112 M54 112 A48 48 0 0 1 17 70"/>
+    <path d="M22 56 H48 M48 38 V76 M48 56 L66 74 L84 52 L106 42"/>
+    <circle cx="16" cy="56" r="6" stroke-width="3.5" fill="#15181b"/>
+    <circle cx="66" cy="74" r="5" stroke-width="3.5" fill="#15181b"/>
+    <circle cx="108" cy="40" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2.8"/>
+  </g>
+  <circle cx="124" cy="114" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2"/>
+  <circle cx="606" cy="52" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2"/>
+  <circle cx="626" cy="114" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2"/>
+  <circle cx="606" cy="176" r="7" fill="#1b4b8a" stroke="#7ab8ff" stroke-width="2"/>
+  <!-- CLIENTS -->
+  <g fill="none" stroke="#e6e9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="CLIENTS">
+    <path d="M40 109 C36 107 31 110 31 114 C31 118 36 121 40 119"/>
+    <path d="M45 108 V120 H52"/>
+    <path d="M57 108 V120"/>
+    <path d="M70 108 H63 V120 H70 M63 114 H68"/>
+    <path d="M75 120 V108 L83 120 V108"/>
+    <path d="M88 108 H96 M92 108 V120"/>
+    <path d="M108 110 C107 107 100 107 100 111 C100 114 108 114 108 117 C108 121 101 121 100 118"/>
+  </g>
+  <!-- CEDAR -->
+  <g fill="none" stroke="#e6e9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="CEDAR">
+    <path d="M636 47 C632 45 627 48 627 52 C627 56 632 59 636 57"/>
+    <path d="M649 46 H642 V58 H649 M642 52 H647"/>
+    <path d="M654 46 V58 H659 A6 6 0 0 0 659 46 Z"/>
+    <path d="M669 58 L674 46 L679 58 M671 54 H677"/>
+    <path d="M684 58 V46 H690 A3 3 0 0 1 690 52 H684 M688 52 L692 58"/>
+  </g>
+  <!-- DRIFT -->
+  <g fill="none" stroke="#e6e9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="DRIFT">
+    <path d="M647 108 V120 H652 A6 6 0 0 0 652 108 Z"/>
+    <path d="M663 120 V108 H669 A3 3 0 0 1 669 114 H663 M667 114 L671 120"/>
+    <path d="M677 108 V120"/>
+    <path d="M690 108 H683 V120 M683 114 H688"/>
+    <path d="M694 108 H702 M698 108 V120"/>
+  </g>
+  <!-- SANDBOX -->
+  <g fill="none" stroke="#e6e9ec" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="SANDBOX">
+    <path d="M635 172 C634 169 627 169 627 173 C627 176 635 176 635 179 C635 183 628 183 627 180"/>
+    <path d="M640 182 L645 170 L650 182 M642 178 H648"/>
+    <path d="M655 182 V170 L663 182 V170"/>
+    <path d="M669 170 V182 H674 A6 6 0 0 0 674 170 Z"/>
+    <path d="M685 170 V182 H691 A3 3 0 0 0 691 176 H685 H690 A3 3 0 0 0 690 170 Z"/>
+    <path d="M703 170 A6 6 0 1 0 703 182 A6 6 0 1 0 703 170"/>
+    <path d="M714 170 L722 182 M722 170 L714 182"/>
+  </g>
+  <!-- TYK PLUS -->
+  <g fill="none" stroke="#e6e9ec" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-label="TYK PLUS">
+    <path d="M292 210 H304 M298 210 V224"/>
+    <path d="M310 210 L316 217 L322 210 M316 217 V224"/>
+    <path d="M328 210 V224 M338 210 L328 218 M331 215 L339 224"/>
+    <path d="M354 224 V210 H361 A3.5 3.5 0 0 1 361 217 H354"/>
+    <path d="M370 210 V224 H379"/>
+    <path d="M385 210 V219 A5 5 0 0 0 395 219 V210"/>
+    <path d="M412 212 C411 209 402 209 402 213 C402 217 412 217 412 221 C412 225 403 225 402 222"/>
+  </g>
+</svg>

@@ -16,7 +16,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-forbidden='^(sh|bash|rbash|dash|ash|zsh|ksh|mksh|pdksh|csh|tcsh|fish|posh|yash|busybox|toybox|apt|apt-get|aptitude|dpkg|rpm|apk|yum|dnf|microdnf|runc)(-static)?$'
+forbidden='^(sh|bash|rbash|dash|ash|zsh|ksh|mksh|pdksh|csh|tcsh|fish|posh|yash|busybox|toybox|apt|apt-get|aptitude|dpkg|rpm|apk|yum|dnf|microdnf|pip|pip3|python3-pip|runc)(-static)?$'
 failed=0
 
 # Release images have no command of their own to start, so give one that is

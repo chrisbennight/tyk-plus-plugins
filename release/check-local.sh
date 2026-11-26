@@ -82,6 +82,7 @@ for name in "${images[@]}"; do
   # Listed before the build, so an image stored before another fails to
   # build is still removed.
   pushed+=("$host/$name:check")
+  rm -f "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" "$out/$name.vulnerabilities.txt"
 done
 rm -f "$out/build.json"
 echo "Building ${images[*]} for $platform"
@@ -95,7 +96,6 @@ for name in "${images[@]}"; do
   pushed+=("$image")
   echo
   echo "== $name ($digest)"
-  rm -f "$out/$name.spdx.json" "$out/$name.vulnerabilities.json" "$out/$name.vulnerabilities.txt"
 
   # The content check and the scan read the SBOM; govulncheck reads only
   # the image.

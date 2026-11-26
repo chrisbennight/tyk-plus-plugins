@@ -24,9 +24,10 @@ release/check-local.sh
 
 It builds the three images with an SBOM, pushes them to a temporary
 registry on your machine, and runs the same checks a release runs on each
-image (step 3 below). It runs every check on every image, prints what
+image (step 3 below). It keeps going after a check fails, prints what
 failed, and keeps the SBOMs and vulnerability reports in the directory it
-names. Pass image names to check only some, and `--out DIR` to choose where
+names. The content check and the vulnerability scan read the SBOM, so if an
+image's SBOM cannot be written they are reported as not run. Pass image names to check only some, and `--out DIR` to choose where
 the reports go.
 
 The images are built for the platform Docker runs natively. Releases are

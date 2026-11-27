@@ -39,6 +39,7 @@ The gateway never forwards a request it has no exchanged token for, and never fa
 - any reply that is not 2xx, whatever its `error` code. Identity providers use `invalid_request`, `invalid_grant`, `invalid_target` and other codes for similar cases, and the gateway treats them alike;
 - a 2xx reply that is not a JSON object, or lacks `access_token`, `issued_token_type` or `token_type`;
 - a `token_type` other than `Bearer`, including `N_A`;
+- an `expires_in` of zero or less;
 - an `issued_token_type` other than an access token or a JWT;
 - a token that is not valid bearer-token syntax for a header;
 - the caller's own token, or the issued token's own lifetime, running out while the exchange is under way.

@@ -89,3 +89,36 @@ func TestFoldNameMatchesEqualFold(t *testing.T) {
 		}
 	}
 }
+
+// A name matching two declared arguments under case folding is ambiguous
+// even when it spells one of them exactly.
+func TestCaseEquivalentDeclarations(t *testing.T) {
+	tools := `{"p": {"upstream": "https://u.example/mcp", "tools": {"t": {"arguments": {"id": "string", "Id": "string", "other": "string"}}}}}`
+	rules := `permit (principal, action, resource) when { !context.strings.contains({name: "Id", value: "secret"}) };`
+	s, err := Compile(Inputs{Rules: []byte(rules), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte("[]")}, "v")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for args, want := range map[string]string{
+		`{"other": "x"}`:   "permitted",
+		`{"id": "secret"}`: "ambiguous_call",
+		`{"Id": "secret"}`: "ambiguous_call",
+		`{"ID": "secret"}`: "ambiguous_call",
+	} {
+		if got, _ := s.Decide(Caller{Issuer: "i", Subject: "s"}, "p", "https://u.example/mcp", "t", []byte(args)); got != want {
+			t.Errorf("%s: got %s, want %s", args, got, want)
+		}
+	}
+}
+
+// Drift review turns a check of an unapproved tool into the denial it
+// expects, but never one whose arguments are ambiguous.
+func TestDriftReviewKeepsAmbiguousChecksFailing(t *testing.T) {
+	tools := `{"governed": {"upstream": "https://u.example/mcp", "drift": {}, "tools": {"lookup": {}}}}`
+	checks := `[{"caller": {"issuer": "i", "subject": "s"}, "proxy": "governed", "upstream": "https://u.example/mcp", "tool": "lookup",
+  "arguments": {"note": "a", "NOTE": "b"}, "expect": "policy_denied"}]`
+	_, err := Compile(Inputs{Rules: []byte(`permit (principal, action, resource);`), Tools: []byte(tools), Instructions: []byte("{}"), Checks: []byte(checks)}, "v")
+	if err == nil || !strings.Contains(err.Error(), "got ambiguous_call") {
+		t.Fatalf("got %v", err)
+	}
+}

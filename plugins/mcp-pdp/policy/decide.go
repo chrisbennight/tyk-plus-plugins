@@ -91,12 +91,13 @@ func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Recor
 // ambiguousNames reports whether the top-level argument names of a call
 // could be read differently by an upstream that matches names regardless of
 // letter case: two names equal under Unicode case folding, a name equal under
-// folding to a declared argument but not spelled exactly as declared, or a
-// name holding a control character, which some parsers drop.
+// folding to a declared argument but not spelled exactly as declared, a name
+// equal under folding to two declared arguments, or a name holding a control
+// character, which some parsers drop.
 func ambiguousNames(args map[string]json.RawMessage, declared map[string]string) bool {
-	declaredFolds := make(map[string]bool, len(declared))
+	declaredFolds := make(map[string]int, len(declared))
 	for name := range declared {
-		declaredFolds[foldName(name)] = true
+		declaredFolds[foldName(name)]++
 	}
 	seen := make(map[string]bool, len(args))
 	for name := range args {
@@ -108,7 +109,9 @@ func ambiguousNames(args map[string]json.RawMessage, declared map[string]string)
 			return true
 		}
 		seen[folded] = true
-		if _, exact := declared[name]; !exact && declaredFolds[folded] {
+		// A tool declaring both id and Id cannot tell which one a
+		// case-insensitive upstream reads an id argument as.
+		if _, exact := declared[name]; declaredFolds[folded] > 1 || (!exact && declaredFolds[folded] > 0) {
 			return true
 		}
 	}

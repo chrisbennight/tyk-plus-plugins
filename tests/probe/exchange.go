@@ -54,7 +54,9 @@ func exchangeSuite(k keys, version string) {
 		"governed":  map[string]any{"upstream": upstream, "tools": tools},
 		"governed3": map[string]any{"upstream": upstream, "tools": tools},
 	})
-	publish("activated", map[string]string{"rules.cedar": codeModeRules, "approved_tools.json": string(inventory), "checks.json": "[]"})
+	report := publish("activated", map[string]string{"rules.cedar": codeModeRules, "approved_tools.json": string(inventory), "checks.json": "[]"})
+	// The peer refreshes on its own, and decides with this set below.
+	awaitPeerSet(report["active"])
 
 	// The upstream accepts only tokens the token endpoint issued, so every
 	// request below that succeeds carried an exchanged token.
@@ -145,7 +147,16 @@ func exchangeSuite(k keys, version string) {
 	peerToken := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-peer-"+version)))
 	var peer *conn
 	allIssued("the peer's handshake", func() { peer = connectAt(peerExchangeGateway, peerToken, version) })
+	allIssued("the peer's tools/list", func() {
+		catalog := catalogOf(peer, peerToken)
+		check(catalog["lookup"] != nil, "%s: the peer's exchange proxy listed %v", version, catalog)
+	})
 	allIssued("a permitted call on the peer", func() { call(peer, peerToken, "lookup", args("count", 1), "found") })
+
+	// A provider that hands back the caller's own token has issued nothing,
+	// so nothing is forwarded.
+	echoed := bearerCred(token("published", args("sub", "echo", "app_roles", []string{"support"})))
+	unavailable("tools/list with the caller's token handed back", func() response { return failed.rpc(echoed, "tools/list", map[string]any{}) })
 
 	// A proxy that leaves stripping off without exchange forwards nothing,
 	// for token and key callers alike, and makes no exchange.
@@ -180,6 +191,21 @@ func exchangeSuite(k keys, version string) {
 	found := searchNames(connect(k.support, version), k.support, "lookup")
 	check(slices.Contains(found, "governed/lookup") && !slices.ContainsFunc(found, func(n string) bool { return strings.HasPrefix(n, "governed3/") }),
 		"%s: key caller's search found %v", version, found)
+	// Once its approved tools name another upstream, as after the proxy was
+	// retargeted, the proxy sends no exchanged token to its current one.
+	retargeted, _ := json.Marshal(map[string]any{
+		"governed":  map[string]any{"upstream": upstream, "tools": tools},
+		"governed3": map[string]any{"upstream": "https://elsewhere.invalid/mcp", "tools": tools},
+	})
+	publish("activated", map[string]string{"approved_tools.json": string(retargeted)})
+	before, _ := observed()
+	exchangesBefore, _ = exchanged()
+	r := c.rpc(tok, "tools/list", map[string]any{})
+	after, _ := observed()
+	exchangesAfter, _ = exchanged()
+	check(r.Status == http.StatusServiceUnavailable && r.Error != nil && r.Error.Message == "Upstream credentials unavailable" &&
+		after == before && exchangesAfter == exchangesBefore,
+		"%s: a proxy retargeted since review: %v (requests %d -> %d, exchanges %d -> %d)", version, r, before, after, exchangesBefore, exchangesAfter)
 	fmt.Printf("Verified token exchange for a %s client.\n", version)
 }
 

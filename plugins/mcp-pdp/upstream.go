@@ -90,6 +90,8 @@ func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]
 		reason = "token_not_in_authorization_header"
 	case !secureUpstream(def):
 		reason = "upstream_not_https"
+	case reviewedUpstreamDiffers(proxy, def):
+		reason = "unreviewed_upstream"
 	}
 	if reason != "" {
 		slog.Warn("Upstream credential unavailable", "proxy", proxy, "method", ctx.GetMCPMethod(r), "reason", reason)
@@ -107,6 +109,13 @@ func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]
 	token, err := exchanger.Exchange(r.Context(), proxy, subject, expiry)
 	if err != nil {
 		// The exchange logged why, without the tokens.
+		unavailable(w, r, id)
+		return false
+	}
+	// A provider, or an adapter in front of it, that hands back the caller's
+	// own token has issued nothing for the upstream.
+	if token == subject {
+		slog.Warn("Upstream credential unavailable", "proxy", proxy, "method", ctx.GetMCPMethod(r), "reason", "exchange_returned_caller_token")
 		unavailable(w, r, id)
 		return false
 	}
@@ -135,6 +144,20 @@ func stripsAuthorization(def *oas.OAS) bool {
 	}
 	auth := def.GetTykExtension().Server.Authentication
 	return auth != nil && auth.StripAuthorizationData
+}
+
+// reviewedUpstreamDiffers reports whether a proxy now points at an upstream
+// other than the one its approved tools were reviewed for. The issued token
+// names the upstream in EXCHANGE_PROXIES, so a proxy retargeted since its
+// review must not send it to the new one; tool calls there are refused for
+// the same reason. A proxy with no approved tools is not bound.
+func reviewedUpstreamDiffers(proxy string, def *oas.OAS) bool {
+	state := current()
+	if state == nil || def == nil || def.GetTykExtension() == nil {
+		return false
+	}
+	reviewed, _ := state.ApprovedTools(proxy)
+	return reviewed != "" && reviewed != def.GetTykExtension().Upstream.URL
 }
 
 // secureUpstream reports whether the issued token may be sent to the proxy's

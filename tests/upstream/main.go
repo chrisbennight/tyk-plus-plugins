@@ -75,6 +75,11 @@ func main() {
 		random := make([]byte, 16)
 		rand.Read(random)
 		token := "issued-" + hex.EncodeToString(random)
+		// A caller whose subject is "echo" gets its own token back, as a
+		// faulty provider or adapter might send it.
+		if subjectOf(r.PostForm.Get("subject_token")) == "echo" {
+			token = r.PostForm.Get("subject_token")
+		}
 		issued.Store(token, true)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"access_token": token, "token_type": "Bearer",

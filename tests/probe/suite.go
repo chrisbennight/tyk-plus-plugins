@@ -197,6 +197,26 @@ permit (principal, action, resource) when {
 `
 	publish("activated", map[string]string{"rules.cedar": delegated})
 	call(c, k.guest, "change", args("count", 3), "updated")
+	// A call another parser could read differently is refused before it is
+	// decided: an upstream matching names regardless of letter case could act
+	// on a count Cedar never saw.
+	call(c, k.guest, "change", args("count", 3, "Count", 2))
+	call(c, k.guest, "change", args("count", 3, "COUNT", 2))
+	call(c, k.guest, "change", args("count", 3, "count\u0000", 2))
+	call(c, k.guest, "change", args("count", 3, "note", "a", "Note", "b"))
+	permittedParams := c.params(map[string]any{"name": "change", "arguments": args("count", 3)})
+	withParams := func(extra ...any) map[string]any {
+		p := c.params(map[string]any{"name": "change", "arguments": args("count", 3)})
+		for i := 0; i < len(extra); i += 2 {
+			p[extra[i].(string)] = extra[i+1]
+		}
+		return p
+	}
+	refusedRequest(c, k.guest, "change", map[string]any{"params": withParams("Arguments", args("count", 2))}, true)
+	refusedRequest(c, k.guest, "change", map[string]any{"params": withParams("argumentſ", args("count", 2))}, true)
+	refusedRequest(c, k.guest, "change", map[string]any{"params": permittedParams, "Params": withParams("arguments", args("count", 2))}, false)
+	refusedRequest(c, k.guest, "change", map[string]any{"params": permittedParams, "paramſ": withParams("arguments", args("count", 2))}, false)
+	call(c, k.guest, "change", args("count", 3), "updated")
 	publish("activated", map[string]string{"rules.cedar": delegated + `
 forbid (principal, action, resource)
 when { resource.name == "change" && (9223372036854775807 + 1 > 0) };

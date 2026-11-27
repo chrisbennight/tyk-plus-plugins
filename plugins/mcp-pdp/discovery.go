@@ -16,14 +16,10 @@ import (
 
 // answerCodeMode answers a call to a Code Mode tool the caller's rules
 // permit.
-func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, name string, params json.RawMessage, who policy.Caller, method identity.Method, proxy string) {
-	var call struct {
-		Arguments json.RawMessage `json:"arguments"`
-	}
-	_ = json.Unmarshal(params, &call)
+func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, name string, arguments, meta json.RawMessage, who policy.Caller, method identity.Method, proxy string) {
 	switch name {
 	case codemode.ExecuteTool:
-		execute(w, r, id, params, who, method, proxy)
+		execute(w, r, id, arguments, meta, who, method, proxy)
 	case codemode.LimitsTool:
 		writeStructured(w, id, codemode.LimitsReport(codeMode))
 	case codemode.SearchTool:
@@ -33,7 +29,7 @@ func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, 
 			Limit  int    `json:"limit"`
 			Cursor string `json:"cursor"`
 		}
-		if len(call.Arguments) > 0 && json.Unmarshal(call.Arguments, &args) != nil {
+		if len(arguments) > 0 && json.Unmarshal(arguments, &args) != nil {
 			writeToolError(w, id, "invalid", "codemode.search takes an optional query, detail, limit and cursor", nil)
 			return
 		}
@@ -49,7 +45,7 @@ func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, 
 			Proxy string `json:"proxy"`
 			Name  string `json:"name"`
 		}
-		if json.Unmarshal(call.Arguments, &args) != nil || args.Proxy == "" || args.Name == "" {
+		if json.Unmarshal(arguments, &args) != nil || args.Proxy == "" || args.Name == "" {
 			writeToolError(w, id, "invalid", "codemode.describe takes a proxy and a tool name", nil)
 			return
 		}

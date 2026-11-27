@@ -79,6 +79,19 @@ Every field of a tool entry is optional:
 
 A fact or tag that a tool does not have contributes nothing to a rule. Write rules so that a missing fact cannot grant access.
 
+### Argument names
+
+Arguments are matched by their exact names. The gateway passes the client's request to the upstream unchanged, and some upstreams, such as Go servers built on `encoding/json`, match names regardless of letter case. So a tool call is refused, and logged with the reason `ambiguous_call`, when an upstream could read it differently from the gateway:
+
+- two top-level argument names are equal apart from letter case, such as `environment` and `Environment`. This applies to every argument, declared or not, so a tool that genuinely takes both `id` and `Id` cannot be called through the gateway;
+- an argument name equals a declared argument apart from letter case, such as `Environment` alone when `environment` is declared;
+- an argument name contains a control character, such as a trailing `\u0000`;
+- a member of the request or of its `params` equals one the gateway reads apart from letter case, such as `Params` or `Arguments`.
+
+Letter case is compared as Go's `strings.EqualFold` compares it, so `ſ` matches `s` and the Kelvin sign matches `k`.
+
+An argument the call does not send is not a fact, so **a forbid that tests an argument's value does not apply when the argument is missing**. An upstream that supplies a default for a missing argument may act on a value your rules never saw. Instead of only forbidding the unsafe value, permit only the safe one, for example `context.strings.contains({name: "environment", value: "test"})`, or make sure the approved tool definition's `inputSchema` requires the argument and the upstream enforces it.
+
 ## Rules
 
 Write Cedar rules in [rules.cedar](rules.cedar). Cedar sees the caller as `principal`, the tool as `resource`, and the MCP method as `action`. See the [policy schema](../../plugins/mcp-pdp/policy/schema.cedarschema). A call needs a matching permit, an explicit forbid takes precedence, and a forbid that errors during evaluation blocks the call.

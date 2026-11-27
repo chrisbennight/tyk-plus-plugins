@@ -3,6 +3,7 @@ package exchange
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"log/slog"
@@ -20,7 +21,7 @@ import (
 
 const (
 	callerToken = "caller.token.value"
-	secret      = "client-secret-value"
+	secret      = "client:secret/+ value%"
 )
 
 // endpoint is a fake token endpoint. reply writes the response for each
@@ -116,8 +117,12 @@ func TestRequestShape(t *testing.T) {
 		}
 		// Basic authentication with the form-encoded client ID and secret.
 		r := &http.Request{Header: http.Header{"Authorization": {e.auth[i]}}}
-		id, pass, ok := r.BasicAuth()
-		if !ok || id != "gateway+client" || pass != secret {
+		// Both parts are form-encoded before Basic encoding, so a server
+		// form-decodes them (RFC 6749 section 2.3.1).
+		rawID, rawPass, ok := r.BasicAuth()
+		id, idErr := url.QueryUnescape(rawID)
+		pass, passErr := url.QueryUnescape(rawPass)
+		if !ok || idErr != nil || passErr != nil || id != "gateway client" || pass != secret {
 			t.Errorf("request %d: client authentication %q %q %v", i, id, pass, ok)
 		}
 	}
@@ -508,6 +513,63 @@ func TestUnreadableProxyListTurnsExchangeOnEverywhere(t *testing.T) {
 		s, err := Load(func(name string) string { return env[name] })
 		if err == nil || !s.On("governed") || !s.On("anything") {
 			t.Errorf("EXCHANGE_PROXIES %q: %v, on %v", proxies, err, s.On("governed"))
+		}
+	}
+}
+
+func TestTokenWithoutLifetimeServesOneRequest(t *testing.T) {
+	release := make(chan struct{})
+	e := newEndpoint(t, func(w http.ResponseWriter, form url.Values) {
+		<-release
+		issued("issued-token", "")(w, form)
+	})
+	c := New(settings(t, e, nil))
+	var wg sync.WaitGroup
+	for range 3 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Exchange(context.Background(), "governed", "a", time.Now().Add(time.Hour)); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(release)
+	wg.Wait()
+	// One shared exchange, then one more for each request that only waited.
+	if n := e.requests.Load(); n != 3 {
+		t.Fatalf("got %d requests, want 3", n)
+	}
+}
+
+func TestCacheHitHonoursCallerExpiry(t *testing.T) {
+	e := newEndpoint(t, issued("issued-token", "600"))
+	c := New(settings(t, e, nil))
+	if _, err := c.Exchange(context.Background(), "governed", "a", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	token, err := c.Exchange(context.Background(), "governed", "a", time.Now().Add(-time.Second))
+	if token != "" || err == nil {
+		t.Fatalf("an expired caller got %q, %v", token, err)
+	}
+}
+
+func TestHugeLifetimeIsUnknown(t *testing.T) {
+	raw := json.RawMessage("9223372036854775807")
+	if lifetime(&raw) != 0 {
+		t.Fatal("an unrepresentable lifetime was accepted")
+	}
+}
+
+func TestPortWithoutHostIsRefused(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"token URL": {"EXCHANGE_TOKEN_URL": "https://:443/token", "EXCHANGE_PROXIES": "governed=https://mcp.example.com/mcp"},
+		"resource":  {"EXCHANGE_TOKEN_URL": "https://idp.example.com/token", "EXCHANGE_PROXIES": "governed=https://:8443/mcp"},
+	} {
+		env["EXCHANGE_CLIENT_ID"], env["EXCHANGE_CLIENT_SECRET"] = "g", "s"
+		if _, err := Load(func(name string) string { return env[name] }); err == nil {
+			t.Errorf("%s with a port and no host was accepted", name)
 		}
 	}
 }

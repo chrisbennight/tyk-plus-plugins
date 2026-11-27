@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -84,6 +85,9 @@ type flight struct {
 	done  chan struct{}
 	token string
 	err   error
+	// once is set when the reply gave no lifetime, so its token serves only
+	// the request that started the exchange.
+	once bool
 }
 
 // New makes a client for valid settings.
@@ -118,7 +122,7 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 	c.mu.Lock()
 	if el, ok := c.entries[key]; ok {
 		e := el.Value.(*entry)
-		if c.now().Before(e.expires) {
+		if now := c.now(); now.Before(e.expires) && now.Before(subjectExpiry) {
 			c.order.MoveToFront(el)
 			c.mu.Unlock()
 			return e.token, nil
@@ -140,6 +144,15 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 	}
 	select {
 	case <-f.done:
+		if shared && f.err == nil && f.once {
+			// A token without a known lifetime is used for one request, so
+			// a request that only waited for it makes its own exchange.
+			token, _, err := c.request(target, subject)
+			if err != nil {
+				return "", c.failed(proxy, err)
+			}
+			f = &flight{token: token}
+		}
 		if f.err != nil {
 			return "", f.err
 		}
@@ -174,7 +187,7 @@ func (c *Client) fly(key [32]byte, f *flight, proxy string, target Target, subje
 	if err != nil {
 		err = c.failed(proxy, err)
 	}
-	f.token, f.err = token, err
+	f.token, f.err, f.once = token, err, err == nil && lifetime == 0
 	close(f.done)
 }
 
@@ -273,7 +286,8 @@ func lifetime(raw *json.RawMessage) time.Duration {
 		return 0
 	}
 	var seconds int64
-	if json.Unmarshal(*raw, &seconds) != nil || seconds <= 0 {
+	// A lifetime too long to represent is treated as unknown.
+	if json.Unmarshal(*raw, &seconds) != nil || seconds <= 0 || seconds > int64(math.MaxInt64/int64(time.Second)) {
 		return 0
 	}
 	return time.Duration(seconds) * time.Second

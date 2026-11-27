@@ -141,7 +141,7 @@ func checkTokenURL(raw string, allowHTTP bool) error {
 		return errors.New("not set")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || u.User != nil || u.Fragment != "" {
+	if err != nil || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
 		return errors.New("not an absolute URL with a host and no user or fragment")
 	}
 	switch {
@@ -207,7 +207,7 @@ func checkResource(raw string) error {
 		return errors.New("no resource")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Host == "" || u.Fragment != "" || strings.Contains(raw, "#") {
+	if err != nil || !u.IsAbs() || u.Hostname() == "" || u.Fragment != "" || strings.Contains(raw, "#") {
 		return fmt.Errorf("resource %q is not an absolute URI with a host and no fragment", raw)
 	}
 	return nil

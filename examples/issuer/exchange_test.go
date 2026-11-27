@@ -317,6 +317,21 @@ func TestAMalformedBasicHeaderIsChallenged(t *testing.T) {
 	}
 }
 
+func TestEmptyParametersAreTreatedAsOmitted(t *testing.T) {
+	s, _, _ := newExchangeServer(t)
+	form := exchangeForm(personToken(t, s, "reviewer"))
+	for _, name := range []string{"audience", "actor_token", "actor_token_type", "requested_token_type", "scope", "client_secret"} {
+		form.Set(name, "")
+	}
+	if rec := exchange(t, s, form, "gateway", "gw-secret"); rec.Code != http.StatusOK {
+		t.Fatalf("exchange with empty optional parameters: %d %s", rec.Code, rec.Body)
+	}
+	form.Set("subject_token", "")
+	if resp, _ := decodeExchange(t, exchange(t, s, form, "gateway", "gw-secret")); resp.Error != "invalid_request" {
+		t.Fatalf("an empty subject token was not treated as missing: %+v", resp)
+	}
+}
+
 func TestRepeatedParametersAreRefusedBeforeAnything(t *testing.T) {
 	s, _ := newSignInServer(t)
 	for name, form := range map[string]url.Values{

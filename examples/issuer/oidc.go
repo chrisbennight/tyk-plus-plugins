@@ -181,10 +181,17 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	// A parameter may appear only once (RFC 6749 section 3.2). resource and
-	// audience may repeat under RFC 8693; the token-exchange grant refuses
-	// more than one target itself.
+	// A parameter sent without a value is treated as omitted, and a parameter
+	// may appear only once (RFC 6749 section 3.2). resource and audience may
+	// repeat under RFC 8693; the token-exchange grant refuses more than one
+	// target itself.
 	for name, values := range r.PostForm {
+		values = slices.DeleteFunc(values, func(v string) bool { return v == "" })
+		if len(values) == 0 {
+			delete(r.PostForm, name)
+			continue
+		}
+		r.PostForm[name] = values
 		if len(values) > 1 && name != "resource" && name != "audience" {
 			tokenError(w, http.StatusBadRequest, "invalid_request")
 			return

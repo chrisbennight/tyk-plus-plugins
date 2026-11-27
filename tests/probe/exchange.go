@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -11,6 +13,12 @@ import (
 // exchangeGateway is the proxy with token exchange on. The test upstream is
 // also its token endpoint, and accepts only tokens it issued.
 const exchangeGateway = "http://gateway:8080/mcp3/"
+
+// unlistedGateway leaves credential stripping off like the exchange proxy,
+// but is missing from the exchange settings, as a mistyped proxy ID would
+// leave it, so it must refuse to forward rather than pass the caller's
+// credential on.
+const unlistedGateway = "http://gateway:8080/mcp4/"
 
 // exchanged reports how many token exchanges the test token endpoint
 // received, and how many upstream requests carried a token it issued.
@@ -103,15 +111,37 @@ func exchangeSuite(k keys, version string) {
 		return failed.rpc(refused, "tools/call", map[string]any{"name": "lookup", "arguments": args("count", 1)})
 	})
 	if version == olderProtocol {
-		// A notification has no ID for a JSON-RPC error, so it gets the
-		// status alone.
+		// A notification, the event stream and the session teardown carry
+		// no ID for a JSON-RPC error, so they get the status alone.
+		notification, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized", "params": map[string]any{}})
+		for _, request := range []struct {
+			what, method string
+			body         []byte
+		}{{"notification", http.MethodPost, notification}, {"event stream", http.MethodGet, nil}, {"session teardown", http.MethodDelete, nil}} {
+			before, _ := observed()
+			exchangesBefore, _ := exchanged()
+			status, body := failed.bare(refused, request.method, request.body)
+			after, _ := observed()
+			exchangesAfter, _ := exchanged()
+			check(status == http.StatusServiceUnavailable && strings.TrimSpace(body) == "" && after == before && exchangesAfter == exchangesBefore+1,
+				"%s: %s after a refused exchange got %d %q (requests %d -> %d, exchanges %d -> %d)",
+				version, request.what, status, body, before, after, exchangesBefore, exchangesAfter)
+		}
+	}
+
+	// A proxy that leaves stripping off without exchange forwards nothing,
+	// for token and key callers alike, and makes no exchange.
+	unlisted := &conn{url: unlistedGateway, version: version}
+	for name, cred := range map[string]credential{"token": tok, "key": k.support} {
 		before, _ := observed()
 		exchangesBefore, _ := exchanged()
-		status := failed.notifyStatus(refused, "notifications/initialized")
+		r := unlisted.rpc(cred, "tools/list", map[string]any{})
 		after, _ := observed()
 		exchangesAfter, _ := exchanged()
-		check(status == http.StatusServiceUnavailable && after == before && exchangesAfter == exchangesBefore+1,
-			"%s: notification got %d (requests %d -> %d, exchanges %d -> %d)", version, status, before, after, exchangesBefore, exchangesAfter)
+		check(r.Status == http.StatusServiceUnavailable && r.Error != nil && r.Error.Message == "Upstream credentials unavailable" &&
+			after == before && exchangesAfter == exchangesBefore,
+			"%s: %s caller on a proxy with stripping off and no exchange: %v (requests %d -> %d, exchanges %d -> %d)",
+			version, name, r, before, after, exchangesBefore, exchangesAfter)
 	}
 
 	// A key caller has no token to exchange, so it is refused every request,
@@ -133,4 +163,20 @@ func exchangeSuite(k keys, version string) {
 	check(slices.Contains(found, "governed/lookup") && !slices.ContainsFunc(found, func(n string) bool { return strings.HasPrefix(n, "governed3/") }),
 		"%s: key caller's search found %v", version, found)
 	fmt.Printf("Verified token exchange for a %s client.\n", version)
+}
+
+// bare sends a request of the older protocol that has no JSON-RPC ID, in a
+// session the gateway never forwards, and returns its status and body.
+func (c *conn) bare(cred credential, method string, body []byte) (int, string) {
+	req, _ := http.NewRequest(method, c.url, bytes.NewReader(body))
+	req.Header = c.headers(cred, "", "")
+	req.Header.Set("Mcp-Session-Id", "never-forwarded")
+	if method == http.MethodGet {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	res, err := httpClient.Do(req)
+	check(err == nil, "%s: %v", method, err)
+	defer res.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
+	return res.StatusCode, string(data)
 }

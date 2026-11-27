@@ -60,6 +60,15 @@ func proxyOf(r *http.Request) string {
 // ID when it has already been read, or nil.
 func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]any, id json.RawMessage) bool {
 	if !exchangeOn(r) {
+		// Where exchange is configured, a proxy that leaves Tyk's credential
+		// stripping off must be one it is on for. Otherwise a proxy meant for
+		// exchange but missing from EXCHANGE_PROXIES, through a typing error
+		// or a renamed proxy, would forward the caller's own credential.
+		if exchangeSettings != nil && !credentialStripped(r) {
+			slog.Warn("Upstream credential unavailable", "proxy", proxyOf(r), "method", ctx.GetMCPMethod(r), "reason", "exchange_off_and_stripping_off")
+			unavailable(w, r, id)
+			return false
+		}
 		return true
 	}
 	proxy := proxyOf(r)
@@ -119,6 +128,18 @@ func stripsAuthorization(def *oas.OAS) bool {
 	}
 	auth := def.GetTykExtension().Server.Authentication
 	return auth != nil && auth.StripAuthorizationData
+}
+
+// credentialStripped reports whether Tyk strips the caller's credential on a
+// request's proxy, from its OAS or classic definition.
+func credentialStripped(r *http.Request) bool {
+	if def := ctx.GetOASDefinition(r); def != nil {
+		return stripsAuthorization(def)
+	}
+	if def := ctx.GetDefinition(r); def != nil {
+		return def.StripAuthData
+	}
+	return false
 }
 
 // tokenOnlyInAuthorization reports whether Tyk reads a caller's token from

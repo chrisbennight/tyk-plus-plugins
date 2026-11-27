@@ -70,18 +70,22 @@ COPY apps /apps
 COPY policies /policies
 # governed3 is where the tests turn token exchange on. Its token callers get
 # their own policy, as governed's do, so Tyk admits them, and Tyk does not
-# strip credentials there, as token exchange requires.
-RUN mkdir /second /second-policies && for n in 2 3; do for suffix in "" -mcp; do \
+# strip credentials there, as token exchange requires. governed4 is set up
+# the same way but left out of the exchange settings, as a mistyped proxy ID
+# would leave it, so the tests can check that it refuses to forward.
+RUN mkdir /second /second-policies && for n in 2 3 4; do for suffix in "" -mcp; do \
       sed -e "s/\"governed\"/\"governed$n\"/" -e "s#\"/mcp/\"#\"/mcp$n/\"#" -e "s/\"Governed MCP\"/\"Governed MCP $n\"/" \
         "/apps/governed$suffix.json" > "/second/governed$n$suffix.json"; \
     done; done && \
-    sed -i -e 's/"governed-tokens"/"governed3-tokens"/' -e 's/"strip_auth_data": true/"strip_auth_data": false/' \
-      -e 's/"stripAuthorizationData": true/"stripAuthorizationData": false/' /second/governed3.json /second/governed3-mcp.json && \
-    sed -e 's/"governed-tokens"/"governed3-tokens"/' -e 's/"governed"/"governed3"/g' -e 's/"Governed MCP"/"Governed MCP 3"/' \
-      /policies/governed-tokens.json > /second-policies/governed3-tokens.json && \
-    grep -q '"governed2"' /second/governed2.json /second/governed2-mcp.json && \
-    grep -q '"governed3-tokens"' /second/governed3-mcp.json /second-policies/governed3-tokens.json && \
-    grep -q '"stripAuthorizationData": false' /second/governed3-mcp.json && grep -q '"strip_auth_data": false' /second/governed3.json
+    for n in 3 4; do \
+      sed -i -e "s/\"governed-tokens\"/\"governed$n-tokens\"/" -e 's/"strip_auth_data": true/"strip_auth_data": false/' \
+        -e 's/"stripAuthorizationData": true/"stripAuthorizationData": false/' "/second/governed$n.json" "/second/governed$n-mcp.json" && \
+      sed -e "s/\"governed-tokens\"/\"governed$n-tokens\"/" -e "s/\"governed\"/\"governed$n\"/g" -e "s/\"Governed MCP\"/\"Governed MCP $n\"/" \
+        /policies/governed-tokens.json > "/second-policies/governed$n-tokens.json" && \
+      grep -q "\"governed$n-tokens\"" "/second/governed$n-mcp.json" "/second-policies/governed$n-tokens.json" && \
+      grep -q '"stripAuthorizationData": false' "/second/governed$n-mcp.json" && grep -q '"strip_auth_data": false' "/second/governed$n.json" || exit 1; \
+    done && \
+    grep -q '"governed2"' /second/governed2.json /second/governed2-mcp.json
 
 FROM gateway AS test
 COPY --from=second-proxy /second/ /opt/tyk-gateway/mcp-apps/

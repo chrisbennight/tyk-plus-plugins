@@ -1,7 +1,7 @@
 services:
   gateway:
-    # The test target adds a second proxy, governed2, at /mcp2/, and a third,
-    # governed3, at /mcp3/.
+    # The test target adds a second proxy, governed2, at /mcp2/, a third,
+    # governed3, at /mcp3/, and a fourth, governed4, at /mcp4/.
     build:
       target: test
     environment:
@@ -22,8 +22,9 @@ services:
       CODEMODE_TLS_CERT: /etc/codemode/client.pem
       CODEMODE_TLS_KEY: /etc/codemode/client-key.pem
       CODEMODE_TLS_CA: /etc/codemode/client-ca.pem
-      # Token exchange on governed3 only. The test upstream is also the token
-      # endpoint, over plain HTTP on this isolated test network.
+      # Token exchange on governed3 only; governed4 also leaves stripping off
+      # but is not listed. The test upstream is also the token endpoint, over
+      # plain HTTP on this isolated test network.
       EXCHANGE_PROXIES: governed3=http://upstream:8000/mcp
       EXCHANGE_TOKEN_URL: http://upstream:8000/exchange
       EXCHANGE_ALLOW_INSECURE_HTTP: "true"

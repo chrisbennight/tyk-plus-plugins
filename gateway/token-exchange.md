@@ -25,7 +25,7 @@ Issued tokens are cached in the gateway's memory only, never in Redis or on disk
 
 1. List the proxy in `EXCHANGE_PROXIES`, with its upstream's canonical URI, and set the other settings (see [Settings](#settings)). The repository's `compose.yaml` passes each setting through from the environment `docker compose` runs in; mount any file a setting names into the gateway container.
 2. Keep the proxy's token scheme reading the token from the `Authorization` header only: the default header, with no query parameter or cookie. The plug-in exchanges and replaces the token in that header, so a proxy whose token Tyk reads from anywhere else refuses every request it would forward, with the reason `token_not_in_authorization_header` in the log.
-3. In the proxy's definition, set `stripAuthorizationData` to `false` (`strip_auth_data` in the classic definition). On an MCP proxy, Tyk passes each request through its middleware more than once before forwarding it, and strips credentials again on the later passes, where the plug-in's hooks do not run. It would therefore also remove the exchanged token. With stripping off, the plug-in takes over: on a proxy with exchange on it replaces the caller's token with the issued one, or refuses the request, so the caller's own credential is still never forwarded. A proxy with exchange on that still has stripping on refuses every request it would forward, with the reason `strip_authorization_data_on` in the log.
+3. In the proxy's definition, set `stripAuthorizationData` to `false` (`strip_auth_data` in the classic definition). On an MCP proxy, Tyk passes each request through its middleware more than once before forwarding it, and strips credentials again on the later passes, where the plug-in's hooks do not run. It would therefore also remove the exchanged token. With stripping off, the plug-in takes over: on a proxy with exchange on it replaces the caller's token with the issued one, or refuses the request, so the caller's own credential is still never forwarded. A proxy with exchange on that still has stripping on refuses every request it would forward, with the reason `strip_authorization_data_on` in the log. The reverse is refused too: on a gateway with exchange configured, a proxy with stripping off that is not listed in `EXCHANGE_PROXIES`, for example through a typing error in its ID, refuses every request it would forward, with the reason `exchange_off_and_stripping_off`, rather than forwarding the caller's own credential.
 
 ## Who can use it
 
@@ -72,7 +72,7 @@ The identity provider must support the token-exchange grant for the gateway's cl
 
 ### authentik
 
-Tested with authentik 2026.8.6:
+Tested with authentik 2026.8.6, exchanging a service account's token. Exchanging a person's token, issued for the gateway's audience, has not been tested yet:
 
 - authentik's token exchange **rejects `resource`** with `invalid_target`, by design, and names the target with `audience` instead, matched against the target provider's client ID. Put a small adapter in front of the token endpoint that renames `resource` to `audience`, passes everything else through unchanged, and refuses any resource it does not expect; point `EXCHANGE_TOKEN_URL` at the adapter, and use `EXCHANGE_TLS_CA` if it has a private certificate.
 - Give each upstream's provider a client ID equal to the upstream's canonical URI. authentik then issues a token whose `aud` is that URI, as an RFC 8707 server would. The target provider must list the gateway's provider under *Federated OAuth2/OpenID Providers*.

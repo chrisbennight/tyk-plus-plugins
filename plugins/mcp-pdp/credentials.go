@@ -25,7 +25,9 @@ func OneCredential(w http.ResponseWriter, r *http.Request) {
 	}
 	body, _ := readBody(r)
 	_ = json.Unmarshal(body, &envelope)
-	slog.Info("Caller refused", "method", envelope.Method, "reason", "multiple_credentials")
+	// The method Tyk parsed is logged, never the caller's own string, which
+	// could be as long as the body.
+	slog.Info("Caller refused", "method", ctx.GetMCPMethod(r), "reason", "multiple_credentials")
 	// Tool calls get the one refusal every denied tool call gets.
 	message := "Caller not identified"
 	if envelope.Method == "tools/call" {

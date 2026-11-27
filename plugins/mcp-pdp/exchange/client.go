@@ -36,8 +36,8 @@ const (
 	KindUnreachable   = "unreachable"
 	KindRejected      = "rejected"
 	KindMalformed     = "malformed"
-	// KindExpired means the caller's own token expired before the issued
-	// token could be used.
+	// KindExpired means the caller's own token, or the issued token,
+	// expired before the issued token could be used.
 	KindExpired = "expired"
 )
 
@@ -88,6 +88,9 @@ type flight struct {
 	// once is set when the reply gave no lifetime, so its token serves only
 	// the request that started the exchange.
 	once bool
+	// expires is when the issued token's reported lifetime ends, counted
+	// from when the request was sent, and zero when the reply gave none.
+	expires time.Time
 }
 
 // New makes a client for valid settings.
@@ -147,7 +150,10 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 		if shared && f.err == nil && f.once {
 			// A token without a known lifetime is used for one request, so
 			// a request that only waited for it makes its own exchange.
-			token, _, err := c.request(target, subject)
+			token, _, err := c.request(ctx, target, subject)
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
 			if err != nil {
 				return "", c.failed(proxy, err)
 			}
@@ -158,7 +164,8 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 		}
 		// The caller's authority ends with its token, even when the token
 		// expired while the exchange was under way.
-		if !c.now().Before(subjectExpiry) {
+		// A slow reply can also use up the issued token's own lifetime.
+		if now := c.now(); !now.Before(subjectExpiry) || (!f.expires.IsZero() && !now.Before(f.expires)) {
 			return "", c.failed(proxy, &Error{Kind: KindExpired})
 		}
 		return f.token, nil
@@ -171,7 +178,9 @@ func (c *Client) fly(key [32]byte, f *flight, proxy string, target Target, subje
 	// The issued token's lifetime is counted from when the request was sent,
 	// not from when the reply arrived, so a slow reply cannot extend it.
 	sent := c.now()
-	token, lifetime, err := c.request(target, subject)
+	// The exchange is shared by every request waiting for it, so it is not
+	// cancelled with any one of them; the HTTP client's timeout bounds it.
+	token, lifetime, err := c.request(context.Background(), target, subject)
 	c.mu.Lock()
 	delete(c.flights, key)
 	if err == nil && lifetime > 0 {
@@ -188,6 +197,9 @@ func (c *Client) fly(key [32]byte, f *flight, proxy string, target Target, subje
 		err = c.failed(proxy, err)
 	}
 	f.token, f.err, f.once = token, err, err == nil && lifetime == 0
+	if err == nil && lifetime > 0 {
+		f.expires = sent.Add(lifetime)
+	}
 	close(f.done)
 }
 
@@ -214,7 +226,7 @@ func (c *Client) failed(proxy string, err error) error {
 
 // request performs one exchange and returns the issued token and its
 // lifetime, which is zero when the response gave none.
-func (c *Client) request(target Target, subject string) (string, time.Duration, error) {
+func (c *Client) request(ctx context.Context, target Target, subject string) (string, time.Duration, error) {
 	form := url.Values{
 		"grant_type":         {grantType},
 		"subject_token":      {subject},
@@ -226,7 +238,7 @@ func (c *Client) request(target Target, subject string) (string, time.Duration, 
 	if target.Scope != "" {
 		form.Set("scope", target.Scope)
 	}
-	req, err := http.NewRequest(http.MethodPost, c.settings.TokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.settings.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", 0, &Error{Kind: KindConfiguration}
 	}

@@ -3,6 +3,7 @@ package exchange
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -138,8 +139,15 @@ func TestTrust(t *testing.T) {
 	if !errors.As(err, &failure) || failure.Kind != KindUnreachable || e.requests.Load() != 0 {
 		t.Fatalf("an untrusted endpoint gave %v after %d requests", err, e.requests.Load())
 	}
-	// With it, that authority alone is trusted.
-	if _, err := New(settings(t, e, nil)).Exchange(context.Background(), "governed", callerToken, time.Now().Add(time.Hour)); err != nil {
+	// With it, that authority alone is trusted: the configured pool is
+	// exactly the file's certificates, not the system's with them added.
+	configured := settings(t, e, nil)
+	want := x509.NewCertPool()
+	want.AddCert(e.server.Certificate())
+	if configured.TLS.RootCAs == nil || !configured.TLS.RootCAs.Equal(want) {
+		t.Fatal("EXCHANGE_TLS_CA did not replace the system's certificate authorities")
+	}
+	if _, err := New(configured).Exchange(context.Background(), "governed", callerToken, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -177,6 +185,25 @@ func TestCache(t *testing.T) {
 	exchange("governed", "a", far)
 	if n := e.requests.Load(); n != 4 {
 		t.Fatalf("an expired entry was used: %d requests", n)
+	}
+}
+
+func TestSlowReplyOutlivesIssuedToken(t *testing.T) {
+	start := time.Now()
+	var elapsed atomic.Int64
+	reply := issued("issued-token", "60")
+	// The reply arrives after the issued token's 60-second lifetime, counted
+	// from when the request was sent, has run out.
+	e := newEndpoint(t, func(w http.ResponseWriter, form url.Values) {
+		elapsed.Store(int64(61 * time.Second))
+		reply(w, form)
+	})
+	c := New(settings(t, e, nil))
+	c.now = func() time.Time { return start.Add(time.Duration(elapsed.Load())) }
+	_, err := c.Exchange(context.Background(), "governed", callerToken, start.Add(time.Hour))
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Kind != KindExpired {
+		t.Fatalf("an issued token whose lifetime ran out during the exchange gave %v", err)
 	}
 }
 

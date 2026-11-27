@@ -48,18 +48,32 @@ func exchangeSuite(k keys, version string) {
 	// The token is distinct for each version, so neither finds the other's
 	// exchanged token cached.
 	tok := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-"+version)))
-	exchangesBefore, issuedBefore := exchanged()
-	c := connectAt(exchangeGateway, tok, version)
-	catalog := catalogOf(c, tok)
-	check(catalog["lookup"] != nil, "%s: the exchange proxy listed %v", version, catalog)
-	call(c, tok, "lookup", args("count", 1), "found")
-	exchangesAfter, issuedAfter := exchanged()
+	// Every request each step sends upstream must carry an issued token.
+	allIssued := func(what string, step func()) {
+		requestsBefore, _ := observed()
+		_, issuedBefore := exchanged()
+		step()
+		requestsAfter, _ := observed()
+		_, issuedAfter := exchanged()
+		check(requestsAfter > requestsBefore && issuedAfter-issuedBefore == requestsAfter-requestsBefore,
+			"%s: %s sent %d requests upstream, %d with an issued token", version, what, requestsAfter-requestsBefore, issuedAfter-issuedBefore)
+	}
+	exchangesBefore, _ := exchanged()
+	var c *conn
+	allIssued("the handshake", func() { c = connectAt(exchangeGateway, tok, version) })
+	allIssued("tools/list", func() {
+		catalog := catalogOf(c, tok)
+		check(catalog["lookup"] != nil, "%s: the exchange proxy listed %v", version, catalog)
+	})
+	allIssued("a permitted call", func() { call(c, tok, "lookup", args("count", 1), "found") })
+	exchangesAfter, _ := exchanged()
 	// One exchange serves the caller's requests while its token is cached.
-	check(exchangesAfter-exchangesBefore == 1 && issuedAfter > issuedBefore,
-		"%s: exchanges %d -> %d, requests with an issued token %d -> %d", version, exchangesBefore, exchangesAfter, issuedBefore, issuedAfter)
+	check(exchangesAfter-exchangesBefore == 1, "%s: exchanges %d -> %d", version, exchangesBefore, exchangesAfter)
 	// The rules refuse this call, so it is refused like any other, without
-	// an exchange.
-	call(c, tok, "change", args("count", 2))
+	// an exchange. The caller's token is new, so an exchange attempt could
+	// not be hidden by the cache.
+	fresh := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-refused-"+version)))
+	call(c, fresh, "change", args("count", 2))
 	exchangesRefused, _ := exchanged()
 	check(exchangesRefused == exchangesAfter, "%s: a refused call was exchanged: %d -> %d", version, exchangesAfter, exchangesRefused)
 
@@ -92,9 +106,12 @@ func exchangeSuite(k keys, version string) {
 		// A notification has no ID for a JSON-RPC error, so it gets the
 		// status alone.
 		before, _ := observed()
+		exchangesBefore, _ := exchanged()
 		status := failed.notifyStatus(refused, "notifications/initialized")
 		after, _ := observed()
-		check(status == http.StatusServiceUnavailable && after == before, "%s: notification got %d (requests %d -> %d)", version, status, before, after)
+		exchangesAfter, _ := exchanged()
+		check(status == http.StatusServiceUnavailable && after == before && exchangesAfter == exchangesBefore+1,
+			"%s: notification got %d (requests %d -> %d, exchanges %d -> %d)", version, status, before, after, exchangesBefore, exchangesAfter)
 	}
 
 	// A key caller has no token to exchange, so it is refused every request,

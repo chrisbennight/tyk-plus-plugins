@@ -163,7 +163,7 @@ var proxyID = regexp.MustCompile(`^[A-Za-z0-9._~-]+$`)
 // every proxy refuse its calls.
 func (s *Settings) parseProxies(value string) error {
 	var problems []string
-	for _, entry := range strings.Split(value, ",") {
+	for i, entry := range strings.Split(value, ",") {
 		if entry = strings.TrimSpace(entry); entry == "" {
 			continue
 		}
@@ -171,7 +171,8 @@ func (s *Settings) parseProxies(value string) error {
 		id = strings.TrimSpace(id)
 		if !ok || !proxyID.MatchString(id) {
 			s.AllProxies = true
-			problems = append(problems, fmt.Sprintf("entry %q is not proxy-id=resource", entry))
+			// The entry is not quoted, as it could hold a credential.
+			problems = append(problems, fmt.Sprintf("entry %d is not proxy-id=resource", i+1))
 			continue
 		}
 		if _, dup := s.Proxies[id]; dup {
@@ -201,14 +202,15 @@ func (s *Settings) parseProxies(value string) error {
 }
 
 // checkResource accepts an upstream's canonical URI: an absolute URI with a
-// scheme and no fragment (RFC 8707 section 2).
+// scheme and no fragment (RFC 8707 section 2), and no user information. The
+// URI is not quoted in the error, as an invalid one could hold a credential.
 func checkResource(raw string) error {
 	if raw == "" {
 		return errors.New("no resource")
 	}
 	u, err := url.Parse(raw)
-	if err != nil || !u.IsAbs() || u.Hostname() == "" || u.Fragment != "" || strings.Contains(raw, "#") {
-		return fmt.Errorf("resource %q is not an absolute URI with a host and no fragment", raw)
+	if err != nil || !u.IsAbs() || u.Hostname() == "" || u.User != nil || u.Fragment != "" || strings.Contains(raw, "#") {
+		return errors.New("the resource is not an absolute URI with a host and no user information or fragment")
 	}
 	return nil
 }

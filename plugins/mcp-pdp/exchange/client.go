@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -98,8 +99,12 @@ func New(s *Settings) *Client {
 	return &Client{
 		settings: s,
 		http: &http.Client{
-			Timeout:   s.Timeout,
-			Transport: &http.Transport{TLSClientConfig: s.TLS, Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true},
+			Timeout: s.Timeout,
+			// Connecting and the TLS handshake are bounded too: the client's
+			// timeout ends the request, but not a connection attempt the
+			// transport goes on with for its pool.
+			Transport: &http.Transport{TLSClientConfig: s.TLS, Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true,
+				DialContext: (&net.Dialer{Timeout: s.Timeout}).DialContext, TLSHandshakeTimeout: s.Timeout},
 			// A token endpoint does not redirect; following one could send
 			// the caller's token somewhere else.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

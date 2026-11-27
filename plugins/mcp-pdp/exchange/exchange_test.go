@@ -432,21 +432,23 @@ func TestLoad(t *testing.T) {
 		t.Fatalf("an allowed http endpoint was refused: %v", err)
 	}
 	for name, changes := range map[string]map[string]string{
-		"http without the flag":  {"EXCHANGE_TOKEN_URL": "http://idp.example.com/token"},
-		"relative token URL":     {"EXCHANGE_TOKEN_URL": "/token"},
-		"no client ID":           {"EXCHANGE_CLIENT_ID": ""},
-		"no secret":              {"EXCHANGE_CLIENT_SECRET": ""},
-		"unreadable secret file": {"EXCHANGE_CLIENT_SECRET_FILE": filepath.Join(t.TempDir(), "missing")},
-		"relative resource":      {"EXCHANGE_PROXIES": "governed=/mcp"},
-		"resource with fragment": {"EXCHANGE_PROXIES": "governed=https://mcp.example.com/mcp#x"},
-		"no resource":            {"EXCHANGE_PROXIES": "governed="},
-		"repeated proxy":         {"EXCHANGE_PROXIES": "governed=https://a.example/mcp,governed=https://b.example/mcp"},
-		"no proxies":             {"EXCHANGE_PROXIES": ""},
-		"bad timeout":            {"EXCHANGE_TIMEOUT": "15"},
-		"zero margin":            {"EXCHANGE_EXPIRY_MARGIN": "0s"},
-		"bad cache size":         {"EXCHANGE_CACHE_MAX_ENTRIES": "-1"},
-		"unreadable CA":          {"EXCHANGE_TLS_CA": filepath.Join(t.TempDir(), "missing.pem")},
-		"CA without certs":       {"EXCHANGE_TLS_CA": emptyCA},
+		"http without the flag":       {"EXCHANGE_TOKEN_URL": "http://idp.example.com/token"},
+		"relative token URL":          {"EXCHANGE_TOKEN_URL": "/token"},
+		"no client ID":                {"EXCHANGE_CLIENT_ID": ""},
+		"no secret":                   {"EXCHANGE_CLIENT_SECRET": ""},
+		"unreadable secret file":      {"EXCHANGE_CLIENT_SECRET_FILE": filepath.Join(t.TempDir(), "missing")},
+		"relative resource":           {"EXCHANGE_PROXIES": "governed=/mcp"},
+		"resource with fragment":      {"EXCHANGE_PROXIES": "governed=https://mcp.example.com/mcp#x"},
+		"no resource":                 {"EXCHANGE_PROXIES": "governed="},
+		"resource with credentials":   {"EXCHANGE_PROXIES": "governed=https://user:from-env@mcp.example.com/mcp"},
+		"unreadable credential entry": {"EXCHANGE_PROXIES": "governed https://user:from-env@mcp.example.com/mcp"},
+		"repeated proxy":              {"EXCHANGE_PROXIES": "governed=https://a.example/mcp,governed=https://b.example/mcp"},
+		"no proxies":                  {"EXCHANGE_PROXIES": ""},
+		"bad timeout":                 {"EXCHANGE_TIMEOUT": "15"},
+		"zero margin":                 {"EXCHANGE_EXPIRY_MARGIN": "0s"},
+		"bad cache size":              {"EXCHANGE_CACHE_MAX_ENTRIES": "-1"},
+		"unreadable CA":               {"EXCHANGE_TLS_CA": filepath.Join(t.TempDir(), "missing.pem")},
+		"CA without certs":            {"EXCHANGE_TLS_CA": emptyCA},
 	} {
 		if _, err := load(changes); err == nil {
 			t.Errorf("%s: accepted", name)

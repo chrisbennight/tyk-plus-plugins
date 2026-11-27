@@ -20,6 +20,11 @@ const exchangeGateway = "http://gateway:8080/mcp3/"
 // credential on.
 const unlistedGateway = "http://gateway:8080/mcp4/"
 
+// peerExchangeGateway is the exchange proxy on the peer gateway, which has
+// Code Mode off, so exchange there cannot rely on Code Mode keeping the
+// caller's token.
+const peerExchangeGateway = "http://gateway-peer:8080/mcp3/"
+
 // exchanged reports how many token exchanges the test token endpoint
 // received, and how many upstream requests carried a token it issued.
 func exchanged() (exchanges, withIssuedToken int) {
@@ -74,6 +79,13 @@ func exchangeSuite(k keys, version string) {
 		check(catalog["lookup"] != nil, "%s: the exchange proxy listed %v", version, catalog)
 	})
 	allIssued("a permitted call", func() { call(c, tok, "lookup", args("count", 1), "found") })
+	if version == olderProtocol {
+		// The event stream and the session teardown carry the exchanged
+		// token too; the teardown comes last, as it ends the session.
+		for _, method := range []string{http.MethodGet, http.MethodDelete} {
+			allIssued(method+" in the session", func() { c.bare(tok, method, nil, c.session) })
+		}
+	}
 	exchangesAfter, _ := exchanged()
 	// One exchange serves the caller's requests while its token is cached.
 	check(exchangesAfter-exchangesBefore == 1, "%s: exchanges %d -> %d", version, exchangesBefore, exchangesAfter)
@@ -120,7 +132,7 @@ func exchangeSuite(k keys, version string) {
 		}{{"notification", http.MethodPost, notification}, {"event stream", http.MethodGet, nil}, {"session teardown", http.MethodDelete, nil}} {
 			before, _ := observed()
 			exchangesBefore, _ := exchanged()
-			status, body := failed.bare(refused, request.method, request.body)
+			status, body := failed.bare(refused, request.method, request.body, "never-forwarded")
 			after, _ := observed()
 			exchangesAfter, _ := exchanged()
 			check(status == http.StatusServiceUnavailable && strings.TrimSpace(body) == "" && after == before && exchangesAfter == exchangesBefore+1,
@@ -128,6 +140,12 @@ func exchangeSuite(k keys, version string) {
 				version, request.what, status, body, before, after, exchangesBefore, exchangesAfter)
 		}
 	}
+
+	// Exchange works the same on the peer, which has Code Mode off.
+	peerToken := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-peer-"+version)))
+	var peer *conn
+	allIssued("the peer's handshake", func() { peer = connectAt(peerExchangeGateway, peerToken, version) })
+	allIssued("a permitted call on the peer", func() { call(peer, peerToken, "lookup", args("count", 1), "found") })
 
 	// A proxy that leaves stripping off without exchange forwards nothing,
 	// for token and key callers alike, and makes no exchange.
@@ -165,18 +183,25 @@ func exchangeSuite(k keys, version string) {
 	fmt.Printf("Verified token exchange for a %s client.\n", version)
 }
 
-// bare sends a request of the older protocol that has no JSON-RPC ID, in a
-// session the gateway never forwards, and returns its status and body.
-func (c *conn) bare(cred credential, method string, body []byte) (int, string) {
+// bare sends a request of the older protocol that has no JSON-RPC ID, in the
+// given session, and returns its status and body. An event stream's body is
+// not read, as it stays open.
+func (c *conn) bare(cred credential, method string, body []byte, session string) (int, string) {
 	req, _ := http.NewRequest(method, c.url, bytes.NewReader(body))
 	req.Header = c.headers(cred, "", "")
-	req.Header.Set("Mcp-Session-Id", "never-forwarded")
+	req.Header.Del("Mcp-Session-Id")
+	if session != "" {
+		req.Header.Set("Mcp-Session-Id", session)
+	}
 	if method == http.MethodGet {
 		req.Header.Set("Accept", "text/event-stream")
 	}
 	res, err := httpClient.Do(req)
 	check(err == nil, "%s: %v", method, err)
 	defer res.Body.Close()
+	if strings.HasPrefix(res.Header.Get("Content-Type"), "text/event-stream") {
+		return res.StatusCode, ""
+	}
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
 	return res.StatusCode, string(data)
 }

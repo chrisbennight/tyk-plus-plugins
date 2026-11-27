@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -23,6 +24,9 @@ var (
 	// every proxy with exchange on then refuses requests it would forward.
 	exchangeProblem string
 	exchanger       *exchange.Client
+	// insecureHTTP allows a plain-HTTP upstream on a proxy with exchange on,
+	// as EXCHANGE_ALLOW_INSECURE_HTTP allows a plain-HTTP token endpoint.
+	insecureHTTP = os.Getenv("EXCHANGE_ALLOW_INSECURE_HTTP") == "true"
 )
 
 func init() {
@@ -60,11 +64,12 @@ func proxyOf(r *http.Request) string {
 // ID when it has already been read, or nil.
 func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]any, id json.RawMessage) bool {
 	if !exchangeOn(r) {
-		// Where exchange is configured, a proxy that leaves Tyk's credential
-		// stripping off must be one it is on for. Otherwise a proxy meant for
-		// exchange but missing from EXCHANGE_PROXIES, through a typing error
-		// or a renamed proxy, would forward the caller's own credential.
-		if exchangeSettings != nil && !credentialStripped(r) {
+		// A proxy that leaves Tyk's credential stripping off must have
+		// exchange on, which replaces the credential. Otherwise, as with a
+		// proxy meant for exchange but missing from EXCHANGE_PROXIES or on a
+		// gateway without the exchange settings, it would forward the
+		// caller's own credential, which MCP forbids.
+		if !credentialStripped(r) {
 			slog.Warn("Upstream credential unavailable", "proxy", proxyOf(r), "method", ctx.GetMCPMethod(r), "reason", "exchange_off_and_stripping_off")
 			unavailable(w, r, id)
 			return false
@@ -83,6 +88,8 @@ func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]
 		reason = "conflicting_upstream_credential"
 	case !tokenOnlyInAuthorization(def):
 		reason = "token_not_in_authorization_header"
+	case !secureUpstream(def):
+		reason = "upstream_not_https"
 	}
 	if reason != "" {
 		slog.Warn("Upstream credential unavailable", "proxy", proxy, "method", ctx.GetMCPMethod(r), "reason", reason)
@@ -128,6 +135,16 @@ func stripsAuthorization(def *oas.OAS) bool {
 	}
 	auth := def.GetTykExtension().Server.Authentication
 	return auth != nil && auth.StripAuthorizationData
+}
+
+// secureUpstream reports whether the issued token may be sent to the proxy's
+// upstream: over HTTPS, or over plain HTTP where that is explicitly allowed.
+func secureUpstream(def *oas.OAS) bool {
+	if def == nil || def.GetTykExtension() == nil {
+		return false
+	}
+	upstream, err := url.Parse(def.GetTykExtension().Upstream.URL)
+	return err == nil && (upstream.Scheme == "https" || (upstream.Scheme == "http" && insecureHTTP))
 }
 
 // credentialStripped reports whether Tyk strips the caller's credential on a

@@ -1,6 +1,6 @@
 # Authorize MCP tool calls
 
-Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates each caller with either a token or a key, and removes the credential before forwarding requests.
+Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates each caller with either a token or a key, and removes the credential before forwarding requests. Leave `stripAuthorizationData` on: the plug-in refuses to forward any request from a proxy where it is off, unless [token exchange](../token-exchange.md) replaces the credential there, so a caller's own credential never reaches an upstream.
 
 **The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call.** Access exists only after you add a tool to the inventory and write a rule that permits calling it. The plug-in has no built-in user types or rules.
 

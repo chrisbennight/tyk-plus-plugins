@@ -9,8 +9,9 @@ services:
       additional_contexts:
         gateway: docker-image://${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
   gateway-peer:
-    build: !reset null
-    image: ${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
+    build:
+      additional_contexts:
+        gateway: docker-image://${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
   admin:
     build: !reset null
     image: ${ADMIN_IMAGE:?set ADMIN_IMAGE}

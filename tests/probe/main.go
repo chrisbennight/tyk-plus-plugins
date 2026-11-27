@@ -39,7 +39,7 @@ func main() {
 // gateway must be ready too.
 func waitForGateway() {
 	for range 60 {
-		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(secondGateway) && apiLoaded(exchangeGateway) && apiLoaded(unlistedGateway) && apiLoaded(peerGateway) && upstreamUp() {
+		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(secondGateway) && apiLoaded(exchangeGateway) && apiLoaded(unlistedGateway) && apiLoaded(peerExchangeGateway) && apiLoaded(peerGateway) && upstreamUp() {
 			return
 		}
 		time.Sleep(time.Second)

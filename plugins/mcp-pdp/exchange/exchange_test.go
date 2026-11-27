@@ -129,6 +129,15 @@ func TestRequestShape(t *testing.T) {
 	}
 }
 
+func TestPlainHTTPBypassesProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+	t.Setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+	plain, _ := http.NewRequest(http.MethodPost, "http://idp.internal/token", nil)
+	if proxy, err := proxyFor(plain); err != nil || proxy != nil {
+		t.Fatalf("a plain-HTTP endpoint went through %v, %v", proxy, err)
+	}
+}
+
 func TestTrust(t *testing.T) {
 	e := newEndpoint(t, issued("issued-token", "300"))
 	// Without EXCHANGE_TLS_CA only the system's certificate authorities are
@@ -238,7 +247,7 @@ func TestCacheNeverOutlivesCallerToken(t *testing.T) {
 }
 
 func TestNoExpiresInIsNotCached(t *testing.T) {
-	for _, expiresIn := range []string{"", "0", "-5", `"600"`, "1.5"} {
+	for _, expiresIn := range []string{"", `"600"`, "1.5"} {
 		e := newEndpoint(t, issued("issued-token", expiresIn))
 		c := New(settings(t, e, nil))
 		for range 2 {
@@ -337,6 +346,8 @@ func TestFailsClosed(t *testing.T) {
 		{"other token type", refusal(200, `{"access_token":"t","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"DPoP"}`), KindMalformed, ""},
 		{"id token issued", refusal(200, `{"access_token":"t","issued_token_type":"urn:ietf:params:oauth:token-type:id_token","token_type":"Bearer"}`), KindMalformed, ""},
 		{"token with a line break", refusal(200, `{"access_token":"t\r\nX-Injected: 1","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`), KindMalformed, ""},
+		{"expired on issue", refusal(200, `{`+ok+`,"expires_in":0}`), KindMalformed, ""},
+		{"negative lifetime", refusal(200, `{`+ok+`,"expires_in":-5}`), KindMalformed, ""},
 		{"empty token", refusal(200, `{"access_token":"","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`), KindMalformed, ""},
 		{"oversized", refusal(200, `{`+ok+`,"padding":"`+strings.Repeat("x", maxResponseBytes)+`"}`), KindMalformed, ""},
 		{"timeout", func(w http.ResponseWriter, _ url.Values) { time.Sleep(700 * time.Millisecond) }, KindUnreachable, ""},

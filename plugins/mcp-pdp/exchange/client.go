@@ -103,7 +103,7 @@ func New(s *Settings) *Client {
 			// Connecting and the TLS handshake are bounded too: the client's
 			// timeout ends the request, but not a connection attempt the
 			// transport goes on with for its pool.
-			Transport: &http.Transport{TLSClientConfig: s.TLS, Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true,
+			Transport: &http.Transport{TLSClientConfig: s.TLS, Proxy: proxyFor, ForceAttemptHTTP2: true,
 				DialContext: (&net.Dialer{Timeout: s.Timeout}).DialContext, TLSHandshakeTimeout: s.Timeout},
 			// A token endpoint does not redirect; following one could send
 			// the caller's token somewhere else.
@@ -295,7 +295,24 @@ func (c *Client) request(ctx context.Context, target Target, subject string) (st
 	if !bearerToken.MatchString(*reply.AccessToken) {
 		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
 	}
+	// A token the provider says has already expired is not used.
+	if reply.ExpiresIn != nil {
+		var seconds float64
+		if json.Unmarshal(*reply.ExpiresIn, &seconds) == nil && seconds <= 0 {
+			return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+		}
+	}
 	return *reply.AccessToken, lifetime(reply.ExpiresIn), nil
+}
+
+// proxyFor routes requests to the token endpoint through the environment's
+// proxy settings, except a plain-HTTP endpoint, which is reached directly: a
+// proxy would read the caller's token and the client secret in transit.
+func proxyFor(req *http.Request) (*url.URL, error) {
+	if req.URL.Scheme == "http" {
+		return nil, nil
+	}
+	return http.ProxyFromEnvironment(req)
 }
 
 var bearerToken = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)

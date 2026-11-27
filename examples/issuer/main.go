@@ -11,11 +11,13 @@
 //	ISSUER_KEY_FILE  a PKCS #8 PEM signing key, created if missing, so restarts keep the key
 //	ISSUER_LISTEN    the listening address; defaults to 127.0.0.1:8000
 //	ISSUER_PUBLIC_URL the base URL browsers use to reach the issuer; enables
-//	                 the OpenID Connect sign-in endpoints for the deck's clients
+//	                 the OAuth endpoints (OpenID Connect sign-in and token
+//	                 exchange) for the deck's clients
 package main
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -36,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -154,16 +157,64 @@ type deck struct {
 	// People keeps each claim as written, so a token carries exactly the value
 	// the deck sets, numbers included.
 	People map[string]map[string]jsontext.Value `json:"people"`
-	// Clients are the applications that may sign people in through the
-	// OpenID Connect endpoints, by client ID.
+	// Clients are the applications that may use the OAuth token endpoint, by
+	// client ID.
 	Clients map[string]client `json:"clients"`
+	// Targets are the services the token-exchange grant can issue tokens for,
+	// by resource URI.
+	Targets map[string]target `json:"targets"`
 }
 
-// client is an application that signs people in. A sign-in returns only to
-// one of its redirect URIs, compared exactly.
+// client is an application that uses the OAuth token endpoint. A sign-in
+// returns only to one of its redirect URIs, compared exactly.
 type client struct {
 	Secret       string   `json:"secret"`
 	RedirectURIs []string `json:"redirectURIs"`
+	// Grants are the grant types the client may use. Without any, it may use
+	// the authorization-code grant only.
+	Grants []string `json:"grants"`
+}
+
+// allows reports whether the client may use a grant type.
+func (c client) allows(grant string) bool {
+	if len(c.Grants) == 0 {
+		return grant == grantAuthorizationCode
+	}
+	return slices.Contains(c.Grants, grant)
+}
+
+// target is a service the token-exchange grant can issue tokens for. A
+// request names it by its resource URI, which is the target's key in the deck,
+// or by its audience name. Either way the issued token's aud is the resource
+// URI.
+type target struct {
+	Audience string `json:"audience"`
+	// Scopes are the scope values a token for this target may carry.
+	Scopes []string `json:"scopes"`
+	// DelayMilliseconds holds every successful exchange for this target that
+	// long before answering, so a test can make its caller time out. It is a
+	// test-only fault mode, not standard behaviour.
+	DelayMilliseconds int64 `json:"delayMilliseconds"`
+}
+
+// The grant types the token endpoint supports.
+const (
+	grantAuthorizationCode = "authorization_code"
+	grantTokenExchange     = "urn:ietf:params:oauth:grant-type:token-exchange"
+)
+
+// scopeToken is one scope value (RFC 6749 section 3.3).
+var scopeToken = regexp.MustCompile(`^[\x21\x23-\x5B\x5D-\x7E]+$`)
+
+// maxDelayMilliseconds bounds a target's delay, so a mistyped value cannot
+// hold requests open indefinitely.
+const maxDelayMilliseconds = 60_000
+
+// validResource reports whether s is an absolute URI without a fragment, as a
+// resource indicator must be (RFC 8707 section 2).
+func validResource(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && u.IsAbs() && !strings.Contains(s, "#")
 }
 
 var personName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -219,14 +270,44 @@ func loadDeck(path string) (*deck, error) {
 		if !personName.MatchString(id) {
 			return nil, fmt.Errorf("client %q: names use lowercase letters, digits and hyphens", id)
 		}
-		if c.Secret == "" || len(c.RedirectURIs) == 0 {
-			return nil, fmt.Errorf("client %q: a secret and at least one redirect URI are required", id)
+		for _, grant := range c.Grants {
+			if grant != grantAuthorizationCode && grant != grantTokenExchange {
+				return nil, fmt.Errorf("client %q: grant %q is not %q or %q", id, grant, grantAuthorizationCode, grantTokenExchange)
+			}
+		}
+		if c.Secret == "" {
+			return nil, fmt.Errorf("client %q: a secret is required", id)
+		}
+		if c.allows(grantAuthorizationCode) && len(c.RedirectURIs) == 0 {
+			return nil, fmt.Errorf("client %q: the authorization-code grant needs at least one redirect URI", id)
 		}
 		for _, uri := range c.RedirectURIs {
 			u, err := url.Parse(uri)
 			if err != nil || !u.IsAbs() || u.Fragment != "" || u.Query().Has("code") || u.Query().Has("state") {
 				return nil, fmt.Errorf("client %q: redirect URI %q must be an absolute URL without a fragment or its own code or state", id, uri)
 			}
+		}
+	}
+	// Audience names must be unique, so each names one target (RFC 8693
+	// section 2.1).
+	audiences := map[string]string{}
+	for resource, t := range d.Targets {
+		if !validResource(resource) {
+			return nil, fmt.Errorf("target %q: a target's resource URI must be absolute, without a fragment", resource)
+		}
+		if t.Audience != "" {
+			if other, taken := audiences[t.Audience]; taken {
+				return nil, fmt.Errorf("targets %q and %q: audience %q names both", other, resource, t.Audience)
+			}
+			audiences[t.Audience] = resource
+		}
+		for _, scope := range t.Scopes {
+			if !scopeToken.MatchString(scope) {
+				return nil, fmt.Errorf("target %q: scope %q is not a single scope value", resource, scope)
+			}
+		}
+		if t.DelayMilliseconds < 0 || t.DelayMilliseconds > maxDelayMilliseconds {
+			return nil, fmt.Errorf("target %q: delayMilliseconds must be between 0 and %d", resource, maxDelayMilliseconds)
 		}
 	}
 	return &d, nil
@@ -246,6 +327,8 @@ type server struct {
 	// codes holds the sign-in codes issued and not yet exchanged.
 	codesMu sync.Mutex
 	codes   map[string]signIn
+	// sleep waits for a target's delay, or until the request is abandoned.
+	sleep func(ctx context.Context, d time.Duration) error
 }
 
 func newServer(d *deck, published *rsa.PrivateKey, now func() time.Time) (*server, error) {
@@ -254,14 +337,14 @@ func newServer(d *deck, published *rsa.PrivateKey, now func() time.Time) (*serve
 		return nil, err
 	}
 	s := &server{deck: d, now: now, published: published, unpublished: unpublished, keyID: thumbprint(&published.PublicKey), mux: http.NewServeMux(),
-		codes: map[string]signIn{}}
+		codes: map[string]signIn{}, sleep: sleepContext}
 	s.mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok\n") })
 	s.mux.HandleFunc("GET /jwks", s.jwks)
 	s.mux.HandleFunc("POST /token", s.signBody)
 	s.mux.HandleFunc("GET /token/{name}", s.signPerson)
 	s.mux.HandleFunc("GET /.well-known/openid-configuration", s.discovery)
 	s.mux.HandleFunc("GET /oauth/authorize", s.authorize)
-	s.mux.HandleFunc("POST /oauth/token", s.exchange)
+	s.mux.HandleFunc("POST /oauth/token", s.token)
 	return s, nil
 }
 
@@ -337,7 +420,7 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, claims []byte) {
 	if r.URL.Query().Get("key") == "unpublished" {
 		key = s.unpublished
 	}
-	token, err := sign(key, s.keyID, claims)
+	token, err := sign(key, s.keyID, typJWT, claims)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -349,8 +432,16 @@ func (s *server) write(w http.ResponseWriter, r *http.Request, claims []byte) {
 
 var b64 = base64.RawURLEncoding.EncodeToString
 
-func sign(key *rsa.PrivateKey, keyID string, claims []byte) (string, error) {
-	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": "JWT", "kid": keyID})
+// The JOSE typ header values of the tokens the issuer signs. Access tokens
+// from the OAuth token endpoint use the JWT access token profile (RFC 9068
+// section 2.1); every other token is a plain JWT.
+const (
+	typJWT       = "JWT"
+	typAccessJWT = "at+jwt"
+)
+
+func sign(key *rsa.PrivateKey, keyID, typ string, claims []byte) (string, error) {
+	header, _ := json.Marshal(map[string]string{"alg": "RS256", "typ": typ, "kid": keyID})
 	signed := b64(header) + "." + b64(claims)
 	digest := sha256.Sum256([]byte(signed))
 	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])

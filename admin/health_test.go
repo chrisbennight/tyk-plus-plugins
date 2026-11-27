@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+func TestProbeAddress(t *testing.T) {
+	for listen, want := range map[string]string{":8000": "127.0.0.1:8000", "0.0.0.0:8000": "127.0.0.1:8000",
+		"[::]:8000": "[::1]:8000", "10.0.0.5:8000": "10.0.0.5:8000"} {
+		if got, err := probeAddress(listen); err != nil || got != want {
+			t.Errorf("probeAddress(%q) = %q, %v; want %q", listen, got, err, want)
+		}
+	}
+}
+
 func TestHealthcheck(t *testing.T) {
 	// The identity provider is unreachable; the dashboard is still healthy.
 	cfg := config{store: t.TempDir(), pending: t.TempDir(), issuer: "https://127.0.0.1:1", discoveryURL: "https://127.0.0.1:1",

@@ -55,6 +55,9 @@ func runHealth(args []string, lookup func(string) (string, bool), out io.Writer)
 	if flags.NArg() != 0 {
 		return fmt.Errorf("health takes no arguments\n\n%s", healthUsage)
 	}
+	if *timeout <= 0 {
+		return fmt.Errorf("-timeout must be positive, got %v", *timeout)
+	}
 	cfg, err := readTykConfig(*conf, lookup)
 	if err != nil {
 		return err
@@ -135,10 +138,7 @@ func readyURL(cfg tykConfig) string {
 	if port == 0 {
 		port = 8080 // Tyk's default
 	}
-	host := cfg.ListenAddress
-	if ip := net.ParseIP(host); host == "" || (ip != nil && ip.IsUnspecified()) {
-		host = "127.0.0.1"
-	}
+	host := loopbackFor(cfg.ListenAddress)
 	scheme := "http"
 	if cfg.HTTPServerOptions.UseSSL {
 		scheme = "https"
@@ -148,6 +148,20 @@ func readyURL(cfg tykConfig) string {
 		name = "ready"
 	}
 	return scheme + "://" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + name
+}
+
+// loopbackFor is the address to probe a listener bound to host from inside
+// the same container: loopback when it listens on every address, in the
+// listener's own address family.
+func loopbackFor(host string) string {
+	ip := net.ParseIP(host)
+	switch {
+	case host == "" || (ip != nil && ip.Equal(net.IPv4zero)):
+		return "127.0.0.1"
+	case ip != nil && ip.IsUnspecified():
+		return "::1"
+	}
+	return host
 }
 
 func checkReady(cfg tykConfig, timeout time.Duration) error {

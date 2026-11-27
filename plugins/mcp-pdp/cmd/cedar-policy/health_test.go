@@ -133,6 +133,14 @@ func TestHealthControlAPIHostname(t *testing.T) {
 	}
 }
 
+func TestHealthRejectsUnboundedTimeout(t *testing.T) {
+	for _, timeout := range []string{"0s", "-1s"} {
+		if err := runHealth([]string{"-timeout", timeout}, noEnv, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "must be positive") {
+			t.Fatalf("-timeout %s: %v", timeout, err)
+		}
+	}
+}
+
 func TestHealthHelp(t *testing.T) {
 	var out bytes.Buffer
 	if err := runHealth([]string{"-h"}, noEnv, &out); err != nil || !strings.Contains(out.String(), "cedar-policy health") {
@@ -154,6 +162,7 @@ func TestReadyURL(t *testing.T) {
 		{"listen port without a control port", "", map[string]string{"TYK_GW_OMITCONFIGFILE": "true", "TYK_GW_LISTENPORT": "8081"}, "http://127.0.0.1:8081/ready"},
 		{"Tyk's default port", "", map[string]string{"TYK_GW_OMITCONFIGFILE": "true"}, "http://127.0.0.1:8080/ready"},
 		{"unspecified listen address", conf, map[string]string{"TYK_GW_LISTENADDRESS": "0.0.0.0"}, "http://127.0.0.1:9696/ready"},
+		{"unspecified IPv6 listen address", conf, map[string]string{"TYK_GW_LISTENADDRESS": "::"}, "http://[::1]:9696/ready"},
 		{"specific listen address", conf, map[string]string{"TYK_GW_LISTENADDRESS": "::1"}, "http://[::1]:9696/ready"},
 		{"TLS", conf, map[string]string{"TYK_GW_HTTPSERVEROPTIONS_USESSL": "true"}, "https://127.0.0.1:9696/ready"},
 		{"renamed endpoint", conf, map[string]string{"TYK_GW_READINESSCHECKENDPOINTNAME": "readyz"}, "http://127.0.0.1:9696/readyz"},

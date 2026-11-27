@@ -150,7 +150,8 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 		if shared && f.err == nil && f.once {
 			// A token without a known lifetime is used for one request, so
 			// a request that only waited for it makes its own exchange.
-			token, _, err := c.request(ctx, target, subject)
+			sent := c.now()
+			token, lifetime, err := c.request(ctx, target, subject)
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return "", ctxErr
 			}
@@ -158,6 +159,9 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 				return "", c.failed(proxy, err)
 			}
 			f = &flight{token: token}
+			if lifetime > 0 {
+				f.expires = sent.Add(lifetime)
+			}
 		}
 		if f.err != nil {
 			return "", f.err
@@ -313,7 +317,9 @@ func errorCode(body []byte) string {
 	var refusal struct {
 		Error *string `json:"error"`
 	}
-	if json.Unmarshal(body, &refusal) != nil || refusal.Error == nil {
+	// As with a reply, the member's name is matched exactly and a repeated
+	// member is refused.
+	if jsonv2.Unmarshal(body, &refusal) != nil || refusal.Error == nil {
 		return ""
 	}
 	if knownErrorCodes[*refusal.Error] {

@@ -320,6 +320,9 @@ func TestFailsClosed(t *testing.T) {
 		{"invalid_request", refusal(400, `{"error":"invalid_request","error_description":"bad subject"}`), KindRejected, "invalid_request"},
 		{"invalid_grant", refusal(400, `{"error":"invalid_grant"}`), KindRejected, "invalid_grant"},
 		{"invalid_target", refusal(400, `{"error":"invalid_target"}`), KindRejected, "invalid_target"},
+		// Only an exactly named, single error member gives a code.
+		{"case-variant error member", refusal(400, `{"ERROR":"invalid_grant"}`), KindRejected, ""},
+		{"repeated error member", refusal(400, `{"error":"invalid_grant","error":"invalid_target"}`), KindRejected, ""},
 		{"server error", refusal(500, `oops`), KindRejected, ""},
 		{"empty 502", refusal(502, ``), KindRejected, ""},
 		{"redirect", func(w http.ResponseWriter, _ url.Values) {

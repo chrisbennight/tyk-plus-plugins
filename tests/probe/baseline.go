@@ -77,29 +77,40 @@ func baseline(k keys, version string) {
 	tokenDenied := call(c, supportToken, "change", args("count", 2))
 	tokenUnknown := call(c, supportToken, "unknown", args("count", 2))
 	check(sameRefusal(tokenDenied, tokenUnknown) && sameRefusal(tokenDenied, denied), "%s: token caller hidden %v, unknown %v", version, tokenDenied, tokenUnknown)
-	// A caller that cannot be identified is refused on every method.
+	// A caller that cannot be identified is refused on every method. So is a
+	// request carrying both a key and a token, whichever of them is valid: it
+	// has no single caller, and is refused before either is tried.
 	unidentified := bearerCred(token("published", args("app_roles", []string{"support"}, "exp", nil)))
-	call(c, unidentified, "lookup", args())
-	before, _ := observed()
-	r := c.rpc(unidentified, "tools/list", map[string]any{})
-	after, _ := observed()
-	check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified" && after == before,
-		"%s: unidentified caller listed tools: %v (requests %d -> %d)", version, r, before, after)
-	if c.version == olderProtocol {
-		before, _ = observed()
-		status := c.notifyStatus(unidentified, "notifications/initialized")
-		after, _ = observed()
-		check(status == http.StatusForbidden && after == before, "%s: unidentified caller's notification got %d (requests %d -> %d)", version, status, before, after)
-	}
-	// Neither handshake lets an unidentified caller reach the upstream.
-	for _, handshake := range []struct{ version, method string }{{olderProtocol, "initialize"}, {newerProtocol, "server/discover"}} {
+	for _, refusal := range []struct {
+		name string
+		cred credential
+	}{
+		{"unidentified caller", unidentified},
+		{"key and token", k.support.with(supportToken)},
+		{"unknown key and token", keyCred("not-a-key").with(supportToken)},
+	} {
+		call(c, refusal.cred, "lookup", args())
 		before, _ := observed()
-		fresh := &conn{url: gateway, version: handshake.version}
-		r := fresh.rpc(unidentified, handshake.method, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
-			"clientInfo": map[string]any{"name": "probe", "version": "1"}})
+		r := c.rpc(refusal.cred, "tools/list", map[string]any{})
 		after, _ := observed()
 		check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified" && after == before,
-			"%s: unidentified caller's %s was not refused before the upstream: %v (requests %d -> %d)", version, handshake.method, r, before, after)
+			"%s: %s listed tools: %v (requests %d -> %d)", version, refusal.name, r, before, after)
+		if c.version == olderProtocol {
+			before, _ = observed()
+			status := c.notifyStatus(refusal.cred, "notifications/initialized")
+			after, _ = observed()
+			check(status == http.StatusForbidden && after == before, "%s: %s's notification got %d (requests %d -> %d)", version, refusal.name, status, before, after)
+		}
+		// Neither handshake lets the request reach the upstream.
+		for _, handshake := range []struct{ version, method string }{{olderProtocol, "initialize"}, {newerProtocol, "server/discover"}} {
+			before, _ := observed()
+			fresh := &conn{url: gateway, version: handshake.version}
+			r := fresh.rpc(refusal.cred, handshake.method, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
+				"clientInfo": map[string]any{"name": "probe", "version": "1"}})
+			after, _ := observed()
+			check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "Caller not identified" && after == before,
+				"%s: %s's %s was not refused before the upstream: %v (requests %d -> %d)", version, refusal.name, handshake.method, r, before, after)
+		}
 	}
 
 	// The same checks through a real MCP client.

@@ -293,14 +293,10 @@ permit (principal, action, resource) when {
 	refused(c, noExpiry)
 	r := c.rpc(noExpiry, "tools/list", map[string]any{})
 	check(r.Status == http.StatusForbidden && r.Error != nil && len(r.ID) > 0, "tools/list with no expiry: %v", r)
-	// With a valid key and a valid token, the key is tried first and identifies the
-	// caller. Neither credential reaches the upstream, which rejects any it sees.
-	// The token's guest role would permit this change, so a denial shows that the
-	// token adds nothing to the key's identity.
+	// A request carrying both a key and a token is refused, even when each
+	// alone would be permitted; the baseline checks it on every method.
 	call(c, tok(args("app_roles", []string{"guest"})), "change", args("count", 3), "updated")
-	both := k.support.with(tok(args("app_roles", []string{"guest"})))
-	call(c, both, "lookup", args(), "found")
-	call(c, both, "change", args("count", 3))
+	call(c, k.support.with(tok(args("app_roles", []string{"guest"}))), "lookup", args())
 	refused(c, keyCred("not-a-key"))
 	fmt.Println("Verified Cedar access and upstream dispatch with the older protocol.")
 }

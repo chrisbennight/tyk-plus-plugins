@@ -87,6 +87,13 @@
         "contextVariables": {
           "enabled": true
         },
+        "prePlugins": [
+          {
+            "enabled": true,
+            "functionName": "OneCredential",
+            "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+          }
+        ],
         "postPlugins": [
           {
             "enabled": true,

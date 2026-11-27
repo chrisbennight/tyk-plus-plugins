@@ -78,20 +78,6 @@ func run(e *examples) bool {
 				c.Caller, cred, version, c.Server, c.Tool, c.Arguments, c.Expect)
 		}
 	}
-	for _, k := range e.expected.KeyAndToken {
-		key, err := creds.of(k.Key)
-		if err != nil {
-			fail(err)
-		}
-		token, err := creds.of(k.Token)
-		if err != nil {
-			fail(err)
-		}
-		for _, version := range versions {
-			r.check(fmt.Sprintf("%s key with %s token calls %s.%s with a %s client: %s", k.Key, k.Token, k.Server, k.Tool, version, k.Expect),
-				k.Key+"+"+k.Token, key.with(token), version, k.Server, k.Tool, k.Arguments, k.Expect)
-		}
-	}
 	r.listedTools()
 	r.refusedCallers()
 	r.codeMode()

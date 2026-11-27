@@ -89,6 +89,21 @@ func (r *runner) refusedCredential(name string) (credential, error) {
 		claims["roles"] = map[string]any{"admin": true}
 	case "unpublished-key-token":
 		return signed(claims, true)
+	case "key-and-token", "unknown-key-and-token":
+		// A request carrying a key and a valid token has no single caller,
+		// whether or not the key is valid.
+		key := credential{"X-API-Key": "not-a-key"}
+		if name == "key-and-token" {
+			var err error
+			if key, err = r.creds.of("deployer"); err != nil {
+				return nil, err
+			}
+		}
+		token, err := signed(valid(), false)
+		if err != nil {
+			return nil, err
+		}
+		return key.with(token), nil
 	case "key-without-metadata":
 		key := os.Getenv("EXAMPLE_KEY_WITHOUT_METADATA_KEY")
 		if key == "" {

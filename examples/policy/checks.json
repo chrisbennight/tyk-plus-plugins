@@ -26,7 +26,5 @@
   {"caller":{"issuer":"https://issuer.example","subject":"analyst","roles":["analyst"]},"proxy":"older","upstream":"http://older:8000/mcp","tool":"search","arguments":{"query":"ada"},"expect":"permitted"},
   {"caller":{"issuer":"https://issuer.example","subject":"analyst","roles":["analyst"]},"proxy":"older","upstream":"http://older:8000/mcp","tool":"update_person","arguments":{"id":"7","name":"Ada"},"expect":"policy_denied"},
   {"caller":{"issuer":"https://issuer.example","subject":"analyst","roles":["analyst"]},"proxy":"changing","upstream":"http://changing:8000/mcp","tool":"lookup","arguments":{"id":"7"},"expect":"permitted"},
-  {"caller":{"issuer":"https://issuer.example","subject":"analyst","roles":["analyst"]},"proxy":"changing","upstream":"http://changing:8000/mcp","tool":"update","arguments":{"id":"7","value":"new"},"expect":"policy_denied"},
-  {"caller":{"issuer":"examples","subject":"deployer","roles":["admin"]},"proxy":"directory","upstream":"http://directory:8000/mcp","tool":"update_person","arguments":{"id":"7","name":"Ada"},"expect":"permitted"},
-  {"caller":{"issuer":"examples","subject":"indexer","roles":["analyst"]},"proxy":"directory","upstream":"http://directory:8000/mcp","tool":"update_person","arguments":{"id":"7","name":"Ada"},"expect":"policy_denied"}
+  {"caller":{"issuer":"https://issuer.example","subject":"analyst","roles":["analyst"]},"proxy":"changing","upstream":"http://changing:8000/mcp","tool":"update","arguments":{"id":"7","value":"new"},"expect":"policy_denied"}
 ]

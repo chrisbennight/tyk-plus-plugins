@@ -6,14 +6,16 @@ Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gatewa
 
 ## Callers
 
-A caller presents one of two credentials. The gateway tries the key first, then the token.
+A caller presents exactly one of two credentials: a token or a key.
 
 | Caller | Credential | Identity Cedar sees |
 | --- | --- | --- |
 | A person signed in through your identity provider | `Authorization: Bearer <token>` | The token's claims |
 | A service account | `X-API-Key: <key>` | Metadata on the Tyk key |
 
-The first credential Tyk accepts identifies the caller. A request with a valid key is identified by that key even if it also carries a token. When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes both credential headers before forwarding the request. When moving a client from a key to a token, remove its key header: if Tyk rejects the key before accepting the token, the request reaches the gateway's checks without its body, so a tool call is denied and other requests fail at the upstream.
+A request that carries both a key and a token is refused before either is checked, whichever of them is valid, with the same refusal as a caller that cannot be identified, and is logged with the reason `multiple_credentials`. Such a request has no single caller. Refusing it also keeps it away from a Tyk defect, [TykTechnologies/tyk#9011](https://github.com/TykTechnologies/tyk/issues/9011): when Tyk rejects one credential and then accepts the other, it forwards an MCP request without its body. When moving a client from a key to a token, remove its key header.
+
+When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes the credential header before forwarding the request.
 
 Cedar decides which tools every caller may use. Do not give Tyk keys or policies per-tool MCP access rights, because tool access is controlled through Cedar alone.
 

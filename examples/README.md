@@ -134,9 +134,9 @@ Approving a change makes a new policy set active, so the runner's expectations n
 
 - **People** are in the issuer's deck, [`callers/people.json`](callers/people.json). See the [issuer guide](issuer/README.md).
 - **Services** are Tyk keys whose metadata is in [`callers/keys.json`](callers/keys.json). The runner creates the keys through Tyk's control API.
-- **Refused callers.** The runner also checks seven callers that must be refused: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, and a key without metadata. On every proxy, each must fail to connect in both protocol versions and be refused on the methods a client sends first, with no request reaching a server. Those methods are `initialize`, `notifications/initialized`, `server/discover`, `tools/list` and `tools/call`.
+- **Refused callers.** The runner also checks nine callers that must be refused: no credential, an expired token, a token for another audience, a token without a subject, a token signed with an unpublished key, a token whose roles claim has the wrong shape, a key without metadata, a valid key with a valid token, and an unknown key with a valid token. On every proxy, each must fail to connect in both protocol versions and be refused on the methods a client sends first, with no request reaching a server. Those methods are `initialize`, `notifications/initialized`, `server/discover`, `tools/list` and `tools/call`.
 - **Every refusal looks the same.** Every refused tool call must return the same JSON-RPC error, so a caller cannot tell a tool it may not call from one that was never approved or does not exist.
-- **Key and token together.** A request carrying both a key and a token is identified by the key. Two cases show it: a strong key with a weak token is permitted, and a weak key with a strong token is refused.
+- **Key and token together.** A request must carry one credential. A request carrying both a key and a token is refused before either is checked, whether the key is valid or not, as the last two refused callers above show.
 
 ## Policy
 

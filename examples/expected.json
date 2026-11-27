@@ -42,7 +42,7 @@
     "indexer": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_person", "search"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export"], "older": ["get_person", "search"], "changing": ["lookup", "report"]},
     "deployer": {"directory": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "delete_person", "export_directory", "get_person", "search", "update_person"], "payments": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "get_balance", "refund", "transfer"], "notes": ["codemode.describe", "codemode.execute", "codemode.limits", "codemode.search", "export", "purge", "search"], "older": ["get_person", "search", "update_person"], "changing": ["lookup", "report", "update"]}
   },
-  "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata"],
+  "refusedCallers": ["no-credential", "expired-token", "other-audience-token", "no-subject-token", "unpublished-key-token", "malformed-roles-token", "key-without-metadata", "key-and-token", "unknown-key-and-token"],
   "codeMode": {
     "proxies": ["directory", "payments", "notes"],
     "programs": [
@@ -78,9 +78,5 @@
       {"version": 10, "why": "a second change to lookup while the first waits for review", "listed": ["report", "update"], "permitted": ["report", "update"], "refused": ["lookup"]},
       {"version": 0, "why": "back to the approved tools: lookup works again", "listed": ["lookup", "report", "update"], "permitted": ["lookup", "report", "update"], "refused": []}
     ]
-  },
-  "keyAndToken": [
-    {"key": "deployer", "token": "finance", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "permitted", "why": "a request carrying both is identified by its key: the deployer key may change records, the finance token may not"},
-    {"key": "indexer", "token": "admin", "server": "directory", "tool": "update_person", "arguments": {"id": "7", "name": "Ada"}, "expect": "refused", "why": "the reverse: the indexer key may not change records while the admin token could, so the key decides"}
-  ]
+  }
 }

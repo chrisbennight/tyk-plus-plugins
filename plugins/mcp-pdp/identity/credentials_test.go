@@ -28,4 +28,12 @@ func TestCredentials(t *testing.T) {
 			t.Errorf("%v: got %d, want %d", c.headers, got, c.want)
 		}
 	}
+	// An empty first value does not hide a later one.
+	h := http.Header{}
+	h.Add("X-API-Key", "")
+	h.Add("X-API-Key", "k")
+	h.Set("Authorization", "Bearer t")
+	if got := Credentials(h, names); got != 2 {
+		t.Errorf("repeated key header: got %d, want 2", got)
+	}
 }

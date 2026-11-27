@@ -132,6 +132,8 @@ func key(role string) string {
 		"access_rights": map[string]any{
 			"governed":  map[string]any{"api_id": "governed", "versions": []string{"Default"}},
 			"governed2": map[string]any{"api_id": "governed2", "versions": []string{"Default"}},
+			"governed3": map[string]any{"api_id": "governed3", "versions": []string{"Default"}},
+			"governed4": map[string]any{"api_id": "governed4", "versions": []string{"Default"}},
 		},
 		"quota_max": -1, "rate": 100, "per": 1,
 		"meta_data": map[string]any{"cedar": map[string]any{"issuer": "integration", "subject": role, "roles": []string{role}}}})

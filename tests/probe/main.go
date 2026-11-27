@@ -29,6 +29,7 @@ func main() {
 	for _, version := range []string{olderProtocol, newerProtocol} {
 		baseline(k, version)
 		driftSuite(k, version)
+		exchangeSuite(k, version)
 	}
 	leaveRejectedSet(k)
 }
@@ -38,7 +39,7 @@ func main() {
 // gateway must be ready too.
 func waitForGateway() {
 	for range 60 {
-		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(secondGateway) && apiLoaded(peerGateway) && upstreamUp() {
+		if healthy("gateway") && healthy("gateway-peer") && apiLoaded(gateway) && apiLoaded(secondGateway) && apiLoaded(exchangeGateway) && apiLoaded(unlistedGateway) && apiLoaded(peerExchangeGateway) && apiLoaded(peerGateway) && upstreamUp() {
 			return
 		}
 		time.Sleep(time.Second)

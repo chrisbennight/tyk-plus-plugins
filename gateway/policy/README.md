@@ -1,6 +1,6 @@
 # Authorize MCP tool calls
 
-Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates each caller with either a token or a key, and removes the credential before forwarding requests.
+Set `MCP_UPSTREAM_URL` to the Streamable HTTP endpoint reachable from the gateway container. The configured proxy ID is `governed`. Tyk authenticates each caller with either a token or a key, and removes the credential before forwarding requests. Leave `stripAuthorizationData` on: the plug-in refuses to forward any request from a proxy where it is off, unless [token exchange](../token-exchange.md) replaces the credential there, so a caller's own credential never reaches an upstream.
 
 **The gateway ships with no rules, an empty tool inventory, and no activation checks, so it denies every tool call.** Access exists only after you add a tool to the inventory and write a rule that permits calling it. The plug-in has no built-in user types or rules.
 
@@ -15,7 +15,7 @@ A caller presents exactly one of two credentials: a token or a key.
 
 A request that carries both a key and a token is refused before either is checked, whichever of them is valid, with the same refusal as a caller that cannot be identified, and is logged with the reason `multiple_credentials`. Such a request has no single caller. Refusing it also keeps it away from a Tyk defect, [TykTechnologies/tyk#9011](https://github.com/TykTechnologies/tyk/issues/9011): when Tyk rejects one credential and then accepts the other, it forwards an MCP request without its body. When moving a client from a key to a token, remove its key header.
 
-When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes the credential header before forwarding the request.
+When a token identifies the caller, its claims are the whole identity; key metadata never adds to or replaces them. Tyk removes the credential header before forwarding the request. To send an upstream a token issued for it and naming the user instead, turn on [token exchange](../token-exchange.md) for its proxy.
 
 Cedar decides which tools every caller may use. Do not give Tyk keys or policies per-tool MCP access rights, because tool access is controlled through Cedar alone.
 

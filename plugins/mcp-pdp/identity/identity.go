@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
 )
@@ -116,4 +117,14 @@ func fromMetadata(metadata map[string]any) (policy.Caller, error) {
 		return policy.Caller{}, errors.New("key metadata needs cedar.issuer and cedar.subject")
 	}
 	return caller, nil
+}
+
+// Expiry returns when the caller's validated token expires, from its exp
+// claim, and false when no token identified the caller.
+func Expiry(context map[string]any) (time.Time, bool) {
+	exp, ok := context[claimPrefix+"exp"].(float64)
+	if !ok {
+		return time.Time{}, false
+	}
+	return time.Unix(int64(exp), 0), true
 }

@@ -65,9 +65,10 @@ type bearerKey struct{}
 // Capture is a Tyk hook that runs right after authentication. Tyk removes
 // credential headers before the authorization hook runs, so this keeps a
 // token caller's bearer credential in the request's own context, where a
-// Code Mode run can present it again on nested calls. It is never logged.
+// Code Mode run can present it again on nested calls and token exchange can
+// exchange it. It is never logged.
 func Capture(_ http.ResponseWriter, r *http.Request) {
-	if codeMode == nil {
+	if codeMode == nil && !exchangeOn(r) {
 		return
 	}
 	if bearer := r.Header.Get("Authorization"); bearer != "" {

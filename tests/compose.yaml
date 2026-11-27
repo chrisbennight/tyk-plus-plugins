@@ -1,6 +1,7 @@
 services:
   gateway:
-    # The test target adds a second proxy, governed2, at /mcp2/.
+    # The test target adds a second proxy, governed2, at /mcp2/, a third,
+    # governed3, at /mcp3/, and a fourth, governed4, at /mcp4/.
     build:
       target: test
     environment:
@@ -12,11 +13,21 @@ services:
         MCP_TOKEN_ISSUER: https://issuer.test
         MCP_TOKEN_AUDIENCE: governed-mcp
         CEDAR_ROLES_CLAIM: app_roles
-      # Code Mode on both proxies of this gateway only; the peer gateway has
+        # Token exchange on governed3 only, on both gateways, so it is also
+        # tested on the peer, which has Code Mode off; governed4 also leaves
+        # stripping off but is not listed. The test upstream is also the
+        # token endpoint, over plain HTTP on this isolated test network.
+        EXCHANGE_PROXIES: governed3=http://upstream:8000/mcp
+        EXCHANGE_TOKEN_URL: http://upstream:8000/exchange
+        EXCHANGE_ALLOW_INSECURE_HTTP: "true"
+        EXCHANGE_CLIENT_ID: gateway
+        EXCHANGE_CLIENT_SECRET: test-only-secret
+        EXCHANGE_TIMEOUT: 3s
+      # Code Mode on every proxy of this gateway only; the peer gateway has
       # it off. Runs use the sandbox host below.
       CODEMODE_SANDBOX_ADDRESS: sandbox:8443
       CODEMODE_SANDBOX_SERVER_NAME: sandbox
-      CODEMODE_PROXIES: governed=/mcp/,governed2=/mcp2/
+      CODEMODE_PROXIES: governed=/mcp/,governed2=/mcp2/,governed3=/mcp3/
       CODEMODE_BACKENDS: ${SANDBOX_BACKEND:-gvisor}
       CODEMODE_TLS_CERT: /etc/codemode/client.pem
       CODEMODE_TLS_KEY: /etc/codemode/client-key.pem
@@ -35,6 +46,9 @@ services:
     extends:
       file: compose.yaml
       service: gateway
+    # The same proxies as the gateway under test.
+    build:
+      target: test
     environment:
       <<: *test-gateway-environment
       # Its own name for the declarations it shares.

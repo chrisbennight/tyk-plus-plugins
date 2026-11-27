@@ -42,6 +42,14 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// A key caller has no token to exchange, so a proxy with exchange on
+	// refuses every request it makes, including calls to the tools the
+	// plug-in answers itself.
+	if callerErr == nil && method != identity.Token && exchangeOn(r) {
+		slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "proxy", proxyOf(r), "reason", "token_required")
+		refuse(w, jsonRPCID(r, nil), "This proxy accepts token callers only")
+		return
+	}
 	// Every request needs an identifiable caller, not only tool calls, so a
 	// credential the plug-in rejects cannot reach any other MCP method. Tool
 	// calls are refused below, through the logged decision. Other requests
@@ -73,6 +81,9 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 				r.Header.Del("Accept-Encoding")
 			}
 		}
+		// The request is forwarded, so it carries the upstream's own
+		// credential, or is refused.
+		upstreamCredential(w, r, data, nil)
 		return
 	}
 	// builtIn is set when the plug-in answers the call itself.
@@ -135,6 +146,8 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reason == "permitted" {
+		// Only a permitted call reaches the identity provider.
+		upstreamCredential(w, r, data, call.ID)
 		return
 	}
 	refuse(w, call.ID, "Tool call denied")

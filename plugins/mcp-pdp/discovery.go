@@ -34,7 +34,7 @@ func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, 
 			return
 		}
 		state := current()
-		found, err := codemode.Search(callable(r, state, who), args.Query, args.Detail, args.Limit, args.Cursor, state.Version)
+		found, err := codemode.Search(callable(r, state, who, method), args.Query, args.Detail, args.Limit, args.Cursor, state.Version)
 		if err != nil {
 			writeToolError(w, id, "invalid", err.Error(), nil)
 			return
@@ -49,7 +49,7 @@ func answerCodeMode(w http.ResponseWriter, r *http.Request, id json.RawMessage, 
 			writeToolError(w, id, "invalid", "codemode.describe takes a proxy and a tool name", nil)
 			return
 		}
-		for _, e := range callable(r, current(), who) {
+		for _, e := range callable(r, current(), who, method) {
 			if e.Proxy == args.Proxy && e.Name == args.Name {
 				writeStructured(w, id, codemode.Describe(e))
 				return
@@ -67,10 +67,11 @@ func writeStructured(w http.ResponseWriter, id json.RawMessage, value map[string
 }
 
 // callable lists the approved tools, on proxies where Code Mode is on, that
-// the caller could call from a program: on proxies its Tyk session may use,
-// passing the drift check that refuses calls, and visible to it under its
-// rules. The order is stable for a policy set.
-func callable(r *http.Request, state *policy.Snapshot, who policy.Caller) []codemode.Entry {
+// the caller could call from a program: on proxies its Tyk session may use
+// and, for a key caller, without token exchange, passing the drift check that
+// refuses calls, and visible to it under its rules. The order is stable for a
+// policy set.
+func callable(r *http.Request, state *policy.Snapshot, who policy.Caller, method identity.Method) []codemode.Entry {
 	proxies := make([]string, 0, len(codeMode.Proxies))
 	for proxy := range codeMode.Proxies {
 		proxies = append(proxies, proxy)
@@ -78,7 +79,8 @@ func callable(r *http.Request, state *policy.Snapshot, who policy.Caller) []code
 	slices.Sort(proxies)
 	var entries []codemode.Entry
 	for _, proxy := range proxies {
-		if !mayUse(r, proxy) {
+		// A proxy with exchange on refuses every request from a key caller.
+		if !mayUse(r, proxy) || (method != identity.Token && exchangeSettings.On(proxy)) {
 			continue
 		}
 		_, tools := state.ApprovedTools(proxy)

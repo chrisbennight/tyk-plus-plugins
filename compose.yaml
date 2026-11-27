@@ -40,6 +40,20 @@ services:
       CODEMODE_MAX_CONSOLE_BYTES: ${CODEMODE_MAX_CONSOLE_BYTES:-}
       CODEMODE_MAX_VALUE_BYTES: ${CODEMODE_MAX_VALUE_BYTES:-}
       CODEMODE_MAX_RUNS: ${CODEMODE_MAX_RUNS:-}
+      # Token exchange stays off unless these are set; see
+      # gateway/token-exchange.md. A file named in EXCHANGE_CLIENT_SECRET_FILE
+      # or EXCHANGE_TLS_CA must be mounted into the container, as with the
+      # Code Mode certificates.
+      EXCHANGE_PROXIES: ${EXCHANGE_PROXIES:-}
+      EXCHANGE_TOKEN_URL: ${EXCHANGE_TOKEN_URL:-}
+      EXCHANGE_ALLOW_INSECURE_HTTP: ${EXCHANGE_ALLOW_INSECURE_HTTP:-}
+      EXCHANGE_TLS_CA: ${EXCHANGE_TLS_CA:-}
+      EXCHANGE_CLIENT_ID: ${EXCHANGE_CLIENT_ID:-}
+      EXCHANGE_CLIENT_SECRET_FILE: ${EXCHANGE_CLIENT_SECRET_FILE:-}
+      EXCHANGE_CLIENT_SECRET: ${EXCHANGE_CLIENT_SECRET:-}
+      EXCHANGE_TIMEOUT: ${EXCHANGE_TIMEOUT:-}
+      EXCHANGE_EXPIRY_MARGIN: ${EXCHANGE_EXPIRY_MARGIN:-}
+      EXCHANGE_CACHE_MAX_ENTRIES: ${EXCHANGE_CACHE_MAX_ENTRIES:-}
       # The review dashboard, which /extensions/admin routes to; see the
       # admin service below.
       ADMIN_UPSTREAM_URL: ${ADMIN_UPSTREAM_URL:-http://admin:8000}

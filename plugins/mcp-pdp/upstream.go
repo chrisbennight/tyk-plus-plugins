@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/TykTechnologies/tyk/apidef"
 	"github.com/TykTechnologies/tyk/apidef/oas"
 	"github.com/TykTechnologies/tyk/ctx"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/exchange"
@@ -53,20 +54,15 @@ func proxyOf(r *http.Request) string {
 
 // upstreamCredential sets the credential a permitted request carries to its
 // upstream. On a proxy with exchange on, that is a token the identity
-// provider issued to the upstream for the caller; on failure it writes the
-// refusal and returns false, and the request must not be forwarded. id is the
-// request's JSON-RPC ID when it has already been read, or nil.
-func upstreamCredential(w http.ResponseWriter, r *http.Request, method identity.Method, data map[string]any, id json.RawMessage) bool {
+// provider issued to the upstream for the caller, who Authorize has already
+// checked is a token caller; on failure it writes the refusal and returns
+// false, and the request must not be forwarded. id is the request's JSON-RPC
+// ID when it has already been read, or nil.
+func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]any, id json.RawMessage) bool {
 	if !exchangeOn(r) {
 		return true
 	}
 	proxy := proxyOf(r)
-	if method != identity.Token {
-		// A key caller has no token to exchange.
-		slog.Info("Caller refused", "identity", method, "method", ctx.GetMCPMethod(r), "proxy", proxy, "reason", "token_required")
-		refuse(w, jsonRPCID(r, id), "This proxy accepts token callers only")
-		return false
-	}
 	reason := ""
 	switch {
 	case exchangeProblem != "":
@@ -75,6 +71,8 @@ func upstreamCredential(w http.ResponseWriter, r *http.Request, method identity.
 		reason = "strip_authorization_data_on"
 	case conflictingUpstreamAuth(ctx.GetOASDefinition(r)):
 		reason = "conflicting_upstream_credential"
+	case !tokenOnlyInAuthorization(ctx.GetDefinition(r)):
+		reason = "token_not_in_authorization_header"
 	}
 	if reason != "" {
 		slog.Warn("Upstream credential unavailable", "proxy", proxy, "method", ctx.GetMCPMethod(r), "reason", reason)
@@ -120,6 +118,25 @@ func stripsAuthorization(def *oas.OAS) bool {
 	}
 	auth := def.GetTykExtension().Server.Authentication
 	return auth != nil && auth.StripAuthorizationData
+}
+
+// tokenOnlyInAuthorization reports whether Tyk reads a caller's token from
+// the Authorization header alone. The plug-in exchanges the token in that
+// header and replaces it, so a token Tyk read from another header, a query
+// parameter or a cookie would be validated as one caller while another
+// credential was exchanged, and would be forwarded with stripping off.
+func tokenOnlyInAuthorization(def *apidef.APIDefinition) bool {
+	if def == nil {
+		return false
+	}
+	// Tyk falls back to the definition's general settings when it has none
+	// for JWT.
+	config, ok := def.AuthConfigs[apidef.JWTType]
+	if !ok {
+		config = def.Auth
+	}
+	return !config.DisableHeader && !config.UseParam && !config.UseCookie &&
+		(config.AuthHeaderName == "" || strings.EqualFold(config.AuthHeaderName, "Authorization"))
 }
 
 // conflictingUpstreamAuth reports whether Tyk itself is configured to set the

@@ -23,12 +23,13 @@ Issued tokens are cached in the gateway's memory only, never in Redis or on disk
 
 ## Turning it on for a proxy
 
-1. List the proxy in `EXCHANGE_PROXIES`, with its upstream's canonical URI (see [Settings](#settings)).
-2. In the proxy's definition, set `stripAuthorizationData` to `false` (`strip_auth_data` in the classic definition). On an MCP proxy, Tyk passes each request through its middleware more than once before forwarding it, and strips credentials again on the later passes, where the plug-in's hooks do not run. It would therefore also remove the exchanged token. With stripping off, the plug-in takes over: on a proxy with exchange on it replaces the caller's token with the issued one, or refuses the request, so the caller's own credential is still never forwarded. A proxy with exchange on that still has stripping on refuses every request it would forward, with the reason `strip_authorization_data_on` in the log.
+1. List the proxy in `EXCHANGE_PROXIES`, with its upstream's canonical URI, and set the other settings (see [Settings](#settings)). The repository's `compose.yaml` passes each setting through from the environment `docker compose` runs in; mount any file a setting names into the gateway container.
+2. Keep the proxy's token scheme reading the token from the `Authorization` header only: the default header, with no query parameter or cookie. The plug-in exchanges and replaces the token in that header, so a proxy whose token Tyk reads from anywhere else refuses every request it would forward, with the reason `token_not_in_authorization_header` in the log.
+3. In the proxy's definition, set `stripAuthorizationData` to `false` (`strip_auth_data` in the classic definition). On an MCP proxy, Tyk passes each request through its middleware more than once before forwarding it, and strips credentials again on the later passes, where the plug-in's hooks do not run. It would therefore also remove the exchanged token. With stripping off, the plug-in takes over: on a proxy with exchange on it replaces the caller's token with the issued one, or refuses the request, so the caller's own credential is still never forwarded. A proxy with exchange on that still has stripping on refuses every request it would forward, with the reason `strip_authorization_data_on` in the log.
 
 ## Who can use it
 
-Only callers identified by a token. A caller identified by a Tyk key has no token to exchange, so on a proxy with exchange on every request from a key caller is refused with HTTP 403 and the JSON-RPC error `This proxy accepts token callers only`.
+Only callers identified by a token. A caller identified by a Tyk key has no token to exchange, so on a proxy with exchange on every request from a key caller is refused with HTTP 403 and the JSON-RPC error `This proxy accepts token callers only`, including calls to Code Mode's own tools when Code Mode is on there too. Through Code Mode on another proxy, a key caller does not find such a proxy's tools.
 
 ## When the exchange fails
 
@@ -40,7 +41,7 @@ The gateway never forwards a request it has no exchanged token for, and never fa
 - a `token_type` other than `Bearer`, including `N_A`;
 - an `issued_token_type` other than an access token or a JWT;
 - a token that is not valid bearer-token syntax for a header;
-- the caller's own token expiring while the exchange is under way.
+- the caller's own token, or the issued token's own lifetime, running out while the exchange is under way.
 
 The reply's members are matched by their exact names.
 
@@ -48,7 +49,7 @@ The request is then answered with HTTP 503. A request with a JSON-RPC ID also ge
 
 Each failure is logged with the proxy, a failure kind, the HTTP status and the identity provider's `error` code when it is one of the registered OAuth codes, such as `invalid_request` or `invalid_target`; any other value is logged as `other`. Tokens, the client secret and the provider's `error_description` are never logged, because providers may echo request details back in them. When a reply has no `error` code, as an empty `502` from an intermediary does, the status alone identifies the failure.
 
-A proxy with exchange on refuses its requests the same way, with HTTP 503 and the reason in the log, when the exchange settings are invalid, when Tyk still strips credentials on it (see [Turning it on for a proxy](#turning-it-on-for-a-proxy)), or when Tyk itself is configured to set the upstream's credential: Tyk upstream authentication, or an `Authorization` header added to every request through `transformRequestHeaders`. Either could replace or contradict the exchanged token. Requests on proxies without exchange are unaffected.
+A proxy with exchange on refuses its requests the same way, with HTTP 503 and the reason in the log, when the exchange settings are invalid, when Tyk still strips credentials on it or reads the caller's token from somewhere other than the `Authorization` header (see [Turning it on for a proxy](#turning-it-on-for-a-proxy)), or when Tyk itself is configured to set the upstream's credential: Tyk upstream authentication, or an `Authorization` header added to every request through `transformRequestHeaders`. Either could replace or contradict the exchanged token. Requests on proxies without exchange are unaffected.
 
 ## Settings
 

@@ -54,6 +54,8 @@ func fakeLauncher(t *testing.T, reply *Reply) string {
 func TestHealthcheck(t *testing.T) {
 	ready := &Reply{Health: &protocol.Health{Backend: protocol.BackendGVisor, Ready: true}}
 	failed := &Reply{Health: &protocol.Health{Backend: protocol.BackendGVisor, Problem: "the self-test sandbox was not isolated: network"}}
+	// The runtime's output can carry newlines into the problem.
+	multiline := &Reply{Health: &protocol.Health{Backend: protocol.BackendGVisor, Problem: "the self-test sandbox failed: exit status 1:\nline one\n  line two"}}
 	refused := &Reply{Error: "refused: not the sandbox service"}
 	cases := []struct {
 		name   string
@@ -62,6 +64,7 @@ func TestHealthcheck(t *testing.T) {
 	}{
 		{"ready", fakeLauncher(t, ready), ""},
 		{"failed self-test", fakeLauncher(t, failed), "not isolated: network"},
+		{"multi-line problem", fakeLauncher(t, multiline), "exit status 1: line one line two"},
 		{"refused", fakeLauncher(t, refused), "not the sandbox service"},
 		{"no launcher", filepath.Join(t.TempDir(), "missing.sock"), "did not answer"},
 		{"silent launcher", fakeLauncher(t, nil), "did not answer"},

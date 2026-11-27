@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"syscall"
-	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/launcher"
 )
@@ -19,7 +18,7 @@ func healthcheck() error {
 	if err := becomeUser(uid); err != nil {
 		return err
 	}
-	return launcher.Healthcheck(env("SANDBOX_LAUNCHER_SOCKET", "/run/sandbox-launcher/launcher.sock"), 5*time.Second)
+	return launcher.Healthcheck(env("SANDBOX_LAUNCHER_SOCKET", "/run/sandbox-launcher/launcher.sock"), launcher.HealthWait)
 }
 
 // becomeUser switches this process to uid, with a group of the same number

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
-	"time"
 
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/launcher"
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/protocol"
@@ -23,7 +22,7 @@ func main() {
 	// stops, the service exits.
 	if len(os.Args) == 2 && os.Args[1] == "-healthcheck" {
 		socket := env("SANDBOX_LAUNCHER_SOCKET", "/run/sandbox-launcher/launcher.sock")
-		if err := launcher.Healthcheck(socket, 5*time.Second); err != nil {
+		if err := launcher.Healthcheck(socket, launcher.HealthWait); err != nil {
 			fmt.Fprintf(os.Stderr, "sandbox-service: unhealthy: %v\n", err)
 			os.Exit(1)
 		}

@@ -111,7 +111,7 @@ func New(cfg Config) *Service {
 		launch: func(ctx context.Context, ms int64) (*launcher.Run, error) {
 			return launcher.Start(ctx, cfg.LauncherSocket, ms)
 		},
-		health: func() (*protocol.Health, error) { return launcher.QueryHealth(cfg.LauncherSocket, 10*time.Second) },
+		health: func() (*protocol.Health, error) { return launcher.QueryHealth(cfg.LauncherSocket, launcher.HealthWait) },
 	}
 }
 

@@ -97,6 +97,11 @@ func Start(ctx context.Context, socket string, runMillis int64) (*Run, error) {
 	return &Run{ID: reply.Run, Backend: reply.Backend, Conn: c, Stdin: os.NewFile(uintptr(fds[0]), "sandbox-stdin"), Stdout: os.NewFile(uintptr(fds[1]), "sandbox-stdout")}, nil
 }
 
+// HealthWait bounds a health query: the launcher's answer asks the container
+// runtime to list its containers. The service and the health checks share it,
+// so a check fails only when the service itself would give up.
+const HealthWait = 10 * time.Second
+
 // QueryHealth asks the launcher at socket for its health, waiting at most
 // wait for the answer.
 func QueryHealth(socket string, wait time.Duration) (*protocol.Health, error) {
@@ -128,7 +133,8 @@ func Healthcheck(socket string, wait time.Duration) error {
 		return fmt.Errorf("the launcher did not answer: %w", err)
 	}
 	if !h.Ready {
-		return fmt.Errorf("the launcher refuses every run: %s", h.Problem)
+		// The problem can quote the runtime's output; a check reports one line.
+		return fmt.Errorf("the launcher refuses every run: %s", strings.Join(strings.Fields(h.Problem), " "))
 	}
 	return nil
 }

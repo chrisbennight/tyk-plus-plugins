@@ -188,7 +188,10 @@ func (s *Settings) parseProxies(value string) error {
 			problems = append(problems, fmt.Sprintf("proxy %q: %v", id, err))
 		}
 	}
-	if len(s.Proxies) == 0 && !s.AllProxies {
+	if len(s.Proxies) == 0 {
+		// Exchange is configured but names no proxy that can be read, so
+		// no proxy may forward without it.
+		s.AllProxies = true
 		problems = append(problems, "no proxies are listed")
 	}
 	if len(problems) > 0 {

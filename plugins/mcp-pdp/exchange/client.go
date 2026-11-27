@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	jsonv2 "github.com/go-json-experiment/json"
 )
 
 // The token-exchange values this client sends and accepts (RFC 8693).
@@ -33,6 +35,9 @@ const (
 	KindUnreachable   = "unreachable"
 	KindRejected      = "rejected"
 	KindMalformed     = "malformed"
+	// KindExpired means the caller's own token expired before the issued
+	// token could be used.
+	KindExpired = "expired"
 )
 
 // Error explains why an exchange failed. It holds no token, no client secret
@@ -135,18 +140,29 @@ func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExp
 	}
 	select {
 	case <-f.done:
-		return f.token, f.err
+		if f.err != nil {
+			return "", f.err
+		}
+		// The caller's authority ends with its token, even when the token
+		// expired while the exchange was under way.
+		if !c.now().Before(subjectExpiry) {
+			return "", c.failed(proxy, &Error{Kind: KindExpired})
+		}
+		return f.token, nil
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
 }
 
 func (c *Client) fly(key [32]byte, f *flight, proxy string, target Target, subject string, subjectExpiry time.Time) {
+	// The issued token's lifetime is counted from when the request was sent,
+	// not from when the reply arrived, so a slow reply cannot extend it.
+	sent := c.now()
 	token, lifetime, err := c.request(target, subject)
 	c.mu.Lock()
 	delete(c.flights, key)
 	if err == nil && lifetime > 0 {
-		expires := c.now().Add(lifetime)
+		expires := sent.Add(lifetime)
 		if subjectExpiry.Before(expires) {
 			expires = subjectExpiry
 		}
@@ -228,7 +244,9 @@ func (c *Client) request(target Target, subject string) (string, time.Duration, 
 		TokenType       *string          `json:"token_type"`
 		ExpiresIn       *json.RawMessage `json:"expires_in"`
 	}
-	if json.Unmarshal(body, &reply) != nil || reply.AccessToken == nil || reply.IssuedTokenType == nil || reply.TokenType == nil {
+	// Member names are matched exactly, and a repeated member is refused, so
+	// "ACCESS_TOKEN" is not taken for access_token.
+	if jsonv2.Unmarshal(body, &reply) != nil || reply.AccessToken == nil || reply.IssuedTokenType == nil || reply.TokenType == nil {
 		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
 	}
 	// The gateway can only send a bearer token; this also refuses N_A.
@@ -261,17 +279,27 @@ func lifetime(raw *json.RawMessage) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-// errorCode returns the OAuth error code of a refusal when it is well formed
-// (RFC 6749 section 5.2), and empty otherwise. Only the code is kept: a
-// provider may echo request details back in its description.
+// errorCode returns the OAuth error code of a refusal when it is one of the
+// registered codes a token endpoint uses, "other" for any other code, and
+// empty when there is none. Only registered codes are kept, because a
+// provider may echo request details, even a credential, in any field.
 func errorCode(body []byte) string {
 	var refusal struct {
-		Error string `json:"error"`
+		Error *string `json:"error"`
 	}
-	if json.Unmarshal(body, &refusal) != nil || len(refusal.Error) > 64 || !errorCodeSyntax.MatchString(refusal.Error) {
+	if json.Unmarshal(body, &refusal) != nil || refusal.Error == nil {
 		return ""
 	}
-	return refusal.Error
+	if knownErrorCodes[*refusal.Error] {
+		return *refusal.Error
+	}
+	return "other"
 }
 
-var errorCodeSyntax = regexp.MustCompile(`^[\x20-\x21\x23-\x5B\x5D-\x7E]+$`)
+// knownErrorCodes are the error codes of RFC 6749 section 5.2, RFC 8693
+// section 2.2.2 and RFC 8707, and the general codes a server may return.
+var knownErrorCodes = map[string]bool{
+	"invalid_request": true, "invalid_client": true, "invalid_grant": true, "unauthorized_client": true,
+	"unsupported_grant_type": true, "invalid_scope": true, "invalid_target": true, "access_denied": true,
+	"server_error": true, "temporarily_unavailable": true,
+}

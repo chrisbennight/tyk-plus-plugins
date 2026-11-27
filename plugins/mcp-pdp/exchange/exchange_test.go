@@ -428,3 +428,86 @@ func TestLoad(t *testing.T) {
 		t.Fatal("an unreadable entry must turn exchange on for every proxy")
 	}
 }
+
+func TestNeverUsedAfterCallerTokenExpires(t *testing.T) {
+	// The caller's token expires while the exchange is under way.
+	e := newEndpoint(t, func(w http.ResponseWriter, form url.Values) {
+		time.Sleep(300 * time.Millisecond)
+		issued("issued-token", "600")(w, form)
+	})
+	c := New(settings(t, e, map[string]string{"EXCHANGE_EXPIRY_MARGIN": "1ms"}))
+	token, err := c.Exchange(context.Background(), "governed", callerToken, time.Now().Add(100*time.Millisecond))
+	var failure *Error
+	if token != "" || !errors.As(err, &failure) || failure.Kind != KindExpired {
+		t.Fatalf("got %q, %v", token, err)
+	}
+}
+
+func TestReplyMembersAreExact(t *testing.T) {
+	for name, body := range map[string]string{
+		"upper case":       `{"ACCESS_TOKEN":"t","ISSUED_TOKEN_TYPE":"urn:ietf:params:oauth:token-type:access_token","TOKEN_TYPE":"Bearer"}`,
+		"mixed case":       `{"Access_Token":"t","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`,
+		"repeated member":  `{"access_token":"t","access_token":"u","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer"}`,
+		"invalid encoding": "{\"access_token\":\"t\xff\",\"issued_token_type\":\"urn:ietf:params:oauth:token-type:access_token\",\"token_type\":\"Bearer\"}",
+	} {
+		e := newEndpoint(t, func(w http.ResponseWriter, _ url.Values) { w.Write([]byte(body)) })
+		_, err := New(settings(t, e, nil)).Exchange(context.Background(), "governed", callerToken, time.Now().Add(time.Hour))
+		var failure *Error
+		if !errors.As(err, &failure) || failure.Kind != KindMalformed {
+			t.Errorf("%s: got %v", name, err)
+		}
+	}
+}
+
+func TestLifetimeCountsFromRequest(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	// The reply takes 50 seconds of the clock to arrive.
+	e := newEndpoint(t, func(w http.ResponseWriter, form url.Values) {
+		advance(50 * time.Second)
+		issued("issued-token", "100")(w, form)
+	})
+	c := New(settings(t, e, map[string]string{"EXCHANGE_EXPIRY_MARGIN": "30s"}))
+	c.now = clock
+	far := now.Add(time.Hour)
+	if _, err := c.Exchange(context.Background(), "governed", "a", far); err != nil {
+		t.Fatal(err)
+	}
+	// Issued at the request, so the entry ends 70 seconds after it, not 120.
+	advance(21 * time.Second)
+	if _, err := c.Exchange(context.Background(), "governed", "a", far); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.requests.Load(); n != 2 {
+		t.Fatalf("an entry outlived its token: %d requests", n)
+	}
+}
+
+func TestUnknownErrorCodesAreNotLogged(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(previous)
+	echoed := "echoed-credential-7"
+	e := newEndpoint(t, func(w http.ResponseWriter, _ url.Values) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":"` + echoed + `"}`))
+	})
+	_, err := New(settings(t, e, nil)).Exchange(context.Background(), "governed", callerToken, time.Now().Add(time.Hour))
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != "other" || strings.Contains(logs.String()+err.Error(), echoed) {
+		t.Fatalf("got %v; logs %s", err, logs.String())
+	}
+}
+
+func TestUnreadableProxyListTurnsExchangeOnEverywhere(t *testing.T) {
+	for _, proxies := range []string{"", " , ,", ","} {
+		env := map[string]string{"EXCHANGE_TOKEN_URL": "https://idp.example.com/token", "EXCHANGE_CLIENT_ID": "g", "EXCHANGE_CLIENT_SECRET": "s", "EXCHANGE_PROXIES": proxies}
+		s, err := Load(func(name string) string { return env[name] })
+		if err == nil || !s.On("governed") || !s.On("anything") {
+			t.Errorf("EXCHANGE_PROXIES %q: %v, on %v", proxies, err, s.On("governed"))
+		}
+	}
+}

@@ -14,6 +14,17 @@ with no shell or package manager. The GitHub release lists the image digests
 and attaches each image's SBOM and vulnerability report, and the
 `cedar-policy` command for managing policy stores.
 
+Without a shell or HTTP client, container health checks run a command each
+image ships. Each exits 0 when healthy and 1 otherwise; see
+[health checks](README.md#health-checks) for what each one checks.
+
+| Image | Health check command |
+|---|---|
+| `gateway` | `/opt/tyk-gateway/bin/cedar-policy health` |
+| `admin` | `/cedar-admin -healthcheck` |
+| `sandbox` (launcher) | `/usr/local/bin/sandbox-launcher -healthcheck` |
+| `sandbox` (service) | `/usr/local/bin/sandbox-service -healthcheck` |
+
 ## Check a release locally
 
 Before tagging, run the release workflow's image checks on your working tree:

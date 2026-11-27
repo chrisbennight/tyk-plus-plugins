@@ -32,6 +32,9 @@ const usage = `Usage:
   cedar-policy drift COMMAND [options]
       Review upstream changes gateways queued in CEDAR_PENDING_DIR. Run
       "cedar-policy drift help" for the commands.
+  cedar-policy health [options]
+      Exit 0 when the gateway in this container is healthy, for container
+      health checks. Run "cedar-policy health -h" for options.
 `
 
 func main() {
@@ -47,6 +50,13 @@ func main() {
 			// Messages can name files and tools from the shared directory,
 			// so hidden characters are written out.
 			fmt.Fprintf(os.Stderr, "cedar-policy drift: %s\n\n%s", driftreview.ShownName(err.Error()), driftUsage)
+			os.Exit(1)
+		}
+		return
+	}
+	if os.Args[1] == "health" {
+		if err := runHealth(os.Args[2:], os.LookupEnv, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "cedar-policy health: %v\n", err)
 			os.Exit(1)
 		}
 		return

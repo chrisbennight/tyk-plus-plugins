@@ -74,6 +74,16 @@ func envOr(name, fallback string) string {
 }
 
 func main() {
+	// The health check reads only the listening address, so it works without
+	// the identity provider settings and never reaches the provider.
+	if len(os.Args) == 2 && os.Args[1] == "-healthcheck" {
+		if err := healthcheck(envOr("ADMIN_LISTEN", ":8000"), 2*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "cedar-admin: unhealthy: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("healthy")
+		return
+	}
 	cfg, err := readConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cedar-admin: %v\n", err)

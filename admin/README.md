@@ -87,4 +87,6 @@ docker compose --profile admin up -d
 
 The gateway routes `/extensions/admin/` to `ADMIN_UPSTREAM_URL`, which defaults to the `admin` service.
 
+Its container health check, `/cedar-admin -healthcheck`, asks the dashboard for `/healthz` on `ADMIN_LISTEN` and needs none of the identity provider settings, so a provider outage does not mark the dashboard unhealthy; see [health checks](../README.md#health-checks).
+
 The dashboard runs as the gateway's user, which owns the store and the drift directory in the gateway image so the dashboard can write them. Gateways only read the store, so mount it read-only in every gateway, as `compose.yaml` does; then only reviewers, through the dashboard or `cedar-policy`, change it. A store shared with other publishers follows the store's group rules in [`gateway/policy/README.md`](../gateway/policy/README.md#sharing-a-store-between-publishers).

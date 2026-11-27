@@ -78,6 +78,11 @@ from the repository root:
 docker compose -f sandbox/compose.yaml up -d
 ```
 
+Both services declare health checks: the launcher's passes once its startup
+self-test has, and the service's while the launcher can start sandboxes. The
+service waits for the launcher to be healthy before it starts. See
+[health checks](../README.md#health-checks).
+
 On a machine without gVisor, add the development backend:
 
 ```sh

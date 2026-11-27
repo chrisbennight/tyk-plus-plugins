@@ -60,6 +60,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    # Healthy while Tyk is ready, which needs Redis, and the gateway enforces
+    # a policy set. A rejected new set leaves the previous one enforced and
+    # stays healthy; a gateway enforcing none denies every tool call.
+    healthcheck:
+      test: ["CMD", "/opt/tyk-gateway/bin/cedar-policy", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
   # The drift review dashboard, at http://127.0.0.1:8080/extensions/admin/.
   # It starts only with the admin profile: docker compose --profile admin up.
   # It signs operators in with your OpenID Connect identity provider; see
@@ -87,6 +97,15 @@ services:
       - ${ADMIN_OIDC_CLIENT_SECRET_PATH:-./admin-oidc-client-secret}:/run/secrets/admin-oidc-client-secret:ro
     depends_on:
       - gateway
+    # Healthy while the dashboard answers; it does not depend on reaching the
+    # identity provider.
+    healthcheck:
+      test: ["CMD", "/cedar-admin", "-healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+      start_interval: 1s
   redis:
     image: redis:7.4-alpine
     healthcheck:

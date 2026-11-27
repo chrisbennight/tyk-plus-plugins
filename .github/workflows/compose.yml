@@ -68,14 +68,33 @@ jobs:
           if [ -n "$GATEWAY_IMAGE" ]; then
             COMPOSE_FILE="$COMPOSE_FILE:tests/release.compose.yaml:tests/release-sandbox.compose.yaml"
           fi
-          trap 'docker compose down -v' EXIT
+          trap 'docker compose ps -a; docker compose down -v' EXIT
+          health() { docker compose exec -T "$1" /opt/tyk-gateway/bin/cedar-policy health 2>&1; }
           docker compose build
-          docker compose up -d gateway upstream issuer
+          docker compose up -d --wait gateway upstream issuer
           docker compose run --rm probe
+          # A rejected set leaves the previous one enforced: still healthy.
+          health gateway
           # The probe left `active` naming a rejected set. After a restart the
           # gateway has no valid set and must refuse every tool call.
           docker compose restart gateway
           docker compose run --rm -e PROBE_PHASE=restarted probe
+          # Enforcing no set, the restarted gateway reports unhealthy.
+          if out=$(health gateway); then
+            echo "::error::the gateway reported healthy while enforcing no policy set: $out"
+            exit 1
+          fi
+          echo "$out"
+          grep -q 'enforces no policy set' <<<"$out"
+          # Without Redis, Tyk is not ready and the gateway reports unhealthy
+          # once its next Redis check fails.
+          docker compose stop redis
+          for _ in $(seq 60); do
+            if ! out=$(health gateway-peer); then break; fi
+            sleep 1
+          done
+          echo "$out"
+          grep -q 'not ready' <<<"$out"
       - name: Benchmark Cedar decisions
         if: matrix.upstream == 'upstream' && matrix.stream == '' && matrix.sessions == ''
         run: |
@@ -123,5 +142,5 @@ jobs:
           if [ -n "$SANDBOX_IMAGE" ]; then COMPOSE_FILE="$COMPOSE_FILE:tests/release-sandbox.compose.yaml"; fi
           trap 'docker compose logs sandbox-launcher sandbox; docker compose down -v' EXIT
           docker compose build sandbox-launcher sandbox sandbox-certs sandbox-probe
-          docker compose up -d sandbox-launcher sandbox
+          docker compose up -d --wait sandbox-launcher sandbox
           docker compose run --rm sandbox-probe

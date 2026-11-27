@@ -67,12 +67,24 @@ CMD ["--conf=/opt/tyk-gateway/tyk.conf"]
 # gateway image without rebuilding the plug-in.
 FROM golang:1.26.11-trixie@sha256:f9e99477a80ccd7adfb69780510b22c7249ce9169885f18aa762cd886e75e018 AS second-proxy
 COPY apps /apps
-RUN mkdir /second && for suffix in "" -mcp; do \
-      sed -e 's/"governed"/"governed2"/' -e 's#"/mcp/"#"/mcp2/"#' -e 's/"Governed MCP"/"Governed MCP 2"/' \
-        "/apps/governed$suffix.json" > "/second/governed2$suffix.json"; \
-    done && grep -q '"governed2"' /second/governed2.json /second/governed2-mcp.json
+COPY policies /policies
+# governed3 is where the tests turn token exchange on. Its token callers get
+# their own policy, as governed's do, so Tyk admits them, and Tyk does not
+# strip credentials there, as token exchange requires.
+RUN mkdir /second /second-policies && for n in 2 3; do for suffix in "" -mcp; do \
+      sed -e "s/\"governed\"/\"governed$n\"/" -e "s#\"/mcp/\"#\"/mcp$n/\"#" -e "s/\"Governed MCP\"/\"Governed MCP $n\"/" \
+        "/apps/governed$suffix.json" > "/second/governed$n$suffix.json"; \
+    done; done && \
+    sed -i -e 's/"governed-tokens"/"governed3-tokens"/' -e 's/"strip_auth_data": true/"strip_auth_data": false/' \
+      -e 's/"stripAuthorizationData": true/"stripAuthorizationData": false/' /second/governed3.json /second/governed3-mcp.json && \
+    sed -e 's/"governed-tokens"/"governed3-tokens"/' -e 's/"governed"/"governed3"/g' -e 's/"Governed MCP"/"Governed MCP 3"/' \
+      /policies/governed-tokens.json > /second-policies/governed3-tokens.json && \
+    grep -q '"governed2"' /second/governed2.json /second/governed2-mcp.json && \
+    grep -q '"governed3-tokens"' /second/governed3-mcp.json /second-policies/governed3-tokens.json && \
+    grep -q '"stripAuthorizationData": false' /second/governed3-mcp.json && grep -q '"strip_auth_data": false' /second/governed3.json
 
 FROM gateway AS test
 COPY --from=second-proxy /second/ /opt/tyk-gateway/mcp-apps/
+COPY --from=second-proxy /second-policies/ /opt/tyk-gateway/policies/
 
 FROM gateway

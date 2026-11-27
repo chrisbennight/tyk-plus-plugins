@@ -73,6 +73,9 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 				r.Header.Del("Accept-Encoding")
 			}
 		}
+		// The request is forwarded, so it carries the upstream's own
+		// credential, or is refused.
+		upstreamCredential(w, r, method, data, nil)
 		return
 	}
 	// builtIn is set when the plug-in answers the call itself.
@@ -135,6 +138,8 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if reason == "permitted" {
+		// Only a permitted call reaches the identity provider.
+		upstreamCredential(w, r, method, data, call.ID)
 		return
 	}
 	refuse(w, call.ID, "Tool call denied")

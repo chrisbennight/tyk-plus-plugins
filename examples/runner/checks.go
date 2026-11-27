@@ -42,22 +42,6 @@ func (e *examples) checks() ([]byte, error) {
 		}
 		out = append(out, activationCheck{Caller: id, Proxy: c.Server, Upstream: e.tools[c.Server].Upstream, Tool: c.Tool, Arguments: c.Arguments, Expect: expect})
 	}
-	// A request carrying a key and a token is decided as the key's caller, so
-	// those rows are checked under the key's identity.
-	for _, k := range e.expected.KeyAndToken {
-		if !e.approved(k.Server, k.Tool, k.Arguments) {
-			continue
-		}
-		id, err := e.identity(k.Key)
-		if err != nil {
-			return nil, err
-		}
-		expect := "permitted"
-		if k.Expect == "refused" {
-			expect = "policy_denied"
-		}
-		out = append(out, activationCheck{Caller: id, Proxy: k.Server, Upstream: e.tools[k.Server].Upstream, Tool: k.Tool, Arguments: k.Arguments, Expect: expect})
-	}
 	var buf bytes.Buffer
 	buf.WriteString("[\n")
 	for i, c := range out {

@@ -32,6 +32,12 @@
   },
   "custom_middleware": {
     "driver": "goplugin",
+    "pre": [
+      {
+        "name": "OneCredential",
+        "path": "/opt/tyk-gateway/middleware/mcp-pdp.so"
+      }
+    ],
     "post": [
       {
         "name": "Authorize",

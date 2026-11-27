@@ -29,17 +29,6 @@ type expectations struct {
 	Drift *driftWalk `json:"drift"`
 	// CodeMode states what callers' Code Mode programs get.
 	CodeMode *codeMode `json:"codeMode"`
-	// KeyAndToken lists requests carrying both a key and a token. The key
-	// identifies the caller, so each expectation follows the key's access.
-	KeyAndToken []struct {
-		Key       string         `json:"key"`
-		Token     string         `json:"token"`
-		Server    string         `json:"server"`
-		Tool      string         `json:"tool"`
-		Arguments map[string]any `json:"arguments"`
-		Expect    string         `json:"expect"`
-		Why       string         `json:"why"`
-	} `json:"keyAndToken"`
 }
 
 // driftWalk is what a caller should see while a server changes what it
@@ -167,14 +156,6 @@ func load(dir string) (*examples, error) {
 	for name := range e.keys {
 		if !callerName.MatchString(name) {
 			return nil, fmt.Errorf("callers/keys.json: %q is not a valid caller name", name)
-		}
-	}
-	for i, k := range e.expected.KeyAndToken {
-		if k.Expect != "permitted" && k.Expect != "refused" {
-			return nil, fmt.Errorf("expected.json keyAndToken %d: expect must be permitted or refused", i)
-		}
-		if k.Expect == "permitted" && !e.approved(k.Server, k.Tool, k.Arguments) {
-			return nil, fmt.Errorf("expected.json keyAndToken %d expects %s.%s to be permitted, but that tool or its arguments are not approved", i, k.Server, k.Tool)
 		}
 	}
 	for i, c := range e.expected.Calls {

@@ -2,10 +2,14 @@ package policy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
+	"unicode"
 
 	"github.com/cedar-policy/cedar-go"
+	jsonv2 "github.com/go-json-experiment/json"
 )
 
 type Caller struct {
@@ -34,12 +38,23 @@ func (f scalarFacts) fields() cedar.RecordMap {
 	return cedar.RecordMap{"strings": cedar.NewSet(f["string"]...), "numbers": cedar.NewSet(f["long"]...), "flags": cedar.NewSet(f["boolean"]...)}
 }
 
+// errAmbiguous reports call arguments that an upstream matching names
+// regardless of letter case could read differently from the plug-in.
+var errAmbiguous = errors.New("argument names that differ only by letter case or hold control characters")
+
+// argumentFacts reads the declared arguments of a call for rules. The
+// arguments are read with exact names, and rejected when they hold duplicate
+// names or invalid UTF-8, or when ambiguousNames finds a name another parser
+// could read differently.
 func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Record, error) {
 	var args map[string]json.RawMessage
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &args); err != nil {
+		if err := jsonv2.Unmarshal(raw, &args); err != nil {
 			return cedar.Record{}, err
 		}
+	}
+	if ambiguousNames(args, selected) {
+		return cedar.Record{}, errAmbiguous
 	}
 	sets := scalarFacts{}
 	for name, kind := range selected {
@@ -73,6 +88,52 @@ func argumentFacts(selected map[string]string, raw json.RawMessage) (cedar.Recor
 	return cedar.NewRecord(sets.fields()), nil
 }
 
+// ambiguousNames reports whether the top-level argument names of a call
+// could be read differently by an upstream that matches names regardless of
+// letter case: two names equal under Unicode case folding, a name equal under
+// folding to a declared argument but not spelled exactly as declared, a name
+// equal under folding to two declared arguments, or a name holding a control
+// character, which some parsers drop.
+func ambiguousNames(args map[string]json.RawMessage, declared map[string]string) bool {
+	declaredFolds := make(map[string]int, len(declared))
+	for name := range declared {
+		declaredFolds[foldName(name)]++
+	}
+	seen := make(map[string]bool, len(args))
+	for name := range args {
+		if strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return true
+		}
+		folded := foldName(name)
+		if seen[folded] {
+			return true
+		}
+		seen[folded] = true
+		// A tool declaring both id and Id cannot tell which one a
+		// case-insensitive upstream reads an id argument as.
+		if _, exact := declared[name]; declaredFolds[folded] > 1 || (!exact && declaredFolds[folded] > 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// foldName maps every rune to the smallest rune that strings.EqualFold treats
+// as equal to it, so two names are equal under case folding exactly when
+// their folded forms are equal.
+func foldName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		b.WriteRune(least)
+	}
+	return b.String()
+}
+
 func (s *Snapshot) Decide(who Caller, proxy, upstream, name string, args json.RawMessage) (string, []string) {
 	inv, exists := s.tools[proxy]
 	if exists && upstream != inv.Upstream {
@@ -83,6 +144,9 @@ func (s *Snapshot) Decide(who Caller, proxy, upstream, name string, args json.Ra
 		return "unknown_tool", nil
 	}
 	facts, err := argumentFacts(t.Arguments, args)
+	if errors.Is(err, errAmbiguous) {
+		return "ambiguous_call", nil
+	}
 	if err != nil {
 		return "invalid_argument", nil
 	}

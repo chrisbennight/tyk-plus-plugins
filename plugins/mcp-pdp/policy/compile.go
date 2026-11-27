@@ -286,7 +286,9 @@ func Compile(in Inputs, version string) (*Snapshot, error) {
 		inv, listed := candidate.tools[c.Proxy]
 		_, listed = inv.Tools[c.Tool]
 		listed = listed && inv.Upstream == c.Upstream
-		if view, enforcing := candidate.Drift(c.Proxy); enforcing && c.HypotheticalTool == nil && listed {
+		// Ambiguous arguments are a fault of the check itself, which drift
+		// review must not turn into the denial a check expects.
+		if view, enforcing := candidate.Drift(c.Proxy); enforcing && c.HypotheticalTool == nil && listed && reason != "ambiguous_call" {
 			if _, _, approved := view.Approved(c.Tool); !approved {
 				reason = "unapproved_tool"
 				if c.Expect == "policy_denied" {

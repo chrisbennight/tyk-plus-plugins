@@ -188,6 +188,35 @@ func call(c *conn, cred credential, name string, arguments map[string]any, expec
 	return r
 }
 
+// refusedRequest sends a tools/call whose top-level members the caller
+// supplies, beside the usual jsonrpc, id and method, and checks that it never
+// reached the upstream. Tyk itself refuses case variants of some members it
+// routes on, so only a call Tyk passes on must carry the plug-in's refusal.
+func refusedRequest(c *conn, cred credential, name string, members map[string]any, byPlugin bool) {
+	before, _ := observed()
+	c.lastID++
+	id := c.lastID
+	body := map[string]any{"jsonrpc": "2.0", "id": id, "method": "tools/call"}
+	for k, v := range members {
+		body[k] = v
+	}
+	data, _ := json.Marshal(body)
+	req, _ := http.NewRequest(http.MethodPost, c.url, bytes.NewReader(data))
+	req.Header = c.headers(cred, "tools/call", name)
+	res, err := httpClient.Do(req)
+	check(err == nil, "%s: %v", data, err)
+	defer res.Body.Close()
+	r := decode(res, id)
+	after, _ := observed()
+	check(after == before, "%s: reached the upstream (requests %d -> %d)", data, before, after)
+	if byPlugin {
+		check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Code == -32002 && r.Error.Message == "Tool call denied",
+			"%s: expected the plug-in's refusal, got %v", data, r)
+		return
+	}
+	check(r.Status >= 400 && r.Error != nil, "%s: expected a refusal, got %v", data, r)
+}
+
 func sameJSON(a, b any) bool {
 	ja, _ := json.Marshal(a)
 	jb, _ := json.Marshal(b)

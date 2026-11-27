@@ -13,7 +13,7 @@ import (
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/drift"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/identity"
 	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/policy"
-	jsonv2 "github.com/go-json-experiment/json"
+	"github.com/chrisbennight/tyk-plus-plugins/plugins/mcp-pdp/toolcall"
 )
 
 func Authorize(w http.ResponseWriter, r *http.Request) {
@@ -75,18 +75,13 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	var call struct {
-		ID     json.RawMessage `json:"id"`
-		Method string          `json:"method"`
-		Params struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		} `json:"params"`
-	}
 	// builtIn is set when the plug-in answers the call itself.
 	builtIn := false
 	body, readErr := readBody(r)
-	validBody := readErr == nil && jsonv2.Unmarshal(body, &call) == nil
+	// The call is read once, and the decision and any built-in tool use only
+	// this reading.
+	call, parseErr := toolcall.Parse(body)
+	validBody := readErr == nil && parseErr == nil
 	name := ctx.GetMCPPrimitiveName(r)
 	oas := ctx.GetOASDefinition(r)
 	state := current()
@@ -101,13 +96,17 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 		reason = "invalid_caller"
 	case oas == nil || oas.GetTykExtension() == nil:
 		reason = "missing_proxy"
+	case readErr == nil && errors.Is(parseErr, toolcall.ErrAmbiguous):
+		// An upstream matching names regardless of letter case could read
+		// another member in place of the one decided on.
+		reason = "ambiguous_call"
 	case isNested && isCodeModeTool(name):
 		reason = "code_mode_recursion"
 	case codeModeOn(oas.GetTykExtension().Info.ID) && isCodeModeTool(name):
 		// Code Mode tools ship with the plug-in, so they are not drift
 		// reviewed, but the caller's rules must permit them like any tool.
 		reason = "unknown_tool"
-		if validBody && call.Method == "tools/call" && call.Params.Name == name && codemode.IsTool(name) {
+		if validBody && call.Method == "tools/call" && call.Name == name && codemode.IsTool(name) {
 			builtIn = true
 			reason, rules = state.DecideBuiltIn(who, oas.GetTykExtension().Info.ID, oas.GetTykExtension().Upstream.URL, name)
 		}
@@ -119,10 +118,10 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	default:
 		reason = "invalid_call"
 		proxy := oas.GetTykExtension().Info.ID
-		if validBody && call.Method == "tools/call" && call.Params.Name == name {
+		if validBody && call.Method == "tools/call" && call.Name == name {
 			reason = driftReason(state, proxy, name)
 			if reason == "" {
-				reason, rules = state.Decide(who, proxy, oas.GetTykExtension().Upstream.URL, name, call.Params.Arguments)
+				reason, rules = state.Decide(who, proxy, oas.GetTykExtension().Upstream.URL, name, call.Arguments)
 			}
 		}
 	}
@@ -132,11 +131,7 @@ func Authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("Cedar authorization", attrs...)
 	if reason == "permitted" && builtIn {
-		var outer struct {
-			Params json.RawMessage `json:"params"`
-		}
-		_ = json.Unmarshal(body, &outer)
-		answerCodeMode(w, r, call.ID, name, outer.Params, who, method, oas.GetTykExtension().Info.ID)
+		answerCodeMode(w, r, call.ID, name, call.Arguments, call.Meta, who, method, oas.GetTykExtension().Info.ID)
 		return
 	}
 	if reason == "permitted" {

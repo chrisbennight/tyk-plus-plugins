@@ -106,20 +106,16 @@ type executeArguments struct {
 
 // execute runs a program for a caller the gateway permitted to call
 // codemode.execute, and writes the tool result.
-func execute(w http.ResponseWriter, r *http.Request, id json.RawMessage, params json.RawMessage, who policy.Caller, method identity.Method, proxy string) {
+func execute(w http.ResponseWriter, r *http.Request, id json.RawMessage, arguments, meta json.RawMessage, who policy.Caller, method identity.Method, proxy string) {
 	if codeModeProblem != "" {
 		writeToolError(w, id, "unavailable", "Code Mode is unavailable on this gateway", nil)
 		return
 	}
-	var call struct {
-		Arguments executeArguments `json:"arguments"`
-		Meta      json.RawMessage  `json:"_meta"`
-	}
-	if err := json.Unmarshal(params, &call); err != nil || call.Arguments.Source == "" {
+	var args executeArguments
+	if err := json.Unmarshal(arguments, &args); err != nil || args.Source == "" {
 		writeToolError(w, id, "invalid", "codemode.execute needs a source string, and optional input, timeout_seconds and limits", nil)
 		return
 	}
-	args := call.Arguments
 	requested := args.Limits
 	if args.TimeoutSeconds > 0 {
 		// A positive timeout is at least a millisecond; zero would mean
@@ -132,7 +128,7 @@ func execute(w http.ResponseWriter, r *http.Request, id json.RawMessage, params 
 	}
 
 	origin := codemode.Origin{Proxy: proxy, Version: r.Header.Get("MCP-Protocol-Version"), Session: r.Header.Get("Mcp-Session-Id"),
-		Meta: call.Meta, NamedHeaders: r.Header.Get("Mcp-Method") != "", Credential: http.Header{}}
+		Meta: meta, NamedHeaders: r.Header.Get("Mcp-Method") != "", Credential: http.Header{}}
 	// Only the credential that identified the caller is presented again.
 	if method == identity.Token {
 		if bearer, _ := r.Context().Value(bearerKey{}).(string); bearer != "" {

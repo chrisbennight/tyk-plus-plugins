@@ -198,6 +198,15 @@ return [a.content[0].text, b.content[0].text];`, nil, nil)
 		check(dispatched == 0 && seen["code"] == float64(-32002) && seen["message"] == "Tool call denied", "%s: a program ran a program: %v", version, seen)
 		seen, dispatched = programCall(c, k.support, "elsewhere", "lookup", args("count", 7))
 		check(dispatched == 0 && seen["message"] == "Tool call denied", "%s: unknown proxy: %v", version, seen)
+		// A program's call is refused when another parser could read its
+		// arguments differently, though the operator may make the call itself.
+		seen, dispatched = programCall(c, k.operator, "governed", "change", args("count", 9, "Count", 2))
+		check(dispatched == 0 && seen["code"] == float64(-32002) && seen["message"] == "Tool call denied", "%s: ambiguous arguments in a program: %v", version, seen)
+		// So is a call to a Code Mode tool whose envelope another parser could
+		// read differently: the program run would be the one never decided.
+		ambiguous := c.params(map[string]any{"name": codeMode, "arguments": map[string]any{"source": "return 1"}})
+		ambiguous["Arguments"] = map[string]any{"source": "return 2"}
+		refusedRequest(c, k.support, codeMode, map[string]any{"params": ambiguous}, true)
 
 		// A header claiming to be a nested call grants nothing and never
 		// reaches the upstream, which rejects any request carrying it.

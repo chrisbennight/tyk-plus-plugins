@@ -22,10 +22,11 @@ services:
       CODEMODE_TLS_CERT: /etc/codemode/client.pem
       CODEMODE_TLS_KEY: /etc/codemode/client-key.pem
       CODEMODE_TLS_CA: /etc/codemode/client-ca.pem
-      # Token exchange on governed3 only, with a token endpoint that cannot
-      # be reached, so every request it would forward fails closed.
+      # Token exchange on governed3 only. The test upstream is also the token
+      # endpoint, over plain HTTP on this isolated test network.
       EXCHANGE_PROXIES: governed3=http://upstream:8000/mcp
-      EXCHANGE_TOKEN_URL: https://exchange.invalid/token
+      EXCHANGE_TOKEN_URL: http://upstream:8000/exchange
+      EXCHANGE_ALLOW_INSECURE_HTTP: "true"
       EXCHANGE_CLIENT_ID: gateway
       EXCHANGE_CLIENT_SECRET: test-only-secret
       EXCHANGE_TIMEOUT: 3s

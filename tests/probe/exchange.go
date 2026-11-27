@@ -8,17 +8,30 @@ import (
 	"strings"
 )
 
-// exchangeGateway is the proxy with token exchange on. Its token endpoint
-// cannot be reached in this environment, so every request it would forward
-// must fail closed.
+// exchangeGateway is the proxy with token exchange on. The test upstream is
+// also its token endpoint, and accepts only tokens it issued.
 const exchangeGateway = "http://gateway:8080/mcp3/"
 
-// exchangeSuite checks that a proxy with token exchange on forwards nothing
-// it has no exchanged token for: token callers get 503 on every method that
-// would reach the upstream, including tool calls the rules permit; a call the
-// rules refuse is refused as anywhere else, before any exchange; and key
-// callers are refused every request, even for Code Mode's own tools, and do
-// not find the proxy's tools through Code Mode on another proxy.
+// exchanged reports how many token exchanges the test token endpoint
+// received, and how many upstream requests carried a token it issued.
+func exchanged() (exchanges, withIssuedToken int) {
+	res, err := httpClient.Get("http://upstream:8000/requests")
+	check(err == nil, "upstream: %v", err)
+	defer res.Body.Close()
+	var body struct {
+		Exchanges       int `json:"exchanges"`
+		WithIssuedToken int `json:"withIssuedToken"`
+	}
+	check(json.NewDecoder(res.Body).Decode(&body) == nil, "upstream reply")
+	return body.Exchanges, body.WithIssuedToken
+}
+
+// exchangeSuite checks token exchange end to end. A token caller's requests
+// reach the upstream with a token the token endpoint issued, never the
+// caller's own; when the exchange fails, nothing is forwarded; a call the
+// rules refuse is refused before any exchange; and key callers are refused
+// every request, even for Code Mode's own tools, and do not find the proxy's
+// tools through Code Mode on another proxy.
 func exchangeSuite(k keys, version string) {
 	tools := map[string]any{
 		"lookup": map[string]any{"facts": args("readOnly", true), "arguments": args("count", "long")},
@@ -30,58 +43,77 @@ func exchangeSuite(k keys, version string) {
 	})
 	publish("activated", map[string]string{"rules.cedar": codeModeRules, "approved_tools.json": string(inventory), "checks.json": "[]"})
 
-	c := &conn{url: exchangeGateway, version: version}
-	tok := bearerCred(token("published", args("app_roles", []string{"support"})))
+	// The upstream accepts only tokens the token endpoint issued, so every
+	// request below that succeeds carried an exchanged token.
+	// The token is distinct for each version, so neither finds the other's
+	// exchanged token cached.
+	tok := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-"+version)))
+	exchangesBefore, issuedBefore := exchanged()
+	c := connectAt(exchangeGateway, tok, version)
+	catalog := catalogOf(c, tok)
+	check(catalog["lookup"] != nil, "%s: the exchange proxy listed %v", version, catalog)
+	call(c, tok, "lookup", args("count", 1), "found")
+	exchangesAfter, issuedAfter := exchanged()
+	// One exchange serves the caller's requests while its token is cached.
+	check(exchangesAfter-exchangesBefore == 1 && issuedAfter > issuedBefore,
+		"%s: exchanges %d -> %d, requests with an issued token %d -> %d", version, exchangesBefore, exchangesAfter, issuedBefore, issuedAfter)
+	// The rules refuse this call, so it is refused like any other, without
+	// an exchange.
+	call(c, tok, "change", args("count", 2))
+	exchangesRefused, _ := exchanged()
+	check(exchangesRefused == exchangesAfter, "%s: a refused call was exchanged: %d -> %d", version, exchangesAfter, exchangesRefused)
+
+	// The token endpoint refuses this caller, so nothing is forwarded.
+	refused := bearerCred(token("published", args("sub", "refused", "app_roles", []string{"support"})))
 	unavailable := func(what string, send func() response) {
 		before, _ := observed()
+		exchangesBefore, _ := exchanged()
 		r := send()
 		after, _ := observed()
-		check(r.Status == http.StatusServiceUnavailable && r.Error != nil && r.Error.Code == -32603 && r.Error.Message == "Upstream credentials unavailable" && after == before,
-			"%s: %s was not refused for want of an upstream credential: %v (requests %d -> %d)", version, what, r, before, after)
+		exchangesAfter, _ := exchanged()
+		check(r.Status == http.StatusServiceUnavailable && r.Error != nil && r.Error.Code == -32603 && r.Error.Message == "Upstream credentials unavailable" &&
+			after == before && exchangesAfter == exchangesBefore+1,
+			"%s: %s after a refused exchange: %v (requests %d -> %d, exchanges %d -> %d)", version, what, r, before, after, exchangesBefore, exchangesAfter)
 	}
+	failed := &conn{url: exchangeGateway, version: version}
 	handshake := "initialize"
 	if version == newerProtocol {
 		handshake = "server/discover"
 	}
 	unavailable(handshake, func() response {
-		return c.rpc(tok, handshake, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
+		return failed.rpc(refused, handshake, map[string]any{"protocolVersion": olderProtocol, "capabilities": map[string]any{},
 			"clientInfo": map[string]any{"name": "probe", "version": "1"}})
 	})
-	unavailable("tools/list", func() response { return c.rpc(tok, "tools/list", map[string]any{}) })
+	unavailable("tools/list", func() response { return failed.rpc(refused, "tools/list", map[string]any{}) })
+	unavailable("a permitted tool call", func() response {
+		return failed.rpc(refused, "tools/call", map[string]any{"name": "lookup", "arguments": args("count", 1)})
+	})
 	if version == olderProtocol {
 		// A notification has no ID for a JSON-RPC error, so it gets the
 		// status alone.
 		before, _ := observed()
-		status := c.notifyStatus(tok, "notifications/initialized")
+		status := failed.notifyStatus(refused, "notifications/initialized")
 		after, _ := observed()
 		check(status == http.StatusServiceUnavailable && after == before, "%s: notification got %d (requests %d -> %d)", version, status, before, after)
 	}
-	// The rules permit this call, so it needs an exchanged token.
-	unavailable("a permitted tool call", func() response {
-		return c.rpc(tok, "tools/call", map[string]any{"name": "lookup", "arguments": args("count", 1)})
-	})
-	// The rules refuse this call, so it is refused like any other, without
-	// an exchange.
-	call(c, tok, "change", args("count", 2))
 
 	// A key caller has no token to exchange, so it is refused every request,
 	// including Code Mode's tools, which the plug-in answers itself.
-	tokenOnly := func(what string, r response, before, after int) {
+	tokenOnly := func(what string, send func() response) {
+		before, _ := observed()
+		r := send()
+		after, _ := observed()
 		check(r.Status == http.StatusForbidden && r.Error != nil && r.Error.Message == "This proxy accepts token callers only" && after == before,
 			"%s: key caller's %s on the exchange proxy: %v (requests %d -> %d)", version, what, r, before, after)
 	}
-	before, _ := observed()
-	r := c.rpc(k.support, "tools/list", map[string]any{})
-	after, _ := observed()
-	tokenOnly("tools/list", r, before, after)
-	before, _ = observed()
-	r = c.rpc(k.support, "tools/call", map[string]any{"name": "codemode.search", "arguments": map[string]any{"query": "lookup"}})
-	after, _ = observed()
-	tokenOnly("codemode.search", r, before, after)
+	tokenOnly("tools/list", func() response { return failed.rpc(k.support, "tools/list", map[string]any{}) })
+	tokenOnly("codemode.search", func() response {
+		return failed.rpc(k.support, "tools/call", map[string]any{"name": "codemode.search", "arguments": map[string]any{"query": "lookup"}})
+	})
 	// Through Code Mode on another proxy, a key caller does not find the
 	// exchange proxy's tools, which it could not call.
 	found := searchNames(connect(k.support, version), k.support, "lookup")
 	check(slices.Contains(found, "governed/lookup") && !slices.ContainsFunc(found, func(n string) bool { return strings.HasPrefix(n, "governed3/") }),
 		"%s: key caller's search found %v", version, found)
-	fmt.Printf("Verified that token exchange fails closed for a %s client.\n", version)
+	fmt.Printf("Verified token exchange for a %s client.\n", version)
 }

@@ -64,14 +64,15 @@ func upstreamCredential(w http.ResponseWriter, r *http.Request, data map[string]
 	}
 	proxy := proxyOf(r)
 	reason := ""
+	def := ctx.GetOASDefinition(r)
 	switch {
 	case exchangeProblem != "":
 		reason = "exchange_unavailable"
-	case stripsAuthorization(ctx.GetOASDefinition(r)):
+	case stripsAuthorization(def):
 		reason = "strip_authorization_data_on"
-	case conflictingUpstreamAuth(ctx.GetOASDefinition(r)):
+	case conflictingUpstreamAuth(def):
 		reason = "conflicting_upstream_credential"
-	case !tokenOnlyInAuthorization(ctx.GetDefinition(r)):
+	case !tokenOnlyInAuthorization(def):
 		reason = "token_not_in_authorization_header"
 	}
 	if reason != "" {
@@ -125,15 +126,20 @@ func stripsAuthorization(def *oas.OAS) bool {
 // header and replaces it, so a token Tyk read from another header, a query
 // parameter or a cookie would be validated as one caller while another
 // credential was exchanged, and would be forwarded with stripping off.
-func tokenOnlyInAuthorization(def *apidef.APIDefinition) bool {
+func tokenOnlyInAuthorization(def *oas.OAS) bool {
 	if def == nil {
 		return false
 	}
+	// Tyk's JWT check reads the classic definition's settings, which Tyk
+	// derives from the OAS definition the same way. The definition is the
+	// request's own copy, so extracting from it changes nothing shared.
+	var api apidef.APIDefinition
+	def.ExtractTo(&api)
 	// Tyk falls back to the definition's general settings when it has none
 	// for JWT.
-	config, ok := def.AuthConfigs[apidef.JWTType]
+	config, ok := api.AuthConfigs[apidef.JWTType]
 	if !ok {
-		config = def.Auth
+		config = api.Auth
 	}
 	return !config.DisableHeader && !config.UseParam && !config.UseCookie &&
 		(config.AuthHeaderName == "" || strings.EqualFold(config.AuthHeaderName, "Authorization"))

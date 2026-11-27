@@ -156,7 +156,7 @@ func reviewedUpstreamDiffers(proxy string, def *oas.OAS) bool {
 	if state == nil || def == nil || def.GetTykExtension() == nil {
 		return false
 	}
-	reviewed, _ := state.ApprovedTools(proxy)
+	reviewed := state.ReviewedUpstream(proxy)
 	return reviewed != "" && reviewed != def.GetTykExtension().Upstream.URL
 }
 
@@ -202,14 +202,26 @@ func tokenOnlyInAuthorization(def *oas.OAS) bool {
 	if !ok {
 		config = api.Auth
 	}
-	return !config.DisableHeader && !config.UseParam && !config.UseCookie &&
-		(config.AuthHeaderName == "" || strings.EqualFold(config.AuthHeaderName, "Authorization"))
+	if config.DisableHeader || config.UseParam || config.UseCookie ||
+		(config.AuthHeaderName != "" && !strings.EqualFold(config.AuthHeaderName, "Authorization")) {
+		return false
+	}
+	// Tyk leaves stripping to the plug-in here, and the plug-in replaces
+	// only Authorization, so no credential, a key included, may come in a
+	// query parameter or a cookie, where it would be forwarded.
+	for _, other := range api.AuthConfigs {
+		if other.UseParam || other.UseCookie {
+			return false
+		}
+	}
+	return !api.Auth.UseParam && !api.Auth.UseCookie
 }
 
 // conflictingUpstreamAuth reports whether Tyk itself is configured to set the
 // upstream's credential, through upstream authentication or an Authorization
-// header added to every request. Either could replace or contradict the
-// exchanged token, so such a proxy refuses its requests instead.
+// header added to or removed from every request. Each could replace,
+// contradict or drop the exchanged token, so such a proxy refuses its
+// requests instead.
 func conflictingUpstreamAuth(def *oas.OAS) bool {
 	if def == nil || def.GetTykExtension() == nil {
 		return false
@@ -222,6 +234,11 @@ func conflictingUpstreamAuth(def *oas.OAS) bool {
 		if headers := ext.Middleware.Global.TransformRequestHeaders; headers != nil && headers.Enabled {
 			for _, h := range headers.Add {
 				if strings.EqualFold(h.Name, "Authorization") {
+					return true
+				}
+			}
+			for _, name := range headers.Remove {
+				if strings.EqualFold(name, "Authorization") {
 					return true
 				}
 			}

@@ -13,6 +13,12 @@ type ApprovedTool struct {
 	Definition json.RawMessage
 }
 
+// ReviewedUpstream returns the upstream URL a proxy's approved tools were
+// reviewed for, or "" when the set has none for the proxy.
+func (s *Snapshot) ReviewedUpstream(proxy string) string {
+	return s.tools[proxy].Upstream
+}
+
 // ApprovedTools lists a proxy's approved tools in name order, with the
 // upstream URL they were reviewed for.
 func (s *Snapshot) ApprovedTools(proxy string) (upstream string, tools []ApprovedTool) {

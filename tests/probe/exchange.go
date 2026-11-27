@@ -146,12 +146,15 @@ func exchangeSuite(k keys, version string) {
 	// Exchange works the same on the peer, which has Code Mode off.
 	peerToken := bearerCred(token("published", args("app_roles", []string{"support"}, "jti", "exchange-peer-"+version)))
 	var peer *conn
+	peerExchangesBefore, _ := exchanged()
 	allIssued("the peer's handshake", func() { peer = connectAt(peerExchangeGateway, peerToken, version) })
 	allIssued("the peer's tools/list", func() {
 		catalog := catalogOf(peer, peerToken)
 		check(catalog["lookup"] != nil, "%s: the peer's exchange proxy listed %v", version, catalog)
 	})
 	allIssued("a permitted call on the peer", func() { call(peer, peerToken, "lookup", args("count", 1), "found") })
+	peerExchangesAfter, _ := exchanged()
+	check(peerExchangesAfter-peerExchangesBefore == 1, "%s: the peer made %d exchanges for one caller", version, peerExchangesAfter-peerExchangesBefore)
 
 	// A provider that hands back the caller's own token has issued nothing,
 	// so nothing is forwarded.

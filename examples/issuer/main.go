@@ -210,11 +210,15 @@ var scopeToken = regexp.MustCompile(`^[\x21\x23-\x5B\x5D-\x7E]+$`)
 // hold requests open indefinitely.
 const maxDelayMilliseconds = 60_000
 
+// uriCharacters are the characters a URI may contain (RFC 3986 section 2).
+// url.Parse accepts some others, such as a space in a path.
+var uriCharacters = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?\[\]@!$&'()*+,;=%]+$`)
+
 // validResource reports whether s is an absolute URI without a fragment, as a
 // resource indicator must be (RFC 8707 section 2).
 func validResource(s string) bool {
 	u, err := url.Parse(s)
-	return err == nil && u.IsAbs() && !strings.Contains(s, "#")
+	return err == nil && u.IsAbs() && uriCharacters.MatchString(s) && !strings.Contains(s, "#")
 }
 
 var personName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
@@ -269,6 +273,12 @@ func loadDeck(path string) (*deck, error) {
 	for id, c := range d.Clients {
 		if !personName.MatchString(id) {
 			return nil, fmt.Errorf("client %q: names use lowercase letters, digits and hyphens", id)
+		}
+		// A client's ID tokens carry its ID as their audience. If that were
+		// the deck's audience, an ID token would pass for a person's access
+		// token, so the identifiers must differ (RFC 8725 section 2.8).
+		if id == d.Audience {
+			return nil, fmt.Errorf("client %q: a client ID must differ from the deck's audience", id)
 		}
 		for _, grant := range c.Grants {
 			if grant != grantAuthorizationCode && grant != grantTokenExchange {

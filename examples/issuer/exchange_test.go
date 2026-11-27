@@ -25,7 +25,9 @@ const exchangeDeck = `{
   },
   "clients": {
     "dashboard": {"secret": "s3cret", "redirectURIs": ["https://admin.example/callback"]},
-    "gateway": {"secret": "gw-secret", "grants": ["urn:ietf:params:oauth:grant-type:token-exchange"]}
+    "gateway": {"secret": "gw-secret", "grants": ["urn:ietf:params:oauth:grant-type:token-exchange"]},
+    "exchanger": {"secret": "ex-secret", "redirectURIs": ["https://admin.example/callback"],
+      "grants": ["urn:ietf:params:oauth:grant-type:token-exchange"]}
   },
   "targets": {
     "https://notes.example/mcp": {"audience": "notes", "scopes": ["notes:read", "notes:write"]},
@@ -289,6 +291,30 @@ func TestExchangeRefusals(t *testing.T) {
 	}
 }
 
+func TestTwoClientAuthenticationMethodsAreRefused(t *testing.T) {
+	s, _, _ := newExchangeServer(t)
+	form := exchangeForm(personToken(t, s, "reviewer"))
+	form.Set("client_secret", "gw-secret")
+	rec := exchange(t, s, form, "gateway", "gw-secret")
+	if resp, _ := decodeExchange(t, rec); rec.Code != http.StatusBadRequest || resp.Error != "invalid_request" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAMalformedBasicHeaderIsChallenged(t *testing.T) {
+	s, _, _ := newExchangeServer(t)
+	form := exchangeForm(personToken(t, s, "reviewer"))
+	form.Set("client_id", "gateway")
+	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Basic not-base64!")
+	rec := httptest.NewRecorder()
+	s.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("WWW-Authenticate"), "Basic ") {
+		t.Fatalf("%d, WWW-Authenticate %q", rec.Code, rec.Header().Get("WWW-Authenticate"))
+	}
+}
+
 func TestAWrongSecretInTheFormHasNoChallenge(t *testing.T) {
 	s, _, _ := newExchangeServer(t)
 	form := exchangeForm(personToken(t, s, "reviewer"))
@@ -359,12 +385,13 @@ func TestDiscoveryListsTheTokenExchangeGrant(t *testing.T) {
 
 func TestAnExchangeOnlyClientCannotSignIn(t *testing.T) {
 	s, _, _ := newExchangeServer(t)
-	rec := get(t, s, http.MethodGet, "/oauth/authorize?"+url.Values{"response_type": {"code"}, "client_id": {"gateway"},
+	// exchanger lists the redirect URI, so only its grants refuse the sign-in.
+	rec := get(t, s, http.MethodGet, "/oauth/authorize?"+url.Values{"response_type": {"code"}, "client_id": {"exchanger"},
 		"redirect_uri": {redirect}, "login_hint": {"reviewer"}}.Encode(), "")
 	if rec.Code != http.StatusBadRequest || rec.Header().Get("Location") != "" {
 		t.Fatalf("%d, Location %q", rec.Code, rec.Header().Get("Location"))
 	}
-	if rec := exchange(t, s, url.Values{"grant_type": {grantAuthorizationCode}, "code": {"x"}}, "gateway", "gw-secret"); rec.Code != http.StatusBadRequest ||
+	if rec := exchange(t, s, url.Values{"grant_type": {grantAuthorizationCode}, "code": {"x"}}, "exchanger", "ex-secret"); rec.Code != http.StatusBadRequest ||
 		!strings.Contains(rec.Body.String(), "unauthorized_client") {
 		t.Fatalf("code grant: %d %s", rec.Code, rec.Body)
 	}
@@ -395,16 +422,18 @@ func TestSignInAccessTokensFollowTheJWTAccessTokenProfile(t *testing.T) {
 func TestDeckTargetsAndGrantsAreChecked(t *testing.T) {
 	base := `"issuer":"i","audience":"a","lifetimeSeconds":1,"people":{"p":{}}`
 	for name, rest := range map[string]string{
-		"relative resource":     `"targets":{"/mcp":{}}`,
-		"resource fragment":     `"targets":{"https://a.example/mcp#x":{}}`,
-		"shared audience":       `"targets":{"https://a.example/mcp":{"audience":"x"},"https://b.example/mcp":{"audience":"x"}}`,
-		"two scopes in one":     `"targets":{"https://a.example/mcp":{"scopes":["a b"]}}`,
-		"empty scope":           `"targets":{"https://a.example/mcp":{"scopes":[""]}}`,
-		"negative delay":        `"targets":{"https://a.example/mcp":{"delayMilliseconds":-1}}`,
-		"long delay":            `"targets":{"https://a.example/mcp":{"delayMilliseconds":60001}}`,
-		"unknown target field":  `"targets":{"https://a.example/mcp":{"extra":1}}`,
-		"unknown grant":         `"clients":{"c":{"secret":"s","grants":["client_credentials"]}}`,
-		"code without redirect": `"clients":{"c":{"secret":"s","grants":["authorization_code","urn:ietf:params:oauth:grant-type:token-exchange"]}}`,
+		"relative resource":              `"targets":{"/mcp":{}}`,
+		"space in a resource":            `"targets":{"https://a.example/m cp":{}}`,
+		"client named like the audience": `"clients":{"a":{"secret":"s","grants":["urn:ietf:params:oauth:grant-type:token-exchange"]}}`,
+		"resource fragment":              `"targets":{"https://a.example/mcp#x":{}}`,
+		"shared audience":                `"targets":{"https://a.example/mcp":{"audience":"x"},"https://b.example/mcp":{"audience":"x"}}`,
+		"two scopes in one":              `"targets":{"https://a.example/mcp":{"scopes":["a b"]}}`,
+		"empty scope":                    `"targets":{"https://a.example/mcp":{"scopes":[""]}}`,
+		"negative delay":                 `"targets":{"https://a.example/mcp":{"delayMilliseconds":-1}}`,
+		"long delay":                     `"targets":{"https://a.example/mcp":{"delayMilliseconds":60001}}`,
+		"unknown target field":           `"targets":{"https://a.example/mcp":{"extra":1}}`,
+		"unknown grant":                  `"clients":{"c":{"secret":"s","grants":["client_credentials"]}}`,
+		"code without redirect":          `"clients":{"c":{"secret":"s","grants":["authorization_code","urn:ietf:params:oauth:grant-type:token-exchange"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := loadDeck(writeDeck(t, "{"+base+","+rest+"}")); err == nil {

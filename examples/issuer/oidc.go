@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -180,7 +181,14 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	clientID, ok, basic := s.authenticate(r)
+	basic := strings.HasPrefix(strings.ToLower(r.Header.Get("Authorization")), "basic ")
+	// A client may use only one authentication method per request (RFC 6749
+	// sections 2.3 and 5.2).
+	if basic && r.PostForm.Has("client_secret") {
+		tokenError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	clientID, ok := s.authenticate(r, basic)
 	if !ok {
 		// A client that tried HTTP Basic is answered with a challenge for
 		// that scheme (RFC 6749 section 5.2).
@@ -206,27 +214,32 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// authenticate returns the client a request authenticates as, and whether
-// it tried HTTP Basic.
-func (s *server) authenticate(r *http.Request) (clientID string, ok, basic bool) {
-	clientID, secret, basic := r.BasicAuth()
+// authenticate returns the client a request authenticates as: by HTTP Basic
+// when the request tried it, even with a malformed header, and otherwise by
+// the client_id and client_secret form parameters.
+func (s *server) authenticate(r *http.Request, basic bool) (clientID string, ok bool) {
+	var secret string
 	if basic {
+		var parsed bool
+		if clientID, secret, parsed = r.BasicAuth(); !parsed {
+			return "", false
+		}
 		// HTTP Basic carries the client ID and secret form-encoded
 		// (RFC 6749 section 2.3.1).
 		var idErr, secretErr error
 		clientID, idErr = url.QueryUnescape(clientID)
 		secret, secretErr = url.QueryUnescape(secret)
 		if idErr != nil || secretErr != nil {
-			return "", false, true
+			return "", false
 		}
 	} else {
 		clientID, secret = r.PostForm.Get("client_id"), r.PostForm.Get("client_secret")
 	}
 	c, known := s.deck.Clients[clientID]
 	if !known || subtle.ConstantTimeCompare([]byte(secret), []byte(c.Secret)) != 1 {
-		return "", false, basic
+		return "", false
 	}
-	return clientID, true, basic
+	return clientID, true
 }
 
 // redeemCode turns a sign-in code into tokens for the client it was issued

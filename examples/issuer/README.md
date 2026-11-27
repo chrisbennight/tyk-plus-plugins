@@ -70,13 +70,14 @@ List each application in the deck under `clients`, with a secret and the exact r
 - `POST /oauth/token` exchanges the code. The client authenticates with its secret, by HTTP Basic or in the form, and sends the same redirect URI and, if it gave a challenge, the code verifier.
   - A code works once, and only within a minute of being issued. A sign-in that gave a challenge needs its verifier, and one that gave none must send none.
   - Client IDs and secrets sent by HTTP Basic are form-encoded first, as OAuth requires ([RFC 6749 section 2.3.1](https://www.rfc-editor.org/rfc/rfc6749#section-2.3.1)).
-  - A wrong or missing secret is refused with `401` and `invalid_client`. If the client tried HTTP Basic, the response also carries `WWW-Authenticate: Basic` ([RFC 6749 section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2)).
+  - A wrong or missing secret is refused with `401` and `invalid_client`. If the client tried HTTP Basic, even with a malformed header, the response also carries `WWW-Authenticate: Basic` ([RFC 6749 section 5.2](https://www.rfc-editor.org/rfc/rfc6749#section-5.2)).
+  - A request that uses HTTP Basic and also sends `client_secret` in the form is refused with `invalid_request`, because a client may use only one authentication method ([RFC 6749 section 2.3](https://www.rfc-editor.org/rfc/rfc6749#section-2.3)).
   - A client that may not use the grant it sends is refused with `unauthorized_client`.
   - It returns an ID token whose audience is the client and which carries the sign-in's `nonce`, and an access token for the deck's `audience`.
   - Both carry the person's claims from the deck and are signed with the published key. The access token follows the JWT access token profile ([RFC 9068](https://www.rfc-editor.org/rfc/rfc9068)): its `typ` header is `at+jwt`, and it also carries `client_id` (the client) and a unique `jti`. The ID token's `typ` is `JWT`.
   - Responses carry `Cache-Control: no-store` and `Pragma: no-cache` ([RFC 6749 section 5.1](https://www.rfc-editor.org/rfc/rfc6749#section-5.1)).
 
-A client may use only the grants it lists under `grants`. Without `grants` it may use the authorization-code grant only, so an existing deck needs no change. A client that may use the authorization-code grant needs at least one redirect URI; a token-exchange-only client needs none.
+A client's ID must differ from the deck's `audience`, so a client's ID token, whose audience is its client ID, can never pass for a person's access token. A client may use only the grants it lists under `grants`. Without `grants` it may use the authorization-code grant only, so an existing deck needs no change. A client that may use the authorization-code grant needs at least one redirect URI; a token-exchange-only client needs none.
 
 ## Token exchange
 
@@ -94,7 +95,7 @@ List the targets under `targets`, keyed by resource URI, and give the exchanging
 }
 ```
 
-- A target's key is its resource URI, which must be absolute and without a fragment.
+- A target's key is its resource URI, which must be absolute, without a fragment, and use only the characters a URI may contain.
 - `audience` is an optional logical name for the target, unique in the deck.
 - `scopes` lists the scope values a token for the target may carry.
 - `delayMilliseconds` (at most 60000) holds every accepted exchange for the target that long before answering, so a test can make its caller time out. This is a test-only fault mode, not standard behaviour.
@@ -107,9 +108,9 @@ Each refusal uses the error code the standards give, so a test can trigger it on
 
 | To get | Send |
 | --- | --- |
-| `401 invalid_client` | a wrong or missing client secret; with HTTP Basic the response also carries `WWW-Authenticate: Basic` |
+| `401 invalid_client` | a wrong or missing client secret, or a malformed HTTP Basic header; after an HTTP Basic attempt the response also carries `WWW-Authenticate: Basic` |
 | `400 unauthorized_client` | the grant from a client whose `grants` do not include it |
-| `400 invalid_request` | a missing `subject_token` or `subject_token_type`; an unsupported `subject_token_type` or `requested_token_type`; any `actor_token` or `actor_token_type`; one of the grant's other parameters, or the client's credentials, sent twice; or a subject token that is not a valid token from this issuer for the deck's `audience`: expired, not yet valid, signed with `?key=unpublished`, from another issuer, for another audience, without `sub` or `exp`, or not `RS256` |
+| `400 invalid_request` | HTTP Basic together with `client_secret` in the form; a missing `subject_token` or `subject_token_type`; an unsupported `subject_token_type` or `requested_token_type`; any `actor_token` or `actor_token_type`; one of the grant's other parameters, or the client's credentials, sent twice; or a subject token that is not a valid token from this issuer for the deck's `audience`: expired, not yet valid, signed with `?key=unpublished`, from another issuer, for another audience, without `sub` or `exp`, or not `RS256` |
 | `400 invalid_target` | no target, more than one (including `resource` with `audience`), a resource that is not an absolute URI without a fragment, or a resource or audience the deck does not list |
 | `400 invalid_scope` | a scope value the target does not list |
 | a slow answer | a target with `delayMilliseconds` |

@@ -47,3 +47,16 @@ The dashboard sets `Content-Security-Policy: default-src 'none'; style-src 'self
 | [`docs/branding/assets/wordmark-on-light.svg`](branding/assets/wordmark-on-light.svg), [`wordmark-on-dark.svg`](branding/assets/wordmark-on-dark.svg) | Compact symbol and vector-outlined `TYK PLUS` wordmark |
 | [`docs/branding/assets/header-light.svg`](branding/assets/header-light.svg), [`header-dark.svg`](branding/assets/header-dark.svg) | Theme-aware relationship header for [`README.md`](../README.md) |
 | [`admin/static/favicon.svg`](../admin/static/favicon.svg) | Dark-tile tab icon embedded in and served by the drift review dashboard |
+
+## Dashboard screenshots
+
+Light and dark screenshots of the [drift review dashboard](../admin/README.md) live in [`docs/screenshots/`](screenshots/):
+
+| View | Light | Dark | What it shows |
+| --- | --- | --- | --- |
+| Overview | [`overview-light.png`](screenshots/overview-light.png) | [`overview-dark.png`](screenshots/overview-dark.png) | Proxies under drift review, waiting changes, refused tools, active policy set, and peer gateways sharing declarations |
+| Review queue | [`queue-light.png`](screenshots/queue-light.png) | [`queue-dark.png`](screenshots/queue-dark.png) | Waiting tool and instruction changes, advisory flags, first-seen gateway metadata, and bulk review actions |
+| Change (instruction & reference flags) | [`change-light.png`](screenshots/change-light.png) | [`change-dark.png`](screenshots/change-dark.png) | Word-level description diff, `instructions` and `reference` advisory flags, full JSON definition, and decision controls |
+| Change (look-alike Unicode character) | [`change-lookalike-light.png`](screenshots/change-lookalike-light.png) | [`change-lookalike-dark.png`](screenshots/change-lookalike-dark.png) | Look-alike character callout (`⟨U+0430⟩`) in both the word-level diff and full definition |
+| Tools | [`tools-light.png`](screenshots/tools-light.png) | [`tools-dark.png`](screenshots/tools-dark.png) | Per-tool drift status (`Allowed by drift review` or `Refused`), reason links, and approval revocation |
+| History | [`history-light.png`](screenshots/history-light.png) | [`history-dark.png`](screenshots/history-dark.png) | Decision log entries with operator identity, action, target fingerprint, resulting policy set, and rollback button |

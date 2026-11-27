@@ -6,12 +6,27 @@ Operators reach it through the gateway at `/extensions/admin/`.
 
 ## Pages
 
-- **Overview.** For each proxy under drift review: changes waiting, tools refused, the active policy set, and each gateway sharing declarations with when it was last heard from.
-- **Review queue.** Every waiting change, whether it is what the upstream declares now or has been superseded, its flags, and when and where it was first seen.
-- **Change.** The change's flags, a labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved. Text larger than 1 MiB, well above the gateway's default limit, is not formatted here: review it with `cedar-policy drift show`, and approve it there. It can still be rejected here.
-- **Tools.** Every tool the set reviews, and every new one waiting, with whether drift review lets calls through and why, linking to the change that resolves it. Reviewers can revoke an approval here.
-- **History.** Every decision in the store's decision log, newest first: when, who, what, and the set it made active. Reviewers can roll back here.
+- **Overview** ([light](../docs/screenshots/overview-light.png) · [dark](../docs/screenshots/overview-dark.png)). For each proxy under drift review: changes waiting, tools refused, the active policy set, and each gateway sharing declarations with when it was last heard from.
+- **Review queue** ([light](../docs/screenshots/queue-light.png) · [dark](../docs/screenshots/queue-dark.png)). Every waiting change, whether it is what the upstream declares now or has been superseded, its flags, and when and where it was first seen.
+- **Change** ([light](../docs/screenshots/change-light.png) · [dark](../docs/screenshots/change-dark.png); look-alike character inspection: [light](../docs/screenshots/change-lookalike-light.png) · [dark](../docs/screenshots/change-lookalike-dark.png)). The change's flags, a labelled diff against the approved version with changed words marked. Invisible and look-alike characters are written out by code point, and a rename hint appears where one applies. The full definition can be read. A definition longer than 2,000 characters must be opened in full before it can be approved. Text larger than 1 MiB, well above the gateway's default limit, is not formatted here: review it with `cedar-policy drift show`, and approve it there. It can still be rejected here.
+- **Tools** ([light](../docs/screenshots/tools-light.png) · [dark](../docs/screenshots/tools-dark.png)). Every tool the set reviews, and every new one waiting, with whether drift review lets calls through and why, linking to the change that resolves it. Reviewers can revoke an approval here.
+- **History** ([light](../docs/screenshots/history-light.png) · [dark](../docs/screenshots/history-dark.png)). Every decision in the store's decision log, newest first: when, who, what, and the set it made active. Reviewers can roll back here.
 - **Maintenance.** Remove review entries the active set already settles, and retire gateways that will not run again.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/screenshots/queue-dark.png">
+  <img src="../docs/screenshots/queue-light.png" width="760" alt="Drift review queue listing waiting tool and instruction changes with advisory flags and bulk decision actions.">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/screenshots/change-lookalike-dark.png">
+  <img src="../docs/screenshots/change-lookalike-light.png" width="760" alt="Drift review change view showing a look-alike character highlighted with its Unicode code point in the diff and full tool definition.">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/screenshots/tools-dark.png">
+  <img src="../docs/screenshots/tools-light.png" width="760" alt="Tools page showing which tools on a proxy are allowed or refused by drift review, why, and revocation controls.">
+</picture>
 
 ## Flags
 

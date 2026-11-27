@@ -26,6 +26,11 @@ The gateway ships with no rules, an empty tool inventory, and no activation chec
 
 An upstream MCP server can change a tool's definition or server instructions after you review them. Under [drift review](gateway/policy/README.md#drift-review), the gateway fingerprints each approved tool definition by the SHA-256 of its canonical JSON (ignoring top-level `_meta`) and server instructions by the SHA-256 of their text, passes on only the definitions and instructions you approved, and leaves out of `tools/list` any upstream tool that Cedar shows no arguments could ever let that caller invoke. When a gateway sees a `tools/list` reply add an unapproved tool or change an approved definition, it hides the tool by default (or lists the approved definition when `changedTools` is `serve-approved`) and refuses calls to it; gateways sharing a drift directory write sightings in the background and pick up peer sightings on each refresh interval. Reviewers inspect diffs, invisible (`⟨U+XXXX⟩`) or look-alike Unicode characters, and rename hints with [`cedar-policy drift`](gateway/policy/README.md#reviewing-changes) or in the OIDC [drift review dashboard](admin/README.md) at `/extensions/admin/`.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/change-dark.png">
+  <img src="docs/screenshots/change-light.png" width="760" alt="Drift review dashboard inspecting a changed tool definition with advisory flags, a word-level diff, and approve or reject controls.">
+</picture>
+
 ### Sandboxed Code Mode
 
 On proxies with [Code Mode](gateway/code-mode.md) enabled, a client can find tools it is allowed to use across proxies with `codemode.search` and `codemode.describe`, check runtime budgets with `codemode.limits`, and run a short async JavaScript program with `codemode.execute` that combines or filters multiple tool calls and returns one result and its `console` output. Programs run on a separate [sandbox host](sandbox/README.md) reached over mutual TLS: one fresh gVisor (`runsc`, systrap) sandbox per run executing QuickJS-NG compiled to WebAssembly, with a read-only root filesystem and no filesystem, environment, process, or non-loopback network access (verified at launcher startup by a self-test sandbox). The gateway keeps caller authentication headers and verified identity on the gateway side; when a program calls a tool, the sandbox service relays the call over the mutual-TLS connection to the gateway plug-in, which sends an authenticated request to the gateway's own listener as the original caller.
@@ -104,7 +109,7 @@ To run the drift review dashboard at `/extensions/admin/`, start Compose with `d
 | [Code Mode sandbox host](sandbox/README.md) | `sandbox-service`, `sandbox-launcher`, gVisor and WebAssembly isolation, startup self-test, settings, and line protocol |
 | [Examples](examples/README.md) | Five-server reference lab, drift walk-through, Claude Code and Codex setup, and conformance testing against `expected.json` |
 | [Releases](RELEASING.md) | Local release checks (`release/check-local.sh`), cutting releases, SLSA provenance and SPDX SBOM verification, and OpenVEX handling |
-| [Design and visual identity](docs/design.md) | Symbol geometry, light and dark color tokens, accessibility rules, and SVG brand assets |
+| [Design and visual identity](docs/design.md) | Symbol geometry, light and dark color tokens, accessibility rules, SVG brand assets, and dashboard screenshots |
 
 ## Supported MCP versions
 

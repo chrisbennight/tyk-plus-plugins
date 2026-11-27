@@ -1,0 +1,277 @@
+package exchange
+
+import (
+	"container/list"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+)
+
+// The token-exchange values this client sends and accepts (RFC 8693).
+const (
+	grantType       = "urn:ietf:params:oauth:grant-type:token-exchange"
+	accessTokenType = "urn:ietf:params:oauth:token-type:access_token"
+	jwtTokenType    = "urn:ietf:params:oauth:token-type:jwt"
+)
+
+// maxResponseBytes bounds what is read from the token endpoint.
+const maxResponseBytes = 64 << 10
+
+// Failure kinds, which the gateway logs and which never carry a token.
+const (
+	KindConfiguration = "configuration"
+	KindUnreachable   = "unreachable"
+	KindRejected      = "rejected"
+	KindMalformed     = "malformed"
+)
+
+// Error explains why an exchange failed. It holds no token, no client secret
+// and none of the provider's error_description.
+type Error struct {
+	Kind string
+	// Status is the token endpoint's HTTP status, or 0 when none arrived.
+	Status int
+	// Code is the provider's OAuth error code when it sent a well-formed
+	// one, and empty otherwise.
+	Code string
+}
+
+func (e *Error) Error() string {
+	switch {
+	case e.Code != "":
+		return fmt.Sprintf("token exchange %s: HTTP %d, error %s", e.Kind, e.Status, e.Code)
+	case e.Status != 0:
+		return fmt.Sprintf("token exchange %s: HTTP %d", e.Kind, e.Status)
+	}
+	return "token exchange " + e.Kind
+}
+
+// Client exchanges callers' tokens and caches the issued tokens in process
+// memory only.
+type Client struct {
+	settings *Settings
+	http     *http.Client
+	now      func() time.Time
+
+	mu      sync.Mutex
+	entries map[[32]byte]*list.Element
+	order   *list.List // most recently used at the front
+	flights map[[32]byte]*flight
+}
+
+type entry struct {
+	key     [32]byte
+	token   string
+	expires time.Time
+}
+
+type flight struct {
+	done  chan struct{}
+	token string
+	err   error
+}
+
+// New makes a client for valid settings.
+func New(s *Settings) *Client {
+	return &Client{
+		settings: s,
+		http: &http.Client{
+			Timeout:   s.Timeout,
+			Transport: &http.Transport{TLSClientConfig: s.TLS, Proxy: http.ProxyFromEnvironment, ForceAttemptHTTP2: true},
+			// A token endpoint does not redirect; following one could send
+			// the caller's token somewhere else.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		now:     time.Now,
+		entries: map[[32]byte]*list.Element{},
+		order:   list.New(),
+		flights: map[[32]byte]*flight{},
+	}
+}
+
+// Exchange returns a token issued to the proxy's upstream for the caller
+// whose token is subject. subjectExpiry is when that token expires; an issued
+// token is never used after it. Concurrent requests for the same caller and
+// proxy share one exchange.
+func (c *Client) Exchange(ctx context.Context, proxy, subject string, subjectExpiry time.Time) (string, error) {
+	target, ok := c.settings.Proxies[proxy]
+	if !ok || subject == "" {
+		return "", c.failed(proxy, &Error{Kind: KindConfiguration})
+	}
+	key := sha256.Sum256([]byte(subject + "\x00" + target.Resource + "\x00" + target.Scope))
+
+	c.mu.Lock()
+	if el, ok := c.entries[key]; ok {
+		e := el.Value.(*entry)
+		if c.now().Before(e.expires) {
+			c.order.MoveToFront(el)
+			c.mu.Unlock()
+			return e.token, nil
+		}
+		c.order.Remove(el)
+		delete(c.entries, key)
+	}
+	f, shared := c.flights[key]
+	if !shared {
+		f = &flight{done: make(chan struct{})}
+		c.flights[key] = f
+	}
+	c.mu.Unlock()
+
+	if !shared {
+		// The exchange is not tied to the first caller's request, so one
+		// caller giving up does not fail the others waiting for it.
+		go c.fly(key, f, proxy, target, subject, subjectExpiry)
+	}
+	select {
+	case <-f.done:
+		return f.token, f.err
+	case <-ctx.Done():
+		return "", ctx.Err()
+	}
+}
+
+func (c *Client) fly(key [32]byte, f *flight, proxy string, target Target, subject string, subjectExpiry time.Time) {
+	token, lifetime, err := c.request(target, subject)
+	c.mu.Lock()
+	delete(c.flights, key)
+	if err == nil && lifetime > 0 {
+		expires := c.now().Add(lifetime)
+		if subjectExpiry.Before(expires) {
+			expires = subjectExpiry
+		}
+		if expires = expires.Add(-c.settings.ExpiryMargin); c.now().Before(expires) {
+			c.store(key, token, expires)
+		}
+	}
+	c.mu.Unlock()
+	if err != nil {
+		err = c.failed(proxy, err)
+	}
+	f.token, f.err = token, err
+	close(f.done)
+}
+
+// store adds an entry, evicting the least recently used beyond the bound.
+// The caller holds c.mu.
+func (c *Client) store(key [32]byte, token string, expires time.Time) {
+	c.entries[key] = c.order.PushFront(&entry{key: key, token: token, expires: expires})
+	for c.order.Len() > c.settings.CacheEntries {
+		oldest := c.order.Back()
+		c.order.Remove(oldest)
+		delete(c.entries, oldest.Value.(*entry).key)
+	}
+}
+
+// failed logs a failure with only the proxy and the error's own fields.
+func (c *Client) failed(proxy string, err error) error {
+	var e *Error
+	if !errors.As(err, &e) {
+		e = &Error{Kind: KindUnreachable}
+	}
+	slog.Warn("Token exchange failed", "proxy", proxy, "kind", e.Kind, "status", e.Status, "error_code", e.Code)
+	return e
+}
+
+// request performs one exchange and returns the issued token and its
+// lifetime, which is zero when the response gave none.
+func (c *Client) request(target Target, subject string) (string, time.Duration, error) {
+	form := url.Values{
+		"grant_type":         {grantType},
+		"subject_token":      {subject},
+		"subject_token_type": {accessTokenType},
+		// The resource names the upstream; audience is never sent with it,
+		// as the two together would name two targets.
+		"resource": {target.Resource},
+	}
+	if target.Scope != "" {
+		form.Set("scope", target.Scope)
+	}
+	req, err := http.NewRequest(http.MethodPost, c.settings.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", 0, &Error{Kind: KindConfiguration}
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	// HTTP Basic client authentication, with both parts form-encoded first
+	// (RFC 6749 section 2.3.1).
+	req.SetBasicAuth(url.QueryEscape(c.settings.ClientID), url.QueryEscape(c.settings.ClientSecret))
+	res, err := c.http.Do(req)
+	if err != nil {
+		return "", 0, &Error{Kind: KindUnreachable}
+	}
+	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, maxResponseBytes+1))
+	if err != nil {
+		return "", 0, &Error{Kind: KindUnreachable, Status: res.StatusCode}
+	}
+	if len(body) > maxResponseBytes {
+		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+	}
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		// Any refusal fails, whatever its code.
+		return "", 0, &Error{Kind: KindRejected, Status: res.StatusCode, Code: errorCode(body)}
+	}
+	var reply struct {
+		AccessToken     *string          `json:"access_token"`
+		IssuedTokenType *string          `json:"issued_token_type"`
+		TokenType       *string          `json:"token_type"`
+		ExpiresIn       *json.RawMessage `json:"expires_in"`
+	}
+	if json.Unmarshal(body, &reply) != nil || reply.AccessToken == nil || reply.IssuedTokenType == nil || reply.TokenType == nil {
+		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+	}
+	// The gateway can only send a bearer token; this also refuses N_A.
+	if !strings.EqualFold(*reply.TokenType, "Bearer") {
+		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+	}
+	if t := *reply.IssuedTokenType; t != accessTokenType && t != jwtTokenType {
+		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+	}
+	// The token goes into a header, so it must be a bearer token's syntax
+	// (RFC 6750 section 2.1).
+	if !bearerToken.MatchString(*reply.AccessToken) {
+		return "", 0, &Error{Kind: KindMalformed, Status: res.StatusCode}
+	}
+	return *reply.AccessToken, lifetime(reply.ExpiresIn), nil
+}
+
+var bearerToken = regexp.MustCompile(`^[A-Za-z0-9\-._~+/]+=*$`)
+
+// lifetime reads expires_in as a positive whole number of seconds. Anything
+// else gives zero, so the token is used once and not cached.
+func lifetime(raw *json.RawMessage) time.Duration {
+	if raw == nil {
+		return 0
+	}
+	var seconds int64
+	if json.Unmarshal(*raw, &seconds) != nil || seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// errorCode returns the OAuth error code of a refusal when it is well formed
+// (RFC 6749 section 5.2), and empty otherwise. Only the code is kept: a
+// provider may echo request details back in its description.
+func errorCode(body []byte) string {
+	var refusal struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &refusal) != nil || len(refusal.Error) > 64 || !errorCodeSyntax.MatchString(refusal.Error) {
+		return ""
+	}
+	return refusal.Error
+}
+
+var errorCodeSyntax = regexp.MustCompile(`^[\x20-\x21\x23-\x5B\x5D-\x7E]+$`)

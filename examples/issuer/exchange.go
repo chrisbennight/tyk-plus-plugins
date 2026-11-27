@@ -25,25 +25,14 @@ const (
 	tokenTypeJWT         = "urn:ietf:params:oauth:token-type:jwt"
 )
 
-// singleValued are the token-exchange parameters a request may carry at most
-// once (RFC 6749 section 3.2). resource and audience may repeat under RFC 8693,
-// and are checked as targets instead.
-var singleValued = []string{"grant_type", "subject_token", "subject_token_type", "actor_token",
-	"actor_token_type", "requested_token_type", "scope", "client_id", "client_secret"}
-
 // exchangeToken handles a token-exchange request from an authenticated
-// client. A request it cannot accept is answered with the error code RFC 8693
+// client, whose parameters the token endpoint has already checked do not
+// repeat. A request it cannot accept is answered with the error code RFC 8693
 // section 2.2.2 requires: invalid_request for an invalid request or subject
 // token, invalid_target for a target the issuer cannot issue for. A scope the
 // target does not allow is answered with invalid_scope (RFC 6749 section 5.2).
 func (s *server) exchangeToken(w http.ResponseWriter, r *http.Request, clientID string) {
 	form := r.PostForm
-	for _, name := range singleValued {
-		if len(form[name]) > 1 {
-			tokenError(w, http.StatusBadRequest, "invalid_request")
-			return
-		}
-	}
 	// The issuer accepts no actor tokens, so any actor token is unacceptable
 	// by policy.
 	if form.Has("actor_token") || form.Has("actor_token_type") {

@@ -210,9 +210,10 @@ var scopeToken = regexp.MustCompile(`^[\x21\x23-\x5B\x5D-\x7E]+$`)
 // hold requests open indefinitely.
 const maxDelayMilliseconds = 60_000
 
-// uriCharacters are the characters a URI may contain (RFC 3986 section 2).
-// url.Parse accepts some others, such as a space in a path.
-var uriCharacters = regexp.MustCompile(`^[A-Za-z0-9\-._~:/?\[\]@!$&'()*+,;=%]+$`)
+// uriCharacters matches text made only of the characters a URI may contain,
+// with each % starting a two-digit escape (RFC 3986 section 2). url.Parse
+// accepts some others, such as a space in a path or a bad escape in a query.
+var uriCharacters = regexp.MustCompile(`^(?:[A-Za-z0-9\-._~:/?\[\]@!$&'()*+,;=]|%[0-9A-Fa-f]{2})+$`)
 
 // validResource reports whether s is an absolute URI without a fragment, as a
 // resource indicator must be (RFC 8707 section 2).

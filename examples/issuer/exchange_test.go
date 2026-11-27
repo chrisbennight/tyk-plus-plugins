@@ -305,13 +305,30 @@ func TestAMalformedBasicHeaderIsChallenged(t *testing.T) {
 	s, _, _ := newExchangeServer(t)
 	form := exchangeForm(personToken(t, s, "reviewer"))
 	form.Set("client_id", "gateway")
-	req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Authorization", "Basic not-base64!")
-	rec := httptest.NewRecorder()
-	s.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("WWW-Authenticate"), "Basic ") {
-		t.Fatalf("%d, WWW-Authenticate %q", rec.Code, rec.Header().Get("WWW-Authenticate"))
+	for _, header := range []string{"Basic not-base64!", "Basic", "basic"} {
+		req := httptest.NewRequest(http.MethodPost, "/oauth/token", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Authorization", header)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || !strings.HasPrefix(rec.Header().Get("WWW-Authenticate"), "Basic ") {
+			t.Errorf("%q: %d, WWW-Authenticate %q", header, rec.Code, rec.Header().Get("WWW-Authenticate"))
+		}
+	}
+}
+
+func TestRepeatedParametersAreRefusedBeforeAnything(t *testing.T) {
+	s, _ := newSignInServer(t)
+	for name, form := range map[string]url.Values{
+		"repeated grant type": {"grant_type": {grantAuthorizationCode, grantTokenExchange}, "code": {"x"}, "redirect_uri": {redirect},
+			"client_id": {"dashboard"}, "client_secret": {"s3cret"}},
+		"repeated secret": {"grant_type": {grantAuthorizationCode}, "code": {"x"}, "redirect_uri": {redirect},
+			"client_id": {"dashboard"}, "client_secret": {"wrong", "s3cret"}},
+	} {
+		rec := exchange(t, s, form, "", "")
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"invalid_request"`) {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
+		}
 	}
 }
 
@@ -424,6 +441,7 @@ func TestDeckTargetsAndGrantsAreChecked(t *testing.T) {
 	for name, rest := range map[string]string{
 		"relative resource":              `"targets":{"/mcp":{}}`,
 		"space in a resource":            `"targets":{"https://a.example/m cp":{}}`,
+		"bad escape in a query":          `"targets":{"https://a.example/mcp?x=%zz":{}}`,
 		"client named like the audience": `"clients":{"a":{"secret":"s","grants":["urn:ietf:params:oauth:grant-type:token-exchange"]}}`,
 		"resource fragment":              `"targets":{"https://a.example/mcp#x":{}}`,
 		"shared audience":                `"targets":{"https://a.example/mcp":{"audience":"x"},"https://b.example/mcp":{"audience":"x"}}`,
@@ -442,7 +460,8 @@ func TestDeckTargetsAndGrantsAreChecked(t *testing.T) {
 		})
 	}
 	ok := `"clients":{"c":{"secret":"s","grants":["urn:ietf:params:oauth:grant-type:token-exchange"]}},` +
-		`"targets":{"urn:example:notes":{"audience":"notes","scopes":["read"],"delayMilliseconds":60000}}`
+		`"targets":{"urn:example:notes":{"audience":"notes","scopes":["read"],"delayMilliseconds":60000},` +
+		`"https://b.example/mcp?x=%2F":{}}`
 	if _, err := loadDeck(writeDeck(t, "{"+base+","+ok+"}")); err != nil {
 		t.Fatalf("an exchange-only client and a URN target were refused: %v", err)
 	}

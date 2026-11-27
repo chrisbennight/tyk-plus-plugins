@@ -181,7 +181,17 @@ func (s *server) token(w http.ResponseWriter, r *http.Request) {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
-	basic := strings.HasPrefix(strings.ToLower(r.Header.Get("Authorization")), "basic ")
+	// A parameter may appear only once (RFC 6749 section 3.2). resource and
+	// audience may repeat under RFC 8693; the token-exchange grant refuses
+	// more than one target itself.
+	for name, values := range r.PostForm {
+		if len(values) > 1 && name != "resource" && name != "audience" {
+			tokenError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+	}
+	scheme, _, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	basic := strings.EqualFold(scheme, "Basic")
 	// A client may use only one authentication method per request (RFC 6749
 	// sections 2.3 and 5.2).
 	if basic && r.PostForm.Has("client_secret") {

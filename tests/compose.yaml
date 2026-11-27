@@ -28,7 +28,7 @@ services:
       - sandbox-tls:/etc/codemode:ro
     depends_on:
       sandbox:
-        condition: service_started
+        condition: service_healthy
   # A second gateway sharing the store and drift review directory, so the
   # probe can check that a change one gateway sees is refused on the other.
   gateway-peer:
@@ -94,7 +94,7 @@ services:
       - sandbox-tls:/etc/sandbox/tls:ro
     depends_on:
       sandbox-launcher:
-        condition: service_started
+        condition: service_healthy
       sandbox-certs:
         condition: service_completed_successfully
   sandbox-certs:
@@ -122,9 +122,13 @@ services:
       - status:/status:ro
       - pending:/pending:ro
       - peer-status:/peer-status:ro
+    # Both stay healthy after the main gateway is restarted onto a rejected
+    # set, which leaves that gateway alone unhealthy.
     depends_on:
-      - gateway-peer
-      - admin
+      gateway-peer:
+        condition: service_healthy
+      admin:
+        condition: service_healthy
 volumes:
   sandbox-socket:
   sandbox-tls:

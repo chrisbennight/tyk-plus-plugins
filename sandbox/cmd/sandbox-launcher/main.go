@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -15,6 +16,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "-healthcheck" {
+		if err := healthcheck(); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-launcher: unhealthy: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("healthy")
+		return
+	}
 	config := launcher.Config{
 		Backend:      env("SANDBOX_BACKEND", protocol.BackendGVisor),
 		Socket:       env("SANDBOX_LAUNCHER_SOCKET", "/run/sandbox-launcher/launcher.sock"),

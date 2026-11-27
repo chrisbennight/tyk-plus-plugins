@@ -27,6 +27,16 @@ services:
     # All sandboxes on this host share these limits.
     mem_limit: ${SANDBOX_HOST_MEMORY:-4g}
     pids_limit: 2048
+    # Healthy while the launcher answers and its startup self-test passed.
+    # The check runs as root here and switches to SANDBOX_SERVICE_UID before
+    # asking, since the launcher answers no other user.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sandbox-launcher", "-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+      start_interval: 2s
   sandbox:
     build: .
     image: tyk-plus-plugins-sandbox
@@ -42,6 +52,16 @@ services:
       - sandbox-socket:/run/sandbox-launcher
       - ${SANDBOX_TLS_DIR:-./tls}:/etc/sandbox/tls:ro
     depends_on:
-      - sandbox-launcher
+      sandbox-launcher:
+        condition: service_healthy
+    # Healthy while the launcher can start sandboxes, which is when the
+    # service takes runs.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/sandbox-service", "-healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+      start_interval: 2s
 volumes:
   sandbox-socket:

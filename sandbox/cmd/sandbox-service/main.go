@@ -4,15 +4,32 @@ package main
 
 import (
 	"crypto/tls"
+	"fmt"
 	"log/slog"
 	"os"
 	"strconv"
+	"time"
 
+	"github.com/chrisbennight/tyk-plus-plugins/sandbox/launcher"
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/protocol"
 	"github.com/chrisbennight/tyk-plus-plugins/sandbox/service"
 )
 
 func main() {
+	// The health check asks the launcher, as the service does before every
+	// run, so it fails exactly when the service would refuse runs. It does
+	// not connect to the service's own port: the TLS listener requires a
+	// client certificate this container does not hold, and if the listener
+	// stops, the service exits.
+	if len(os.Args) == 2 && os.Args[1] == "-healthcheck" {
+		socket := env("SANDBOX_LAUNCHER_SOCKET", "/run/sandbox-launcher/launcher.sock")
+		if err := launcher.Healthcheck(socket, 5*time.Second); err != nil {
+			fmt.Fprintf(os.Stderr, "sandbox-service: unhealthy: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("healthy")
+		return
+	}
 	d := protocol.DefaultLimits
 	config := service.Config{
 		Listen:         env("SANDBOX_LISTEN", ":8443"),

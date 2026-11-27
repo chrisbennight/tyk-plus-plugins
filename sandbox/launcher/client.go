@@ -97,14 +97,15 @@ func Start(ctx context.Context, socket string, runMillis int64) (*Run, error) {
 	return &Run{ID: reply.Run, Backend: reply.Backend, Conn: c, Stdin: os.NewFile(uintptr(fds[0]), "sandbox-stdin"), Stdout: os.NewFile(uintptr(fds[1]), "sandbox-stdout")}, nil
 }
 
-// QueryHealth asks the launcher at socket for its health.
-func QueryHealth(socket string) (*protocol.Health, error) {
+// QueryHealth asks the launcher at socket for its health, waiting at most
+// wait for the answer.
+func QueryHealth(socket string, wait time.Duration) (*protocol.Health, error) {
 	c, err := dial(socket)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(10 * time.Second))
+	c.SetDeadline(time.Now().Add(wait))
 	if err := send(c, Request{Op: OpHealth}); err != nil {
 		return nil, err
 	}
@@ -116,6 +117,20 @@ func QueryHealth(socket string) (*protocol.Health, error) {
 		return nil, fmt.Errorf("%s", strings.TrimSpace(reply.Error))
 	}
 	return reply.Health, nil
+}
+
+// Healthcheck returns nil when the launcher at socket answers within wait
+// and can start sandboxes, and otherwise says why not. It is for container
+// health checks; the images have no shell.
+func Healthcheck(socket string, wait time.Duration) error {
+	h, err := QueryHealth(socket, wait)
+	if err != nil {
+		return fmt.Errorf("the launcher did not answer: %w", err)
+	}
+	if !h.Ready {
+		return fmt.Errorf("the launcher refuses every run: %s", h.Problem)
+	}
+	return nil
 }
 
 func dial(socket string) (*net.UnixConn, error) {

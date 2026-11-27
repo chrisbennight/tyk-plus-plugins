@@ -56,6 +56,14 @@ services:
         condition: service_healthy
       policy:
         condition: service_completed_successfully
+    # Healthy while Tyk is ready and the gateway enforces a policy set.
+    healthcheck:
+      test: ["CMD", "/opt/tyk-gateway/bin/cedar-policy", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
 
   # Publishes the example policy set into the store the gateway reads, with the
   # same validation the gateway applies, then exits.
@@ -97,7 +105,7 @@ services:
       - sandbox-tls:/etc/sandbox/tls:ro
     depends_on:
       sandbox-launcher:
-        condition: service_started
+        condition: service_healthy
       sandbox-certs:
         condition: service_completed_successfully
 

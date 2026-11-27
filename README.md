@@ -99,6 +99,25 @@ In the same shell, stop the stack with `docker compose down`.
 
 To run the drift review dashboard at `/extensions/admin/`, start Compose with `docker compose --profile admin up -d` after setting your OpenID Connect provider variables; see [`admin/README.md`](admin/README.md#running-it). To enable Code Mode, start the sandbox host with `docker compose -f sandbox/compose.yaml up -d` after providing its mutual-TLS certificates and publishing port `8443` to the gateway (or connecting them on a shared network; see [`sandbox/README.md`](sandbox/README.md#run-it)), then configure the gateway's [Code Mode settings](gateway/code-mode.md#settings).
 
+### Health checks
+
+The images have no shell, `curl` or `wget`, so each long-running service checks
+its own health with a command its image ships. The Compose files declare these
+checks, and services that need another wait for it to be healthy. Use the same
+commands as Kubernetes exec probes. Each exits 0 when healthy and 1 with a
+one-line reason otherwise, and gives up within a few seconds.
+
+| Service | Command | Healthy when |
+|---|---|---|
+| Gateway | `/opt/tyk-gateway/bin/cedar-policy health` | Tyk's readiness endpoint answers 200, which needs Redis and loaded APIs, and, when `CEDAR_STATUS_FILE` is set, the gateway enforces a policy set. A rejected new set leaves the previous one enforced and stays healthy. A gateway enforcing no set, which denies every tool call, is unhealthy; a restart does not fix that, so in Kubernetes use this as a readiness probe rather than a liveness probe. |
+| Review dashboard | `/cedar-admin -healthcheck` | The dashboard answers `/healthz` on `ADMIN_LISTEN`. It does not contact the identity provider, so a provider outage leaves it healthy. |
+| Sandbox launcher | `/usr/local/bin/sandbox-launcher -healthcheck` | The launcher answers and its startup self-test passed. The launcher answers only `SANDBOX_SERVICE_UID`, so the check, run as root in the launcher's container, switches to that user before asking. |
+| Sandbox service | `/usr/local/bin/sandbox-service -healthcheck` | The launcher can start sandboxes, which is when the service takes runs. |
+
+The gateway check finds Tyk's readiness endpoint from `tyk.conf` and the
+`TYK_GW_*` variables that override it: the control API port when one is set,
+otherwise the listen port. Pass `-conf` when Tyk reads another file.
+
 ## Documentation
 
 | Guide | Contents |

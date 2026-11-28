@@ -73,19 +73,13 @@ Set these on the gateway. Exchange is off unless `EXCHANGE_PROXIES`, `EXCHANGE_T
 
 The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream should check that the token's `aud` is its own canonical URI.
 
-### authentik
-
-Tested with authentik 2026.8.6, exchanging a service account's token. Exchanging a person's token, issued for the gateway's audience, has not been tested yet:
-
-- authentik's token exchange **rejects `resource`** with `invalid_target`, by design, and names the target with `audience` instead, matched against the target provider's client ID. Put a small adapter in front of the token endpoint that renames `resource` to `audience`, passes everything else through unchanged, and refuses any resource it does not expect; point `EXCHANGE_TOKEN_URL` at the adapter, and use `EXCHANGE_TLS_CA` if it has a private certificate.
-- Give each upstream's provider a client ID equal to the upstream's canonical URI. authentik then issues a token whose `aud` is that URI, as an RFC 8707 server would. The target provider must list the gateway's provider under *Federated OAuth2/OpenID Providers*.
-- The issued token's `iss` is the target provider's own issuer and its `sub` is the caller's. Its header is `typ: JWT` rather than `at+jwt`, and it has no `client_id` claim, so upstreams must not require either.
+If your identity provider departs from these standards, see [Identity providers that differ from the standards](#identity-providers-that-differ-from-the-standards).
 
 ## Naming the gateway in the issued token (optional)
 
 The issued token names the user (`sub`) and the upstream (`aud`), but nothing in it says that the gateway obtained it. An upstream that should accept only tokens the gateway obtained, after its policy checks, needs a token that also names the gateway.
 
-RFC 8693 defines a claim for this: `act` (actor), whose `sub` names the party acting for the user ([RFC 8693 section 4.1](https://www.rfc-editor.org/rfc/rfc8693#section-4.1)). The gateway does not add, read or check it, and performs the same exchange either way. Your identity provider adds `act` to the tokens it issues to the gateway, and each upstream that wants it checks it, so this works with any identity provider that can add claims to exchanged tokens.
+RFC 8693 defines a claim for this: `act` (actor), whose `sub` names the party acting for the user ([RFC 8693 section 4.1](https://www.rfc-editor.org/rfc/rfc8693#section-4.1)). The gateway does not add, read or check it, and performs the same exchange either way. Your identity provider adds `act` to the tokens it issues to the gateway, and each upstream that wants it checks it, so this works with any identity provider that can add claims to exchanged tokens. If yours cannot add it, or can only through a script you write, see [The provider does not add `act`](#the-provider-does-not-add-act).
 
 To require it:
 
@@ -97,42 +91,31 @@ To require it:
 
 If your identity provider issues JWT access tokens in the form [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) defines, each token already has a `client_id` claim naming the client that requested it, which in an exchange is the gateway ([RFC 9068 section 2.2](https://www.rfc-editor.org/rfc/rfc9068#section-2.2); [RFC 8693 section 4.3](https://www.rfc-editor.org/rfc/rfc8693#section-4.3)). An upstream can check `client_id` instead, with no extra set-up at the identity provider, provided the gateway's client cannot get tokens for the upstream any other way. `client_id` names the client that requested a token, not how it was obtained, so a token the gateway's client obtained in another way, such as an OAuth client credentials request, would pass the same check.
 
-### authentik
+## Identity providers that differ from the standards
 
-authentik does not issue RFC 9068 tokens yet ([goauthentik/authentik#22070](https://github.com/goauthentik/authentik/issues/22070)), so upstreams behind authentik need `act`. authentik can add it with a [scope mapping](https://docs.goauthentik.io/add-secure-apps/providers/property-mappings/expression/) on each upstream's provider, because it runs the target provider's scope mappings during an exchange ([token exchange, Scopes](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/token_exchange/)):
+Some identity providers depart from the standards this guide relies on. These are the known gaps that affect token exchange, with the usual workaround for each and its caveats. How to apply a workaround in a particular provider belongs in that provider's own documentation, not here.
 
-1. Create an OAuth2/OpenID scope mapping with the scope name `gateway` and the expression below, with your gateway's client ID in place of `<gateway client ID>`.
-2. Assign it to each upstream's provider, and turn on *Include claims in id_token* on that provider; without it the mapping does not run. As for the exchange itself, the upstream's provider must list the gateway's provider under *Federated OAuth2/OpenID Providers*.
-3. Add the scope to the proxy's entry in `EXCHANGE_PROXIES`, alongside any others: `governed=https://mcp.example.com/mcp gateway`. Scopes are separated by spaces and sent together as `scope`.
+### The provider rejects the `resource` parameter
 
-```python
-# Scope mapping on the upstream's provider, for scope "gateway".
-# Read the client ID with authentik's own function, so the mapping sees the
-# client the token endpoint authenticated, not another value in the request.
-from authentik.providers.oauth2.utils import extract_client_auth
-http = request.http_request
-if http is None:
-    return None
-client_id, _ = extract_client_auth(http)
-if (http.POST.get("grant_type") == "urn:ietf:params:oauth:grant-type:token-exchange"
-        and client_id == "<gateway client ID>"):
-    return {"act": {"sub": "<gateway client ID>"}}
-return None
-```
+The gateway names the upstream with `resource`, as [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) defines. Some providers accept only `audience`, a different RFC 8693 parameter whose values each provider defines for itself.
 
-The mapping adds `act` only to a token exchange requested with the gateway's client ID. authentik refuses the request before any mapping runs unless the client's secret is correct, so naming the gateway's client ID without its secret does not produce the claim. The mapping reads the client ID with the same authentik function the token endpoint uses to authenticate the client. That function takes the HTTP Basic header when there is one and the form body only when there is not. A mapping that read the form body first would add `act` for another client that authenticated with its own ID and secret in the header and put the gateway's client ID in the form body.
+Workaround: put a small adapter in front of the token endpoint that renames `resource` to `audience`, passes everything else through unchanged, and refuses any resource it does not expect. Point `EXCHANGE_TOKEN_URL` at the adapter, use `EXCHANGE_TLS_CA` if it has a private certificate, and make `EXCHANGE_TIMEOUT` longer than the adapter's own timeout. So that each issued token's `aud` is the upstream's canonical URI, register each upstream at the provider with that URI as its identifier.
 
-Tested with authentik 2026.8.7, open-source edition:
+Example: authentik rejects `resource` with `invalid_target` and matches `audience` against the target provider's client ID ([authentik token exchange](https://docs.goauthentik.io/add-secure-apps/providers/oauth2/token_exchange/)). The gateway was tested this way with authentik 2026.8.6, exchanging a service account's token. Exchanging a person's token has not been tested yet.
 
-| Case | `act` in the issued token |
-| --- | --- |
-| Exchange by the gateway, client ID and secret in the form body | present |
-| Exchange by the gateway, client ID and secret in an HTTP Basic header | present |
-| Exchange by another client the upstream trusts, with the same scope | absent |
-| The user asks for a token for the upstream directly, with the same scope | absent |
-| The gateway's client ID with a wrong secret | refused with `invalid_client`; no token issued |
-| *Include claims in id_token* turned off on the upstream's provider | absent; the mapping does not run |
+### Issued tokens are not RFC 9068 access tokens
 
-The test used an earlier version of the mapping that read the client ID itself. The mapping now calls authentik's `extract_client_auth` instead, which exists in 2026.8.7 at the path shown. If a later release moves or renames it, the mapping fails, `act` is absent, and upstreams that require it refuse the calls.
+[RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) access tokens have the header `typ: at+jwt` and a `client_id` claim. Some providers issue JWT access tokens with `typ: JWT` and no `client_id`. Upstreams behind such a provider must not require either, and cannot use `client_id` to tell which client obtained a token.
 
-The issued token's `azp` is the upstream's own client ID, so it does not identify the gateway; only `act` does. If a later authentik release stopped passing the HTTP request to scope mappings, `act` would disappear and upstreams that require it would refuse the calls rather than allow them. Repeat the checks above when you upgrade authentik.
+Example: authentik 2026.8.6 issues tokens of this kind ([goauthentik/authentik#22070](https://github.com/goauthentik/authentik/issues/22070)).
+
+### The provider does not add `act`
+
+Few providers add `act` to exchanged tokens on their own. Many let an administrator add claims with a script or rule that runs when a token is issued. If you write one to add `act`:
+
+- Add it only when the client the provider authenticated is the gateway, and only for the token-exchange grant. Take the authenticated client from a value the provider documents for such scripts. Do not work it out from the raw request: a request can name a client both in an HTTP Basic header and in the form body, and if your script and the provider choose different ones, another client can obtain a token that names the gateway. If the provider documents no such value, add `act` only when the request names exactly one client, so the two cannot disagree.
+- Use only features the provider documents. A script that relies on the provider's internal code can break, or change behaviour, in any upgrade.
+- Test it against the provider before relying on it. An exchange by the gateway must get `act`. These must not: an exchange by another client, a token the user requests for the upstream directly, the gateway's client ID with a wrong secret, and a request carrying another client's credentials in the header and the gateway's client ID in the form body.
+- Repeat those tests after each upgrade of the provider.
+
+If the provider can add no claims at all, an upstream cannot tell from the token that the gateway obtained it. Restricting the upstream to connections from the gateway, as described in [Naming the gateway in the issued token](#naming-the-gateway-in-the-issued-token-optional), is then the only check.

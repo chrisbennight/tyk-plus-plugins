@@ -125,7 +125,7 @@ otherwise the listen port. Pass `-conf` when Tyk reads another file.
 | [Authorize MCP tool calls](gateway/policy/README.md) | OIDC tokens and Tyk keys, `approved_tools.json`, Cedar rules, activation checks, drift review, policy store management, and `cedar-policy bench` |
 | [Drift review dashboard](admin/README.md) | Browser-based OIDC review queue, word-level diffs, advisory flags, bulk decisions, rollbacks, and settings |
 | [Code Mode](gateway/code-mode.md) | `codemode.search`, `codemode.describe`, `codemode.limits`, `codemode.execute`, operator limits, settings, and audit records |
-| [Token exchange](gateway/token-exchange.md) | Sending each upstream a token issued for it and naming the user, settings, identity provider set-up, refusing requests when the exchange fails, and naming the gateway in issued tokens with the `act` claim |
+| [Token exchange](gateway/token-exchange.md) | Sending each upstream a token issued for it and naming the user, settings, identity provider set-up, refusing requests when the exchange fails, naming the gateway in issued tokens with the `act` claim, and identity providers that differ from the standards |
 | [Code Mode sandbox host](sandbox/README.md) | `sandbox-service`, `sandbox-launcher`, gVisor and WebAssembly isolation, startup self-test, settings, and line protocol |
 | [Examples](examples/README.md) | Five-server reference lab, drift walk-through, Claude Code and Codex setup, and conformance testing against `expected.json` |
 | [Releases](RELEASING.md) | Local release checks (`release/check-local.sh`), cutting releases, SLSA provenance and SPDX SBOM verification, and OpenVEX handling |

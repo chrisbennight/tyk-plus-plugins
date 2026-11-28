@@ -2,7 +2,7 @@
 
 By default the gateway forwards a permitted request to its upstream, the MCP server behind the proxy, without the caller's credential: Tyk removes it after authentication. With token exchange on for a proxy, the gateway instead sends the upstream a token issued for that upstream alone and naming the same user. It obtains the token from your identity provider with OAuth 2.0 Token Exchange ([RFC 8693](https://www.rfc-editor.org/rfc/rfc8693)), exchanging the caller's own token, and forwards it as `Authorization: Bearer <token>`.
 
-The upstream can then check who the user is and that the token was meant for it, without ever seeing the token the caller presented to the gateway. This is impersonation: the issued token names the user as its subject and does not name the gateway.
+The upstream can then check who the user is and that the token was meant for it, without ever seeing the token the caller presented to the gateway. This is impersonation: the issued token names the user as its subject. Whether it also identifies the gateway depends on the identity provider; see [Naming the gateway in the issued token](#naming-the-gateway-in-the-issued-token-optional).
 
 ## How a request is handled
 
@@ -84,7 +84,7 @@ RFC 8693 defines a claim for this: `act` (actor), whose `sub` names the party ac
 To require it:
 
 1. Use the gateway's client ID at the identity provider (`EXCHANGE_CLIENT_ID`) as the value of `act.sub`. It is unique at that provider and does not change.
-2. Configure the identity provider to add `{"act": {"sub": "<gateway client ID>"}}` to tokens it issues in an exchange requested with the gateway's client ID, and to no others.
+2. Configure the identity provider to add `{"act": {"sub": "<gateway client ID>"}}` to tokens it issues in an exchange in which the client it authenticated is the gateway, and to no others. The value must come from the provider's own client authentication, not from a client ID named in the request.
 3. On each upstream, after validating the token as described in [Identity provider set-up](#identity-provider-set-up), refuse it if its `act.sub` is not the gateway's client ID.
 
 `act` shows who obtained the token, not the route a request took. Anyone who holds the token can still send it to the upstream directly until it expires. An upstream that must accept requests only through the gateway should also refuse connections from anywhere else, for example with a firewall rule or by requiring the gateway's TLS client certificate.

@@ -83,7 +83,7 @@ Tested with authentik 2026.8.6, exchanging a service account's token. Exchanging
 
 ## Naming the gateway in the issued token (optional)
 
-The issued token names the user (`sub`) and the upstream (`aud`), but nothing in it says that the gateway obtained it. An upstream that should accept only calls that passed the gateway's policy checks needs a token that also names the gateway.
+The issued token names the user (`sub`) and the upstream (`aud`), but nothing in it says that the gateway obtained it. An upstream that should accept only tokens the gateway obtained, after its policy checks, needs a token that also names the gateway.
 
 RFC 8693 defines a claim for this: `act` (actor), whose `sub` names the party acting for the user ([RFC 8693 section 4.1](https://www.rfc-editor.org/rfc/rfc8693#section-4.1)). The gateway does not add, read or check it, and performs the same exchange either way. Your identity provider adds `act` to the tokens it issues to the gateway, and each upstream that wants it checks it, so this works with any identity provider that can add claims to exchanged tokens.
 
@@ -93,7 +93,9 @@ To require it:
 2. Configure the identity provider to add `{"act": {"sub": "<gateway client ID>"}}` to tokens it issues in an exchange requested with the gateway's client ID, and to no others.
 3. On each upstream, refuse a token whose `act.sub` is not the gateway's client ID.
 
-If your identity provider issues JWT access tokens in the form [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) defines, each token already has a `client_id` claim naming the client that requested it, which in an exchange is the gateway ([RFC 9068 section 2.2](https://www.rfc-editor.org/rfc/rfc9068#section-2.2); [RFC 8693 section 4.3](https://www.rfc-editor.org/rfc/rfc8693#section-4.3)). An upstream can check `client_id` instead, and the identity provider needs no extra set-up.
+`act` shows who obtained the token, not the route a request took. Anyone who holds the token can still send it to the upstream directly until it expires. An upstream that must accept requests only through the gateway should also refuse connections from anywhere else, for example with a firewall rule or by requiring the gateway's TLS client certificate.
+
+If your identity provider issues JWT access tokens in the form [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) defines, each token already has a `client_id` claim naming the client that requested it, which in an exchange is the gateway ([RFC 9068 section 2.2](https://www.rfc-editor.org/rfc/rfc9068#section-2.2); [RFC 8693 section 4.3](https://www.rfc-editor.org/rfc/rfc8693#section-4.3)). An upstream can check `client_id` instead, with no extra set-up at the identity provider, provided the gateway's client cannot get tokens for the upstream any other way. `client_id` names the client that requested a token, not how it was obtained, so a token the gateway's client obtained in another way, such as an OAuth client credentials request, would pass the same check.
 
 ### authentik
 
@@ -105,23 +107,20 @@ authentik does not issue RFC 9068 tokens yet ([goauthentik/authentik#22070](http
 
 ```python
 # Scope mapping on the upstream's provider, for scope "gateway".
-import base64
-from urllib.parse import unquote_plus
+# Read the client ID with authentik's own function, so the mapping sees the
+# client the token endpoint authenticated, not another value in the request.
+from authentik.providers.oauth2.utils import extract_client_auth
 http = request.http_request
 if http is None:
     return None
-client_id = http.POST.get("client_id", "")
-auth = http.META.get("HTTP_AUTHORIZATION", "")
-if not client_id and auth.lower().startswith("basic "):
-    # HTTP Basic carries the client ID form-encoded (RFC 6749 section 2.3.1).
-    client_id = unquote_plus(base64.b64decode(auth[6:]).decode().split(":", 1)[0])
+client_id, _ = extract_client_auth(http)
 if (http.POST.get("grant_type") == "urn:ietf:params:oauth:grant-type:token-exchange"
         and client_id == "<gateway client ID>"):
     return {"act": {"sub": "<gateway client ID>"}}
 return None
 ```
 
-The mapping adds `act` only to a token exchange requested with the gateway's client ID. authentik refuses the request before any mapping runs unless the client's secret is correct, so naming the gateway's client ID without its secret does not produce the claim. The gateway sends its client ID with HTTP Basic authentication; the mapping also reads it from the form body, for clients that send it there.
+The mapping adds `act` only to a token exchange requested with the gateway's client ID. authentik refuses the request before any mapping runs unless the client's secret is correct, so naming the gateway's client ID without its secret does not produce the claim. The mapping reads the client ID with the same authentik function the token endpoint uses to authenticate the client. That function takes the HTTP Basic header when there is one and the form body only when there is not. A mapping that read the form body first would add `act` for another client that authenticated with its own ID and secret in the header and put the gateway's client ID in the form body.
 
 Tested with authentik 2026.8.7, open-source edition:
 
@@ -134,6 +133,6 @@ Tested with authentik 2026.8.7, open-source edition:
 | The gateway's client ID with a wrong secret | refused with `invalid_client`; no token issued |
 | *Include claims in id_token* turned off on the upstream's provider | absent; the mapping does not run |
 
-The decoding step (`unquote_plus`) was added after this test. It matters only for a client ID containing characters that a form must escape, and changes nothing for authentik's generated client IDs, which contain only letters and digits.
+The test used an earlier version of the mapping that read the client ID itself. The mapping now calls authentik's `extract_client_auth` instead, which exists in 2026.8.7 at the path shown. If a later release moves or renames it, the mapping fails, `act` is absent, and upstreams that require it refuse the calls.
 
 The issued token's `azp` is the upstream's own client ID, so it does not identify the gateway; only `act` does. If a later authentik release stopped passing the HTTP request to scope mappings, `act` would disappear and upstreams that require it would refuse the calls rather than allow them. Repeat the checks above when you upgrade authentik.

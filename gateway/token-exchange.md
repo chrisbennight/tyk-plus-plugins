@@ -71,7 +71,7 @@ Set these on the gateway. Exchange is off unless `EXCHANGE_PROXIES`, `EXCHANGE_T
 
 ## Identity provider set-up
 
-The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream must verify every token it receives before trusting anything in it: the signature, against the identity provider's published keys; the issuer; and the expiry. It should then check that the token's `aud` is its own canonical URI. The claim checks below are only meaningful on a token that passed this verification.
+The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream must verify every token it receives before trusting anything in it: the signature, against the identity provider's published keys; the issuer; and the expiry. It must then refuse the token unless its `aud` is its own canonical URI: the same provider can sign tokens for other upstreams with the same key and issuer. The claim checks below are only meaningful on a token that passed this verification.
 
 If your identity provider departs from these standards, see [Identity providers that differ from the standards](#identity-providers-that-differ-from-the-standards).
 

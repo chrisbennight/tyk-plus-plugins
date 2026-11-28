@@ -71,7 +71,7 @@ Set these on the gateway. Exchange is off unless `EXCHANGE_PROXIES`, `EXCHANGE_T
 
 ## Identity provider set-up
 
-The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream must verify every token it receives before trusting anything in it: the signature, against the identity provider's published keys; the issuer; and the expiry. It must then refuse the token unless its `aud` is its own canonical URI: the same provider can sign tokens for other upstreams with the same key and issuer. The claim checks below are only meaningful on a token that passed this verification.
+The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream must verify every token it receives before trusting anything in it: the signature, against the identity provider's published keys; the issuer, which is the issuer of the tokens issued for that upstream and, at some providers, differs from the issuer of the caller's token; that it is an access token, not an OpenID Connect ID token; and the expiry. It must then refuse the token unless its `aud` is its own canonical URI: the same provider can sign tokens for other upstreams with the same key and issuer. The claim checks below are only meaningful on a token that passed this verification.
 
 If your identity provider departs from these standards, see [Identity providers that differ from the standards](#identity-providers-that-differ-from-the-standards).
 
@@ -105,7 +105,7 @@ Example: authentik rejects `resource` with `invalid_target` and matches `audienc
 
 ### Issued tokens are not RFC 9068 access tokens
 
-[RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) access tokens have the header `typ: at+jwt` and a `client_id` claim. Some providers issue JWT access tokens with `typ: JWT` and no `client_id`. Upstreams behind such a provider must not require either, and cannot use `client_id` to tell which client obtained a token.
+[RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) access tokens have the header `typ: at+jwt` and a `client_id` claim. Some providers issue JWT access tokens with `typ: JWT` and no `client_id`. Upstreams behind such a provider must not require either, and cannot use `client_id` to tell which client obtained a token. Without `at+jwt`, an upstream also cannot tell an access token from an OpenID Connect ID token by its header. Where the upstream is registered at the provider with its canonical URI as a client identifier, an ID token issued to that registration has the same `aud`, so make sure the registration cannot be used to sign users in, or use another way to tell the two apart that the provider documents.
 
 Example: authentik 2026.8.6 issues tokens of this kind ([goauthentik/authentik#22070](https://github.com/goauthentik/authentik/issues/22070)).
 

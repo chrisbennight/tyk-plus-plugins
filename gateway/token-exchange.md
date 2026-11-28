@@ -71,7 +71,7 @@ Set these on the gateway. Exchange is off unless `EXCHANGE_PROXIES`, `EXCHANGE_T
 
 ## Identity provider set-up
 
-The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream should check that the token's `aud` is its own canonical URI.
+The identity provider must support the token-exchange grant for the gateway's client, accept the caller's token, which it issued for the gateway's audience (`MCP_TOKEN_AUDIENCE`), as the subject token, and issue a token for each upstream's canonical URI. Each upstream must verify every token it receives before trusting anything in it: the signature, against the identity provider's published keys; the issuer; and the expiry. It should then check that the token's `aud` is its own canonical URI. The claim checks below are only meaningful on a token that passed this verification.
 
 If your identity provider departs from these standards, see [Identity providers that differ from the standards](#identity-providers-that-differ-from-the-standards).
 
@@ -85,7 +85,7 @@ To require it:
 
 1. Use the gateway's client ID at the identity provider (`EXCHANGE_CLIENT_ID`) as the value of `act.sub`. It is unique at that provider and does not change.
 2. Configure the identity provider to add `{"act": {"sub": "<gateway client ID>"}}` to tokens it issues in an exchange requested with the gateway's client ID, and to no others.
-3. On each upstream, refuse a token whose `act.sub` is not the gateway's client ID.
+3. On each upstream, after verifying the token as described in [Identity provider set-up](#identity-provider-set-up), refuse it if its `act.sub` is not the gateway's client ID.
 
 `act` shows who obtained the token, not the route a request took. Anyone who holds the token can still send it to the upstream directly until it expires. An upstream that must accept requests only through the gateway should also refuse connections from anywhere else, for example with a firewall rule or by requiring the gateway's TLS client certificate.
 
@@ -113,9 +113,9 @@ Example: authentik 2026.8.6 issues tokens of this kind ([goauthentik/authentik#2
 
 Few providers add `act` to exchanged tokens on their own. Many let an administrator add claims with a script or rule that runs when a token is issued. If you write one to add `act`:
 
-- Add it only when the client the provider authenticated is the gateway, and only for the token-exchange grant. Take the authenticated client from a value the provider documents for such scripts. Do not work it out from the raw request: a request can name a client both in an HTTP Basic header and in the form body, and if your script and the provider choose different ones, another client can obtain a token that names the gateway. If the provider documents no such value, add `act` only when the request names exactly one client, so the two cannot disagree.
+- Add it only when the client the provider authenticated is the gateway, and only for the token-exchange grant. Take the authenticated client from a value the provider documents for such scripts. Do not work it out from the raw request: a request can name a client in more than one place, and a client ID can be encoded, so a script that reads the request can identify a different client from the one the provider authenticated, and another client can then obtain a token that names the gateway. If the provider documents no such value, do not add `act` this way.
 - Use only features the provider documents. A script that relies on the provider's internal code can break, or change behaviour, in any upgrade.
-- Test it against the provider before relying on it. An exchange by the gateway must get `act`. These must not: an exchange by another client, a token the user requests for the upstream directly, the gateway's client ID with a wrong secret, and a request carrying another client's credentials in the header and the gateway's client ID in the form body.
+- Test it against the provider before relying on it. An exchange by the gateway must get `act`. These must not: an exchange by another client, a token the user requests for the upstream directly, and a request from another client that names the gateway's client ID anywhere in the request. The gateway's client ID with a wrong secret must be refused.
 - Repeat those tests after each upgrade of the provider.
 
-If the provider can add no claims at all, an upstream cannot tell from the token that the gateway obtained it. Restricting the upstream to connections from the gateway, as described in [Naming the gateway in the issued token](#naming-the-gateway-in-the-issued-token-optional), is then the only check.
+If the provider can add `act` only through a script that reads the raw request, or cannot add claims at all, use the RFC 9068 `client_id` check described in [Naming the gateway in the issued token](#naming-the-gateway-in-the-issued-token-optional) if the provider issues that claim. Otherwise an upstream cannot tell from the token that the gateway obtained it, and restricting the upstream to connections from the gateway is the only check.
